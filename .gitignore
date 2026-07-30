@@ -1,0 +1,9 @@
+node_modules/
+Library/
+Temp/
+Logs/
+Obj/
+Build/
+Builds/
+*.log
+.DS_Store
