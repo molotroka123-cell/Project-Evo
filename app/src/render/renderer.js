@@ -4,6 +4,7 @@
 import { TILE, ERAS, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, SEASONS, WEATHER } from '../core/data.js';
 import { tileAt } from '../core/world.js';
 import { Terrain } from './terrain.js';
+import { SpriteCache } from './sprites.js';
 import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } from './quality.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 
@@ -28,6 +29,7 @@ export class Renderer {
     this.quality = QUALITY[this.qualityId === 'auto' ? guessQuality() : this.qualityId];
     this.autoTuner = this.qualityId === 'auto' ? makeAutoTuner(this.quality.id) : null;
     this.terrain = new Terrain(this.quality);
+    this.sprites = new SpriteCache(this.quality);
   }
 
   // id ∈ QUALITY_ORDER или 'auto'
@@ -42,6 +44,7 @@ export class Renderer {
       this.quality = QUALITY[id];
     }
     this.terrain.setQuality(this.quality);
+    this.sprites.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
   }
@@ -195,6 +198,7 @@ export class Renderer {
   // высоким зданием, рисовался бы поверх его крыши (реальный баг прежней версии,
   // где жители/животные всегда шли отдельными слоями ПОСЛЕ всех зданий).
   drawSortedEntities(sim, ctx, ox, oy, z, cw, ch, L) {
+    this._pendingGlow = [];
     const items = [];
     for (const b of sim.buildings) {
       if (b.destroyed) continue;
@@ -219,28 +223,25 @@ export class Renderer {
       else if (it.kind === 'v') this.drawVillager(ctx, it.sx, it.sy, z, it.v, sim.eraIndex);
       else this.drawAnimal(ctx, it.sx, it.sy, z, it.a);
     }
-    // тёплые окна поверх силуэтов, но до общего тона неба (рисуются здесь, не в отдельном проходе)
-    if (L.glow > 0.03) {
-      for (const b of sim.buildings) {
-        if (b.destroyed || !b.done) continue;
-        const def = BUILDINGS[b.id];
-        if (!def.housing && !def.out) continue;
-        const sx = ox + b.x * z + z / 2, sy = oy + b.y * z + z / 2;
-        if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
-        const warm = sim.eraIndex < 7;
-        if (this.quality.bloom) {
-          const halo = this.glowSprite(warm);
-          const r = z * 0.75;
-          ctx.save();
-          ctx.globalCompositeOperation = 'lighter';
-          ctx.globalAlpha = 0.55 * L.glow;
-          ctx.drawImage(halo, sx - r, sy - r, r * 2, r * 2);
-          ctx.restore();
+    // Свечение окон: карта свечения испечена вместе со спрайтом, поэтому светятся
+    // ровно окна и горны, а не абстрактный кружок в центре здания, как раньше.
+    if (L.glow > 0.03 && this._pendingGlow.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = L.glow;
+      for (const g of this._pendingGlow) ctx.drawImage(g.spr.glow, g.dx, g.dy, g.dw, g.dh);
+      if (this.quality.bloom) {
+        // мягкий ореол вокруг светящихся мест
+        ctx.globalAlpha = 0.35 * L.glow;
+        const halo = this.glowSprite(sim.eraIndex < 7);
+        for (const g of this._pendingGlow) {
+          const r = g.dw * 0.55;
+          ctx.drawImage(halo, g.dx + g.dw / 2 - r, g.dy + g.dh * 0.55 - r, r * 2, r * 2);
         }
-        ctx.fillStyle = warm ? `rgba(255,190,90,${0.55 * L.glow})` : `rgba(140,220,255,${0.55 * L.glow})`;
-        ctx.beginPath(); ctx.arc(sx, sy, z * 0.18, 0, 7); ctx.fill();
       }
+      ctx.restore();
     }
+    this._pendingGlow.length = 0;
   }
 
   // Мягкий ореол свечения — ОДИН раз в offscreen-канвас, дальше только blit.
@@ -325,8 +326,12 @@ export class Renderer {
   // --- процедурный спрайт здания, эволюционирующий по эпохам ---
   drawBuilding(sim, ctx, b, sx, sy, size) {
     const def = BUILDINGS[b.id];
-    const eraVis = Math.max(sim.eraIndex, BUILDING_ERA_IDX[b.id] || 0);
-    const e = Math.min(eraVis, 9);
+    // Здание подтягивается к текущей эпохе, но не более чем на три ступени от
+    // собственной: иначе в информационную эпоху ВСЕ 55 построек, включая хижину
+    // и кострище, красились в одно бледное стекло и город терял читаемость.
+    // С ограничением старые кварталы остаются глиняными и деревянными.
+    const own = BUILDING_ERA_IDX[b.id] || 0;
+    const e = Math.max(own, Math.min(9, Math.min(sim.eraIndex, own + 3)));
     if (!b.done) {
       ctx.fillStyle = 'rgba(139,109,66,0.5)';
       ctx.fillRect(sx + 2, sy + 2, size - 4, size - 4);
@@ -339,28 +344,33 @@ export class Renderer {
       ctx.fillRect(sx + 2, sy + size - 6, (size - 4) * Math.min(1, p), 4);
       return;
     }
-    const cx = sx + size / 2, cy = sy + size / 2;
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath(); ctx.ellipse(cx, sy + size * 0.85, size * 0.42, size * 0.14, 0, 0, 7); ctx.fill();
-
-    const cat = this.buildingCategory(b.id, def);
-    const pal = this.eraPalette(e);
-    switch (b.id) {
-      case 'campfire': this.drawCampfire(ctx, cx, cy, size); break;
-      case 'spire': this.drawSpire(ctx, sx, sy, size, sim.spire.stage, this.time); break;
-      case 'palisade': case 'stone_walls': this.drawWall(ctx, sx, sy, size, b.id === 'stone_walls'); break;
-      case 'farm': this.drawFarm(ctx, sx, sy, size, e, sim.seasonIdx); break;
-      case 'pasture': this.drawPasture(ctx, sx, sy, size); break;
-      default:
-        if (cat === 'house') this.drawHouse(ctx, sx, sy, size, e, pal, b.id);
-        else if (cat === 'production') this.drawProduction(ctx, sx, sy, size, e, pal, b.id, this.time);
-        else if (cat === 'science') this.drawScience(ctx, sx, sy, size, e, pal, b.id);
-        else if (cat === 'military') this.drawMilitary(ctx, sx, sy, size, e, pal, b.id);
-        else if (cat === 'culture') this.drawCulture(ctx, sx, sy, size, e, pal, b.id);
-        else this.drawGeneric(ctx, sx, sy, size, e, pal, b.id);
+    // Шпиль анимирован по стадиям стройки — единственная постройка вне кэша.
+    if (b.id === 'spire') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath(); ctx.ellipse(sx + size / 2, sy + size * 0.85, size * 0.42, size * 0.14, 0, 0, 7); ctx.fill();
+      this.drawSpire(ctx, sx, sy, size, sim.spire.stage, this.time);
+      ctx.restore();
+      return;
     }
-    ctx.restore();
+
+    const spr = this.sprites.building(b.id, def, e, b.size || 1);
+    const dw = size, dh = size * spr.hFact;
+    const dx = sx, dy = sy + size - dh;
+
+    // Тень падает по солнцу: утром и вечером длинная, в полдень короткая.
+    if (this.quality.shadows) {
+      const L = lightAt(sim.dayTime);
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.translate(sx + size / 2, sy + size * 0.9);
+      ctx.transform(1, 0, Math.cos(L.sunAz) * L.shadowLen * 0.8, 0.34 * L.shadowLen, 0, 0);
+      ctx.drawImage(spr.sil, -size / 2, -dh, dw, dh);
+      ctx.restore();
+    }
+
+    ctx.drawImage(spr.cv, dx, dy, dw, dh);
+    this._pendingGlow.push({ spr, dx, dy, dw, dh });
   }
 
   buildingCategory(id, def) {

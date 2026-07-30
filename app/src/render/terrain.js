@@ -341,14 +341,14 @@ export class Terrain {
       for (const [dx, dy, ax, ay, bx, by] of sides) {
         const n = at(x + dx, y + dy);
         if (n === TILE.WATER || n === TILE.DEEP) continue;
-        c.strokeStyle = 'rgba(226,242,255,0.55)';
-        c.lineWidth = Math.max(1.2, TP * 0.09);
+        c.strokeStyle = 'rgba(226,242,255,0.30)';
+        c.lineWidth = Math.max(1, TP * 0.06);
         c.beginPath();
         c.moveTo(px + ax * TP, py + ay * TP);
         c.lineTo(px + bx * TP, py + by * TP);
         c.stroke();
-        c.strokeStyle = 'rgba(226,242,255,0.18)';
-        c.lineWidth = Math.max(2, TP * 0.2);
+        c.strokeStyle = 'rgba(226,242,255,0.10)';
+        c.lineWidth = Math.max(2, TP * 0.16);
         c.stroke();
       }
       return;

@@ -12,7 +12,14 @@ const canvas = document.getElementById('game');
 const saveSys = new BrowserSave();
 const audio = new AudioEngine();
 
-let sim = new Simulation(Date.now() % 100000, { factions: 3 });
+// Сид можно задать в адресе: ...index.html#seed=4242 — один сид даёт один и тот
+// же мир, так что ссылкой удобно делиться миром (и повторять баг-репорты).
+function seedFromHash() {
+  const m = /(?:^|[#\-&])seed=(\d+)/.exec(location.hash);
+  return m ? (+m[1] >>> 0) : (Date.now() % 100000);
+}
+
+let sim = new Simulation(seedFromHash(), { factions: 3 });
 const renderer = new Renderer(canvas);
 const hud = new Hud(sim, renderer, saveSys, audio);
 // сгенерированные ассеты: обложка старта, арт победы, музыкальная тема

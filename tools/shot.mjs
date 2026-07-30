@@ -18,6 +18,47 @@ const MIME = {
   '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.json': 'application/json',
 };
 
+// Строит настоящий город вокруг старта: без этого на скриншотах пустая карта
+// и оценить отрисовку зданий невозможно. Гоняется в контексте страницы.
+const BUILD_CITY = (noon) => {
+  const F = window.__frontier;
+  const s = F.sim;
+  s.execCommand('godmode');
+  s.execCommand('unlockall');
+  s.execCommand('give wood 99999'); s.execCommand('give stone 99999');
+  s.execCommand('give gold 99999'); s.execCommand('give steel 99999');
+  s.execCommand('give food 99999');
+  const plan = [
+    'campfire', 'hut', 'stone_house', 'granary', 'smithy', 'market', 'barracks',
+    'temple', 'academy', 'castle', 'university', 'mill', 'bank', 'observatory',
+    'factory', 'apartment', 'skyscraper', 'hospital', 'datacenter', 'solar',
+    'lumber', 'quarry', 'farm', 'pasture', 'palisade', 'stone_walls', 'mine',
+    'port', 'aqueduct', 'guild_hall', 'workshop', 'foundry', 'power_plant',
+  ];
+  const cx = Math.round(s.world.startX), cy = Math.round(s.world.startY);
+  let i = 0;
+  for (const id of plan) {
+    let placed = false;
+    for (let r = 1; r < 16 && !placed; r++) {
+      for (let dy = -r; dy <= r && !placed; dy++) {
+        for (let dx = -r; dx <= r && !placed; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const x = cx + dx, y = cy + dy;
+          if (s.canPlace(id, x, y).ok && s.placeBuilding(id, x, y)) placed = true;
+        }
+      }
+    }
+    i++;
+  }
+  for (const b of s.buildings) { b.done = true; b.progress = b.buildDays; }
+  s.execCommand('spawn 30');
+  s.eraIndex = 8;
+  if (noon) s.dayTime = 0.5;          // полдень: видно материалы, а не ночной тон
+  else s.dayTime = 0.86;              // вечер: видно свечение окон
+  F.renderer.cam.zoom = 1.6;
+  s.paused = true;                    // фиксируем кадр, чтобы снимок был стабильным
+};
+
 // имя → { hash, wait (мс после загрузки), viewport, actions }
 const SHOTS = {
   start:      { hash: '', wait: 900, vp: { width: 1600, height: 900 } },
@@ -27,6 +68,10 @@ const SHOTS = {
   placing:    { hash: '#autostart-placing', wait: 2000, vp: { width: 1600, height: 900 } },
   phone:      { hash: '#autostart-era8', wait: 3500, vp: { width: 390, height: 844 }, mobile: true },
   phone_early:{ hash: '#autostart', wait: 2200, vp: { width: 390, height: 844 }, mobile: true },
+  // Главные кадры для оценки отрисовки построек.
+  town:       { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, build: 'noon' },
+  town_night: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, build: 'night' },
+  town_phone: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 390, height: 844 }, mobile: true, build: 'noon' },
 };
 
 const server = createServer(async (req, res) => {
@@ -67,6 +112,10 @@ for (const name of names) {
 
   await page.goto(`http://127.0.0.1:${PORT}/app/index.html${cfg.hash}`, { waitUntil: 'load' });
   await page.waitForTimeout(cfg.wait);
+  if (cfg.build) {
+    await page.evaluate(BUILD_CITY, cfg.build === 'noon');
+    await page.waitForTimeout(900);
+  }
   const file = join(OUTDIR, `${name}.png`);
   await page.screenshot({ path: file });
 
