@@ -18,13 +18,24 @@ const OUT = new URL('./prompts.json', import.meta.url);
 const CAMERA_LIGHT =
   'Camera: elevated three-quarter top-down view, tilted about 65 degrees from vertical ' +
   '(classic city-builder framing, not a flat icon, not a side view). ' +
-  'Lighting: single warm sun from the top-left at 45 degrees, soft baked ambient occlusion ' +
-  'in every crevice, one small soft dark contact shadow hugging only the base of the subject.';
+  'FRAMING: the complete subject must be fully inside the frame with generous empty margin ' +
+  'on all four sides — never crop it, never zoom in on a detail. ' +
+  'Lighting: warm daylight falling from the upper left at a 45 degree angle, soft baked ambient ' +
+  'occlusion in every crevice, one small soft dark contact shadow hugging only the base of the ' +
+  'subject. The light source itself must NOT appear in the picture — do not draw a sun, sky, ' +
+  'lens flare or glow anywhere in the frame.';
 
+// Фон вырезается программно, поэтому он обязан быть ровно одним плоским цветом.
+// Первая партия показала три способа это сломать: нарисованное солнце, градиент
+// и магентовая подставка-ромб на траве. Поэтому запреты перечислены поимённо.
 const CUTOUT_BG =
-  'Background: solid flat uniform magenta color #FF00FF filling the entire frame edge to edge, ' +
-  'no gradient, no texture, no floor plane, no ground shadow beyond the subject’s own base, ' +
-  'no other objects, no text, no logo, no watermark, no frame or border.';
+  'BACKGROUND — CRITICAL: every single pixel that is not the subject itself must be the exact ' +
+  'same flat solid magenta #FF00FF. The magenta is a chroma-key screen, not part of the scene. ' +
+  'Do NOT draw a ground plane, a base tile, a platform, a diamond, a pedestal, grass, soil, ' +
+  'terrain, horizon, sky, sun, clouds, gradient, vignette, texture, noise or a cast shadow onto ' +
+  'the magenta. Do NOT place the subject on a magenta slab standing on some other surface. ' +
+  'The magenta must reach all four edges and all four corners of the image. ' +
+  'No other objects, no text, no labels, no logo, no watermark, no frame, no border.';
 
 const PAINT_STYLE =
   'Hand-painted 2.5D strategy-game asset art, semi-realistic historical style, ' +
