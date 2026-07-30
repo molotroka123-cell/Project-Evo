@@ -215,7 +215,10 @@ export class Terrain {
     }
 
     if (t === TILE.FOREST) {
-      const n = D >= 2 ? 3 : D === 1 ? 2 : 1;
+      // Число деревьев гуляет по клеткам: одинаковая плотность на массиве в
+      // сотни клеток читается как сетка, а не как лес.
+      const cap = D >= 2 ? 4 : D === 1 ? 3 : 1;
+      const n = Math.max(1, Math.round(1 + r2 * (cap - 1)));
       for (let i = 0; i < n; i++) {
         const hx = hash2(x * 31 + i * 5, y * 13 + i), hy = hash2(x * 7 + i, y * 23 + i * 3);
         const tx = px + TP * (0.22 + hx * 0.56), ty = py + TP * (0.28 + hy * 0.48);
@@ -247,22 +250,58 @@ export class Terrain {
     }
 
     if (t === TILE.MOUNTAIN) {
-      const cxp = px + TP * (0.42 + r1 * 0.16), base = py + TP * 0.92;
-      const peak = py + TP * (0.06 + r2 * 0.14);
-      const wdt = TP * (0.42 + r3 * 0.12);
-      // тень скалы вправо-вниз
-      c.fillStyle = 'rgba(0,0,0,0.28)';
-      c.beginPath(); c.moveTo(cxp, peak); c.lineTo(cxp + wdt * 1.5, base); c.lineTo(cxp - wdt * 0.1, base); c.closePath(); c.fill();
-      // тёмная (правая) грань
+      const W2 = world.w;
+      const isM = (xx, yy) => (xx < 0 || yy < 0 || xx >= W2 || yy >= world.h)
+        ? false : world.tiles[yy * W2 + xx] === TILE.MOUNTAIN;
+      // Вершина рисуется только на СЕВЕРНОЙ кромке массива — там, где гора
+      // выходит из-под соседей. Раньше пик ставился на каждую клетку, и хребет
+      // из сотен клеток превращался в обои из одинаковых треугольников.
+      const northEdge = !isM(x, y - 1);
+      const interior = isM(x - 1, y) && isM(x + 1, y) && isM(x, y + 1) && !northEdge;
+
+      if (interior) {
+        // тело массива: гранёная порода без силуэта
+        c.fillStyle = p.lo; c.globalAlpha = 0.30;
+        c.beginPath();
+        c.moveTo(px, py + TP * (0.2 + r1 * 0.3)); c.lineTo(px + TP * (0.4 + r2 * 0.3), py);
+        c.lineTo(px + TP, py + TP * (0.35 + r3 * 0.3)); c.lineTo(px + TP * 0.5, py + TP);
+        c.closePath(); c.fill();
+        c.fillStyle = p.hi; c.globalAlpha = 0.22;
+        c.beginPath();
+        c.moveTo(px, py + TP * (0.18 + r2 * 0.25)); c.lineTo(px + TP * (0.45 + r1 * 0.25), py);
+        c.lineTo(px + TP * 0.3, py + TP * 0.6); c.closePath(); c.fill();
+        c.globalAlpha = 1;
+        if (D >= 1 && r1 > 0.72) {
+          c.fillStyle = p.det2; c.globalAlpha = 0.5;
+          c.beginPath(); c.arc(px + TP * (0.2 + r3 * 0.6), py + TP * (0.2 + r2 * 0.6), TP * 0.07, 0, 7); c.fill();
+          c.globalAlpha = 1;
+        }
+        return;
+      }
+
+      // Кромка: полноценная вершина, но разного размера и с разбросом,
+      // а часть клеток остаётся склоном — так хребет читается неровным.
+      const skip = !northEdge && r2 < 0.45;
+      if (skip) {
+        c.fillStyle = p.lo; c.globalAlpha = 0.28;
+        c.fillRect(px, py + TP * 0.25, TP, TP * 0.75);
+        c.globalAlpha = 1;
+        return;
+      }
+      const scale = 0.72 + r2 * 0.55;
+      const cxp = px + TP * (0.34 + r1 * 0.3), base = py + TP * (0.88 + r3 * 0.1);
+      const peak = py + TP * (0.30 - 0.26 * scale + r2 * 0.1);
+      const wdt = TP * (0.34 + r3 * 0.2) * scale;
+      c.fillStyle = 'rgba(0,0,0,0.26)';
+      c.beginPath(); c.moveTo(cxp, peak); c.lineTo(cxp + wdt * 1.6, base); c.lineTo(cxp - wdt * 0.1, base); c.closePath(); c.fill();
       c.fillStyle = p.lo;
       c.beginPath(); c.moveTo(cxp, peak); c.lineTo(cxp + wdt, base); c.lineTo(cxp - wdt * 0.15, base); c.closePath(); c.fill();
-      // светлая (левая) грань
       c.fillStyle = p.hi;
       c.beginPath(); c.moveTo(cxp, peak); c.lineTo(cxp - wdt * 0.15, base); c.lineTo(cxp - wdt, base); c.closePath(); c.fill();
-      // снежная шапка
-      if (D >= 1) {
+      // снег только на достаточно высоких вершинах
+      if (D >= 1 && scale > 0.95) {
         c.fillStyle = p.det2;
-        const sy2 = peak + TP * 0.2;
+        const sy2 = peak + TP * 0.16 * scale;
         c.beginPath(); c.moveTo(cxp, peak);
         c.lineTo(cxp + wdt * 0.34, sy2); c.lineTo(cxp + wdt * 0.16, sy2 - TP * 0.04);
         c.lineTo(cxp - wdt * 0.08, sy2 + TP * 0.03); c.lineTo(cxp - wdt * 0.32, sy2);

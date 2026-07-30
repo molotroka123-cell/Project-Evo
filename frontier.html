@@ -706,17 +706,22 @@
     for (let y = 0; y < WORLD_H; y++) {
       for (let x = 0; x < WORLD_W; x++) {
         const dx = (x - cx) / cx, dy = (y - cy) / cy;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        let h = noise(x * 0.045, y * 0.045, 4) - dist * 1.15 + 0.18;
+        const dist = Math.sqrt(dx * dx + dy * dy) + noise(x * 0.055 + 900, y * 0.055 + 900, 2) * 0.22;
+        const falloff = Math.pow(Math.max(0, dist), 2.4) * 1.15;
+        const base = noise(x * 0.035, y * 0.035, 4) * 1.7;
+        const detail = noise(x * 0.1 + 200, y * 0.1 + 200, 3) * 0.3;
+        const h = base + detail + 0.5 - falloff;
+        const ridge = 1 - Math.abs(noise(x * 0.045 + 300, y * 0.045 + 300, 3)) * 3.2;
         const i = y * WORLD_W + x;
-        if (h < -0.28) tiles[i] = TILE.DEEP;
-        else if (h < -0.12) tiles[i] = TILE.WATER;
-        else if (h < -0.05) tiles[i] = TILE.SAND;
-        else if (h < 0.13) {
-          const m = noise(x * 0.06 + 500, y * 0.06 + 500, 3);
-          tiles[i] = m > 0.55 ? TILE.FOREST : TILE.GRASS;
-        } else if (h < 0.24) tiles[i] = TILE.HILL;
-        else tiles[i] = TILE.MOUNTAIN;
+        if (h < -0.34) tiles[i] = TILE.DEEP;
+        else if (h < -0.1) tiles[i] = TILE.WATER;
+        else if (h < -0.01) tiles[i] = TILE.SAND;
+        else if (ridge > 0.62 && h > 0.3) tiles[i] = TILE.MOUNTAIN;
+        else if (ridge > 0.34 && h > 0.14) tiles[i] = TILE.HILL;
+        else {
+          const m = noise(x * 0.07 + 500, y * 0.07 + 500, 3);
+          tiles[i] = m > 0.06 ? TILE.FOREST : TILE.GRASS;
+        }
       }
     }
     for (let y = -4; y <= 4; y++) for (let x = -4; x <= 4; x++) setTile(tiles, cx + x, cy + y, TILE.GRASS);
@@ -784,10 +789,51 @@
   }
   var _gScore = new Float32Array(WORLD_W * WORLD_H);
   var _cameFrom = new Int32Array(WORLD_W * WORLD_H);
-  var _closed = new Uint8Array(WORLD_W * WORLD_H);
+  var _closed = new Uint16Array(WORLD_W * WORLD_H);
   var _stamp = new Uint16Array(WORLD_W * WORLD_H);
   var _stampVal = 0;
-  function aStar(world, sx, sy, tx, ty, maxExpand = 2600) {
+  var _heapI = new Int32Array(WORLD_W * WORLD_H * 4);
+  var _heapF = new Float32Array(WORLD_W * WORLD_H * 4);
+  var _heapN = 0;
+  function heapPush(i, f) {
+    let k = _heapN++;
+    _heapI[k] = i;
+    _heapF[k] = f;
+    while (k > 0) {
+      const p = k - 1 >> 1;
+      if (_heapF[p] <= _heapF[k]) break;
+      const ti = _heapI[p], tf = _heapF[p];
+      _heapI[p] = _heapI[k];
+      _heapF[p] = _heapF[k];
+      _heapI[k] = ti;
+      _heapF[k] = tf;
+      k = p;
+    }
+  }
+  function heapPop() {
+    const top = _heapI[0];
+    _heapN--;
+    if (_heapN > 0) {
+      _heapI[0] = _heapI[_heapN];
+      _heapF[0] = _heapF[_heapN];
+      let k = 0;
+      for (; ; ) {
+        const l = k * 2 + 1, r = l + 1;
+        let m = k;
+        if (l < _heapN && _heapF[l] < _heapF[m]) m = l;
+        if (r < _heapN && _heapF[r] < _heapF[m]) m = r;
+        if (m === k) break;
+        const ti = _heapI[m], tf = _heapF[m];
+        _heapI[m] = _heapI[k];
+        _heapF[m] = _heapF[k];
+        _heapI[k] = ti;
+        _heapF[k] = tf;
+        k = m;
+      }
+    }
+    return top;
+  }
+  function aStar(world, sx, sy, tx, ty, maxExpand = 12e3) {
     sx = Math.round(sx);
     sy = Math.round(sy);
     tx = Math.round(tx);
@@ -802,24 +848,19 @@
     }
     _stampVal = (_stampVal + 1) % 65535 || 1;
     const stamp = _stampVal;
-    const open = [];
+    _heapN = 0;
     const si = sy * W + sx;
     _gScore[si] = 0;
     _cameFrom[si] = -1;
     _stamp[si] = stamp;
-    open.push({ i: si, f: 0 });
+    heapPush(si, 0);
     const hFn = (x, y) => {
       const dx = Math.abs(x - tx), dy = Math.abs(y - ty);
       return Math.max(dx, dy) + 0.41 * Math.min(dx, dy);
     };
     let expanded = 0;
-    while (open.length) {
-      let bi = 0;
-      for (let k = 1; k < open.length; k++) if (open[k].f < open[bi].f) bi = k;
-      const cur = open[bi];
-      open[bi] = open[open.length - 1];
-      open.pop();
-      const ci = cur.i, cx = ci % W, cy = ci / W | 0;
+    while (_heapN > 0) {
+      const ci = heapPop(), cx = ci % W, cy = ci / W | 0;
       if (_closed[ci] === stamp) continue;
       _closed[ci] = stamp;
       if (cx === tx && cy === ty) {
@@ -849,7 +890,7 @@
           _stamp[ni] = stamp;
           _gScore[ni] = g;
           _cameFrom[ni] = ci;
-          open.push({ i: ni, f: g + hFn(nx, ny) });
+          heapPush(ni, g + hFn(nx, ny));
         }
       }
     }
@@ -2983,7 +3024,8 @@ ${s}`, "console");
         return;
       }
       if (t === TILE.FOREST) {
-        const n = D >= 2 ? 3 : D === 1 ? 2 : 1;
+        const cap = D >= 2 ? 4 : D === 1 ? 3 : 1;
+        const n = Math.max(1, Math.round(1 + r2 * (cap - 1)));
         for (let i = 0; i < n; i++) {
           const hx = hash2(x * 31 + i * 5, y * 13 + i), hy = hash2(x * 7 + i, y * 23 + i * 3);
           const tx = px + TP * (0.22 + hx * 0.56), ty = py + TP * (0.28 + hy * 0.48);
@@ -3016,13 +3058,55 @@ ${s}`, "console");
         return;
       }
       if (t === TILE.MOUNTAIN) {
-        const cxp = px + TP * (0.42 + r1 * 0.16), base = py + TP * 0.92;
-        const peak = py + TP * (0.06 + r2 * 0.14);
-        const wdt = TP * (0.42 + r3 * 0.12);
-        c.fillStyle = "rgba(0,0,0,0.28)";
+        const W2 = world.w;
+        const isM = (xx, yy) => xx < 0 || yy < 0 || xx >= W2 || yy >= world.h ? false : world.tiles[yy * W2 + xx] === TILE.MOUNTAIN;
+        const northEdge = !isM(x, y - 1);
+        const interior = isM(x - 1, y) && isM(x + 1, y) && isM(x, y + 1) && !northEdge;
+        if (interior) {
+          c.fillStyle = p.lo;
+          c.globalAlpha = 0.3;
+          c.beginPath();
+          c.moveTo(px, py + TP * (0.2 + r1 * 0.3));
+          c.lineTo(px + TP * (0.4 + r2 * 0.3), py);
+          c.lineTo(px + TP, py + TP * (0.35 + r3 * 0.3));
+          c.lineTo(px + TP * 0.5, py + TP);
+          c.closePath();
+          c.fill();
+          c.fillStyle = p.hi;
+          c.globalAlpha = 0.22;
+          c.beginPath();
+          c.moveTo(px, py + TP * (0.18 + r2 * 0.25));
+          c.lineTo(px + TP * (0.45 + r1 * 0.25), py);
+          c.lineTo(px + TP * 0.3, py + TP * 0.6);
+          c.closePath();
+          c.fill();
+          c.globalAlpha = 1;
+          if (D >= 1 && r1 > 0.72) {
+            c.fillStyle = p.det2;
+            c.globalAlpha = 0.5;
+            c.beginPath();
+            c.arc(px + TP * (0.2 + r3 * 0.6), py + TP * (0.2 + r2 * 0.6), TP * 0.07, 0, 7);
+            c.fill();
+            c.globalAlpha = 1;
+          }
+          return;
+        }
+        const skip = !northEdge && r2 < 0.45;
+        if (skip) {
+          c.fillStyle = p.lo;
+          c.globalAlpha = 0.28;
+          c.fillRect(px, py + TP * 0.25, TP, TP * 0.75);
+          c.globalAlpha = 1;
+          return;
+        }
+        const scale = 0.72 + r2 * 0.55;
+        const cxp = px + TP * (0.34 + r1 * 0.3), base = py + TP * (0.88 + r3 * 0.1);
+        const peak = py + TP * (0.3 - 0.26 * scale + r2 * 0.1);
+        const wdt = TP * (0.34 + r3 * 0.2) * scale;
+        c.fillStyle = "rgba(0,0,0,0.26)";
         c.beginPath();
         c.moveTo(cxp, peak);
-        c.lineTo(cxp + wdt * 1.5, base);
+        c.lineTo(cxp + wdt * 1.6, base);
         c.lineTo(cxp - wdt * 0.1, base);
         c.closePath();
         c.fill();
@@ -3040,9 +3124,9 @@ ${s}`, "console");
         c.lineTo(cxp - wdt, base);
         c.closePath();
         c.fill();
-        if (D >= 1) {
+        if (D >= 1 && scale > 0.95) {
           c.fillStyle = p.det2;
-          const sy2 = peak + TP * 0.2;
+          const sy2 = peak + TP * 0.16 * scale;
           c.beginPath();
           c.moveTo(cxp, peak);
           c.lineTo(cxp + wdt * 0.34, sy2);

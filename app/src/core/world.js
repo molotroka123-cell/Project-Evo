@@ -3,6 +3,13 @@ import { TILE, WALKABLE, TILE_COST } from './data.js';
 
 export const WORLD_W = 96, WORLD_H = 96;
 
+// Пороги калиброваны по РЕАЛЬНОМУ размаху шума. Прежняя версия ставила лес при
+// `m > 0.55`, тогда как fBm не выходит за ±0.42 — природный лес не появлялся
+// ни на одном сиде, оставалась только захардкоженная стартовая роща в 28 клеток.
+// Так же и горы: высота в центре карты доходила лишь до 0.545 при пороге 0.24,
+// поэтому на весь мир приходилось 6–16 горных клеток. Лесопилке нужен соседний
+// лес, шахте — гора, каменоломне — холм, так что половина экономики висела
+// на паре десятков клеток.
 export function generateWorld(seed, rng) {
   // rng — уже созданный createRng(seed); noise — makeNoise2D от клона сида
   const noise = rng.noise;
@@ -11,18 +18,28 @@ export function generateWorld(seed, rng) {
   for (let y = 0; y < WORLD_H; y++) {
     for (let x = 0; x < WORLD_W; x++) {
       const dx = (x - cx) / cx, dy = (y - cy) / cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      let h = noise(x * 0.045, y * 0.045, 4) - dist * 1.15 + 0.18;
+      // Берег изрезаем шумом, иначе материк выходит правильным кругом.
+      const dist = Math.sqrt(dx * dx + dy * dy) + noise(x * 0.055 + 900, y * 0.055 + 900, 2) * 0.22;
+      // Плато в центре и мягкий спад к краю: степень 2.4 держит середину карты
+      // сушей, а océan оставляет только по периметру.
+      const falloff = Math.pow(Math.max(0, dist), 2.4) * 1.15;
+      const base = noise(x * 0.035, y * 0.035, 4) * 1.7;
+      const detail = noise(x * 0.1 + 200, y * 0.1 + 200, 3) * 0.3;
+      const h = base + detail + 0.5 - falloff;
+      // Гребневой шум даёт горные ЦЕПИ, а не одиночные точки в центре.
+      const ridge = 1 - Math.abs(noise(x * 0.045 + 300, y * 0.045 + 300, 3)) * 3.2;
       const i = y * WORLD_W + x;
-      if (h < -0.28) tiles[i] = TILE.DEEP;
-      else if (h < -0.12) tiles[i] = TILE.WATER;
-      else if (h < -0.05) tiles[i] = TILE.SAND;
-      else if (h < 0.13) {
-        const m = noise(x * 0.06 + 500, y * 0.06 + 500, 3);
-        tiles[i] = m > 0.55 ? TILE.FOREST : TILE.GRASS;
+      if (h < -0.34) tiles[i] = TILE.DEEP;
+      else if (h < -0.10) tiles[i] = TILE.WATER;
+      else if (h < -0.01) tiles[i] = TILE.SAND;
+      else if (ridge > 0.62 && h > 0.30) tiles[i] = TILE.MOUNTAIN;
+      else if (ridge > 0.34 && h > 0.14) tiles[i] = TILE.HILL;
+      else {
+        // Влажность: порог 0.06 попадает примерно в четверть суши — леса
+        // получаются массивами, а не отдельными клетками.
+        const m = noise(x * 0.07 + 500, y * 0.07 + 500, 3);
+        tiles[i] = m > 0.06 ? TILE.FOREST : TILE.GRASS;
       }
-      else if (h < 0.24) tiles[i] = TILE.HILL;
-      else tiles[i] = TILE.MOUNTAIN;
     }
   }
   // Гарантированная стартовая поляна: 9×9 травы в центре, лес к северу, холм к юго-востоку
@@ -94,15 +111,61 @@ export function makeAnimal(rng, kind, x, y) {
   return { kind, x, y, tx: x, ty: y, hp: kind === 'mammoth' ? 30 : 8, food: kind === 'mammoth' ? 40 : 10, wander: rng.range(0, 3) };
 }
 
-// ---------------- A* (8-связность, бюджетная очередь) ----------------
+// ---------------- A* (8-связность, двоичная куча) ----------------
 const _gScore = new Float32Array(WORLD_W * WORLD_H);
 const _cameFrom = new Int32Array(WORLD_W * WORLD_H);
-const _closed = new Uint8Array(WORLD_W * WORLD_H);
+// _closed был Uint8Array при штампе, растущем до 65535: запись усекалась, и
+// сравнение _closed[i] === stamp переставало срабатывать после 255-го поиска —
+// проверка закрытого множества становилась мёртвой. Разрядность выровнена.
+const _closed = new Uint16Array(WORLD_W * WORLD_H);
 const _stamp = new Uint16Array(WORLD_W * WORLD_H);
 let _stampVal = 0;
 
+// Двоичная куча на типизированных массивах: очередь раньше была обычным
+// массивом с линейным поиском минимума, то есть O(n²) на раскрытие. На карте,
+// где суши стало втрое больше, это и упиралось в лимит времени.
+const _heapI = new Int32Array(WORLD_W * WORLD_H * 4);
+const _heapF = new Float32Array(WORLD_W * WORLD_H * 4);
+let _heapN = 0;
+
+function heapPush(i, f) {
+  let k = _heapN++;
+  _heapI[k] = i; _heapF[k] = f;
+  while (k > 0) {
+    const p = (k - 1) >> 1;
+    if (_heapF[p] <= _heapF[k]) break;
+    const ti = _heapI[p], tf = _heapF[p];
+    _heapI[p] = _heapI[k]; _heapF[p] = _heapF[k];
+    _heapI[k] = ti; _heapF[k] = tf;
+    k = p;
+  }
+}
+
+function heapPop() {
+  const top = _heapI[0];
+  _heapN--;
+  if (_heapN > 0) {
+    _heapI[0] = _heapI[_heapN]; _heapF[0] = _heapF[_heapN];
+    let k = 0;
+    for (;;) {
+      const l = k * 2 + 1, r = l + 1;
+      let m = k;
+      if (l < _heapN && _heapF[l] < _heapF[m]) m = l;
+      if (r < _heapN && _heapF[r] < _heapF[m]) m = r;
+      if (m === k) break;
+      const ti = _heapI[m], tf = _heapF[m];
+      _heapI[m] = _heapI[k]; _heapF[m] = _heapF[k];
+      _heapI[k] = ti; _heapF[k] = tf;
+      k = m;
+    }
+  }
+  return top;
+}
+
 // Находит путь от (sx,sy) до (tx,ty). Возвращает массив [{x,y}...] или null.
-export function aStar(world, sx, sy, tx, ty, maxExpand = 2600) {
+// Лимит расширений подобран по замеру: при 2600 на новой карте не находилось
+// 60 из 474 достижимых целей, при 12000 — одна (настоящий отрезанный островок).
+export function aStar(world, sx, sy, tx, ty, maxExpand = 12000) {
   sx = Math.round(sx); sy = Math.round(sy); tx = Math.round(tx); ty = Math.round(ty);
   const W = world.w, H = world.h;
   if (sx < 0 || sy < 0 || tx < 0 || ty < 0 || sx >= W || sy >= H || tx >= W || ty >= H) return null;
@@ -112,21 +175,17 @@ export function aStar(world, sx, sy, tx, ty, maxExpand = 2600) {
   }
   _stampVal = (_stampVal + 1) % 65535 || 1;
   const stamp = _stampVal;
-  const open = []; // {i, f}
+  _heapN = 0;
   const si = sy * W + sx;
   _gScore[si] = 0; _cameFrom[si] = -1; _stamp[si] = stamp;
-  open.push({ i: si, f: 0 });
+  heapPush(si, 0);
   const hFn = (x, y) => {
     const dx = Math.abs(x - tx), dy = Math.abs(y - ty);
     return Math.max(dx, dy) + 0.41 * Math.min(dx, dy);
   };
   let expanded = 0;
-  while (open.length) {
-    // бинарная куча не нужна при малом размере: линейный min
-    let bi = 0;
-    for (let k = 1; k < open.length; k++) if (open[k].f < open[bi].f) bi = k;
-    const cur = open[bi]; open[bi] = open[open.length - 1]; open.pop();
-    const ci = cur.i, cx = ci % W, cy = (ci / W) | 0;
+  while (_heapN > 0) {
+    const ci = heapPop(), cx = ci % W, cy = (ci / W) | 0;
     if (_closed[ci] === stamp) continue;
     _closed[ci] = stamp;
     if (cx === tx && cy === ty) {
@@ -151,7 +210,7 @@ export function aStar(world, sx, sy, tx, ty, maxExpand = 2600) {
       const g = _gScore[ci] + cost;
       if (_stamp[ni] !== stamp || g < _gScore[ni]) {
         _stamp[ni] = stamp; _gScore[ni] = g; _cameFrom[ni] = ci;
-        open.push({ i: ni, f: g + hFn(nx, ny) });
+        heapPush(ni, g + hFn(nx, ny));
       }
     }
   }

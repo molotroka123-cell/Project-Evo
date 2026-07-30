@@ -2,7 +2,7 @@
 // Запуск: node app/tests/simtest.mjs
 import { Simulation } from '../src/core/simulation.js';
 import { aStar } from '../src/core/world.js';
-import { TECHS, BUILDINGS, SPIRE_STAGES } from '../src/core/data.js';
+import { TECHS, BUILDINGS, SPIRE_STAGES, WALKABLE, TILE } from '../src/core/data.js';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => { try { fn(); pass++; console.log('OK', name); } catch (e) { fail++; console.log('FAIL', name, '—', e.message); } };
@@ -141,14 +141,54 @@ t('threat: wealth×4 → threat×~2.6', () => {
   if (ratio < 1.5) throw new Error('угроза не растёт: ' + ratio);
 });
 
-t('A*: 500 маршрутов ≤ 500 мс', () => {
+t('A*: доходит до проходимых клеток и укладывается в 500 мс', () => {
+  // Прежняя версия теста брала случайные координаты (часто вода и горы),
+  // считала найденные пути и НИЧЕГО не проверяла — поэтому не заметила, что
+  // находилось лишь 36 маршрутов из 500. Теперь цели только проходимые,
+  // и доля найденных проверяется.
   const s = new Simulation(42);
+  const W = s.world.w, H = s.world.h;
+  const targets = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (WALKABLE.has(s.world.tiles[y * W + x])) targets.push([x, y]);
+  }
+  const sx = Math.round(s.world.startX), sy = Math.round(s.world.startY);
+  const step = Math.max(1, Math.floor(targets.length / 500));
   const t0 = performance.now();
-  let ok = 0;
-  for (let i = 0; i < 500; i++) { const p = aStar(s.world, 48, 48, 5 + i % 88, 5 + (i * 13) % 88); if (p) ok++; }
+  let ok = 0, total = 0;
+  for (let i = 0; i < targets.length; i += step) {
+    total++;
+    if (aStar(s.world, sx, sy, targets[i][0], targets[i][1])) ok++;
+  }
   const ms = performance.now() - t0;
-  console.log('   A*:', ok, '/500 за', ms.toFixed(0), 'мс');
+  console.log(`   A*: ${ok}/${total} проходимых целей за ${ms.toFixed(0)} мс`);
   if (ms > 500) throw new Error('медленно: ' + ms.toFixed(0));
+  // Отдельные отрезанные островки допустимы, массовая недостижимость — нет.
+  if (ok / total < 0.95) throw new Error(`не доходит до ${(100 - ok / total * 100).toFixed(0)}% проходимых клеток`);
+});
+
+t('генерация мира: суши и ресурсных клеток хватает на экономику', () => {
+  // Пороги шума раньше были выставлены мимо реального размаха: лес требовал
+  // m > 0.55 при максимуме 0.42 и не генерился вовсе, гора — высоты, достижимой
+  // только в центре карты. Лесопилке нужен соседний лес, шахте — гора,
+  // каменоломне — холм, так что половина экономики висела на паре десятков клеток.
+  for (const seed of [1, 7, 13, 42, 99]) {
+    const s = new Simulation(seed);
+    const cnt = { land: 0, forest: 0, hill: 0, mountain: 0, grass: 0 };
+    for (const t2 of s.world.tiles) {
+      if (WALKABLE.has(t2)) cnt.land++;
+      if (t2 === TILE.FOREST) cnt.forest++;
+      if (t2 === TILE.HILL) cnt.hill++;
+      if (t2 === TILE.MOUNTAIN) cnt.mountain++;
+      if (t2 === TILE.GRASS) cnt.grass++;
+    }
+    const total = s.world.tiles.length;
+    if (cnt.land / total < 0.18) throw new Error(`сид ${seed}: суши всего ${(cnt.land / total * 100).toFixed(1)}%`);
+    if (cnt.forest < 120) throw new Error(`сид ${seed}: леса всего ${cnt.forest} клеток — лесопилку негде ставить`);
+    if (cnt.hill < 120) throw new Error(`сид ${seed}: холмов всего ${cnt.hill} — каменоломню негде ставить`);
+    if (cnt.mountain < 60) throw new Error(`сид ${seed}: гор всего ${cnt.mountain} — шахту негде ставить`);
+    if (cnt.grass < 300) throw new Error(`сид ${seed}: травы всего ${cnt.grass} — ферму негде ставить`);
+  }
 });
 
 t('стабильность: godmode 500 дней', () => {
