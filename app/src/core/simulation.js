@@ -120,6 +120,15 @@ export class Simulation {
   addChronicle(text) { this.chronicle.push({ day: this.day, era: this.eraIndex, text }); }
   toast(text, type = 'info') { this.toasts.push({ text, type, t: 3 }); this.addLog(text, type); }
 
+  // Дерево кончилось и добывать его нечем: единственные постройки, дающие дерево,
+  // сами стоят дерева. Порог 12 — чуть выше цены лесопилки (10), чтобы жители
+  // прекращали собирать валежник, как только выход из тупика уже оплачен.
+  woodCrisis() {
+    if (this.res.wood >= 12) return false;
+    return !this.buildings.some(b => b.done && !b.destroyed
+      && BUILDINGS[b.id].out && BUILDINGS[b.id].out.wood);
+  }
+
   // ---------- Фракции ----------
   spawnFactions() {
     const count = Math.min(this.factionCount, FACTIONS.length);
@@ -534,6 +543,15 @@ export class Simulation {
 
   assignJob(v) {
     v.busy = 0;
+    // Сообщаем о древесном кризисе один раз за эпизод: молчаливый тупик —
+    // худшее, что может случиться с партией.
+    const wc = this.woodCrisis();
+    if (wc && !this._woodCrisisShown) {
+      this._woodCrisisShown = true;
+      this.toast('Дерево кончилось. Жители пошли собирать валежник — стройте лесопилку.', 'warn');
+    } else if (!wc && this._woodCrisisShown && this.res.wood >= 20) {
+      this._woodCrisisShown = false;
+    }
     // 1. Стройка (до 3 строителей на объект)
     const site = this.buildings.find(b => !b.done && !b.destroyed && b.workers.length < 3);
     if (site) { v.job = 'build'; v.target = { kind: 'build', b: site, x: site.x, y: site.y }; site.workers.push(v); return; }
@@ -574,6 +592,16 @@ export class Simulation {
       const prey = this.animals.find(a => a.hp > 0);
       if (prey) { v.job = 'hunt'; v.target = { kind: 'hunt', a: prey, x: prey.x, y: prey.y }; return; }
     }
+    // 3.5 Древесный кризис. Без него партию можно было запороть насмерть:
+    // потратил стартовые 30 дерева на пять хижин — и всё. Лесопилка стоит 10
+    // дерева, собиратели 8, других источников дерева в игре нет, рынок требует
+    // технологию и ещё 25 дерева на постройку. Игра при этом продолжалась
+    // бесконечно, жители были сыты, и никакого сигнала игроку не подавалось.
+    // Теперь свободные руки идут за валежником — медленно, но выход есть всегда.
+    if (this.woodCrisis()) {
+      const spot = findNearestTile(this.world, v.x, v.y, TILE.FOREST, 30);
+      if (spot) { v.job = 'deadfall'; v.target = { kind: 'deadfall', x: spot.x, y: spot.y }; return; }
+    }
     // 4. Собирательство (при кризисе — все свободные сюда)
     if (this.res.food < this.resCap.food * 0.9 || foodCrisis) {
       const spot = this.randomLand(2, 12);
@@ -611,6 +639,11 @@ export class Simulation {
           this.animals = this.animals.filter(x => x !== a);
         }
       }
+      this.release(v);
+      return;
+    }
+    if (t.kind === 'deadfall') {
+      this.res.wood = Math.min(this.resCap.wood, this.res.wood + 1.0 * gather);
       this.release(v);
       return;
     }

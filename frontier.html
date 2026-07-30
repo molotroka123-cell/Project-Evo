@@ -1014,6 +1014,13 @@
       this.toasts.push({ text, type, t: 3 });
       this.addLog(text, type);
     }
+    // Дерево кончилось и добывать его нечем: единственные постройки, дающие дерево,
+    // сами стоят дерева. Порог 12 — чуть выше цены лесопилки (10), чтобы жители
+    // прекращали собирать валежник, как только выход из тупика уже оплачен.
+    woodCrisis() {
+      if (this.res.wood >= 12) return false;
+      return !this.buildings.some((b) => b.done && !b.destroyed && BUILDINGS[b.id].out && BUILDINGS[b.id].out.wood);
+    }
     // ---------- Фракции ----------
     spawnFactions() {
       const count = Math.min(this.factionCount, FACTIONS.length);
@@ -1460,6 +1467,13 @@
     }
     assignJob(v) {
       v.busy = 0;
+      const wc = this.woodCrisis();
+      if (wc && !this._woodCrisisShown) {
+        this._woodCrisisShown = true;
+        this.toast("Дерево кончилось. Жители пошли собирать валежник — стройте лесопилку.", "warn");
+      } else if (!wc && this._woodCrisisShown && this.res.wood >= 20) {
+        this._woodCrisisShown = false;
+      }
       const site = this.buildings.find((b) => !b.done && !b.destroyed && b.workers.length < 3);
       if (site) {
         v.job = "build";
@@ -1501,6 +1515,14 @@
         if (prey) {
           v.job = "hunt";
           v.target = { kind: "hunt", a: prey, x: prey.x, y: prey.y };
+          return;
+        }
+      }
+      if (this.woodCrisis()) {
+        const spot = findNearestTile(this.world, v.x, v.y, TILE.FOREST, 30);
+        if (spot) {
+          v.job = "deadfall";
+          v.target = { kind: "deadfall", x: spot.x, y: spot.y };
           return;
         }
       }
@@ -1546,6 +1568,11 @@
             this.animals = this.animals.filter((x) => x !== a);
           }
         }
+        this.release(v);
+        return;
+      }
+      if (t.kind === "deadfall") {
+        this.res.wood = Math.min(this.resCap.wood, this.res.wood + 1 * gather);
         this.release(v);
         return;
       }

@@ -167,6 +167,30 @@ t('A*: доходит до проходимых клеток и укладыва
   if (ok / total < 0.95) throw new Error(`не доходит до ${(100 - ok / total * 100).toFixed(0)}% проходимых клеток`);
 });
 
+t('нет тупика: потратил всё дерево на жильё — партия восстанавливается', () => {
+  // Классическая ошибка новичка (обучение само советует строить хижину первой):
+  // все 30 стартового дерева уходят на пять хижин. Лесопилка стоит 10 дерева,
+  // собиратели 8, других источников дерева нет, рынок требует технологию и ещё
+  // 25 дерева. Раньше партия становилась непроходимой навсегда и молча.
+  const s = new Simulation(42, { factions: 3 });
+  const cx = Math.round(s.world.startX), cy = Math.round(s.world.startY);
+  const put = (id) => {
+    for (let r = 1; r < 14; r++)
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (s.canPlace(id, cx + dx, cy + dy).ok && s.placeBuilding(id, cx + dx, cy + dy)) return true;
+      }
+    return false;
+  };
+  while (s.res.wood >= BUILDINGS.hut.cost.wood && put('hut')) { /* тратим всё дерево */ }
+  if (s.res.wood >= BUILDINGS.lumber.cost.wood) throw new Error('не удалось довести дерево до нуля');
+  for (let d = 0; d < 400; d++) for (let k = 0; k < 4; k++) s.tick(0.25);
+  if (s.res.wood < BUILDINGS.lumber.cost.wood) {
+    throw new Error(`дерево не восстановилось: ${s.res.wood.toFixed(1)} при цене лесопилки ${BUILDINGS.lumber.cost.wood}`);
+  }
+  if (!s.log.some(l => /валежник/i.test(l.text))) throw new Error('игроку не сообщили о кризисе');
+});
+
 t('генерация мира: суши и ресурсных клеток хватает на экономику', () => {
   // Пороги шума раньше были выставлены мимо реального размаха: лес требовал
   // m > 0.55 при максимуме 0.42 и не генерился вовсе, гора — высоты, достижимой
