@@ -2004,7 +2004,7 @@
       if (this.diploLog[fid].length > 6) this.diploLog[fid].shift();
     }
     utilityAI() {
-      const T = this.difficulty === "easy" ? 0.6 : this.difficulty === "hard" ? 0.15 : 0.3;
+      const T2 = this.difficulty === "easy" ? 0.6 : this.difficulty === "hard" ? 0.15 : 0.3;
       for (const f of this.factions) {
         if (!f.alive) continue;
         const tr = f.def.traits;
@@ -2024,7 +2024,7 @@
           }
         }
         if (!actions.length) continue;
-        const exps = actions.map((a) => Math.exp(a.U / T));
+        const exps = actions.map((a) => Math.exp(a.U / T2));
         const sum = exps.reduce((a, b) => a + b, 0);
         let roll = this.rng.next() * sum;
         let chosen = actions[0];
@@ -2634,29 +2634,760 @@ ${s}`, "console");
     }
   };
 
+  // app/src/render/palette.js
+  function T(base, lo, hi, det, det2, edge) {
+    return { base, lo, hi, det, det2, edge };
+  }
+  var TERRAIN = [
+    // ---- ВЕСНА ----
+    {
+      [TILE.DEEP]: T("#123a5c", "#0b2440", "#1d4f76", "#1a4a6e", "#265f88", "#0e3050"),
+      [TILE.WATER]: T("#1f5b86", "#153f61", "#3279a6", "#3d86b3", "#5aa0c8", "#1a4d74"),
+      [TILE.SAND]: T("#cdb98c", "#a8946a", "#e2d2a8", "#bda874", "#e6dab6", "#c0aa7c"),
+      [TILE.GRASS]: T("#5a9b47", "#3f7533", "#79b95f", "#6cae52", "#8ec96f", "#4f8a3e"),
+      [TILE.FOREST]: T("#2f6b34", "#1d4a23", "#427f43", "#3c7a3a", "#54964d", "#2a5c2e"),
+      [TILE.HILL]: T("#7d8a56", "#5b6640", "#9aa66d", "#8a9660", "#a8b47c", "#6d7a4c"),
+      [TILE.MOUNTAIN]: T("#7b7671", "#524e4a", "#a09a93", "#8f8a83", "#cfcac2", "#67635e")
+    },
+    // ---- ЛЕТО ----
+    {
+      [TILE.DEEP]: T("#10365a", "#09203d", "#1a4a72", "#184568", "#235a84", "#0c2c4c"),
+      [TILE.WATER]: T("#1d5680", "#133a5c", "#2f74a0", "#3a81ad", "#57a0c6", "#184a70"),
+      [TILE.SAND]: T("#d8c48f", "#b29c6c", "#efdfad", "#c8b177", "#f0e3ba", "#cbb47f"),
+      [TILE.GRASS]: T("#67a744", "#4a8130", "#87c65c", "#78ba4f", "#9dd76b", "#5b9540"),
+      [TILE.FOREST]: T("#2a6330", "#194320", "#3d773e", "#377336", "#4d8e47", "#255529"),
+      [TILE.HILL]: T("#87925a", "#636d43", "#a5ae71", "#949f64", "#b3bd80", "#77824f"),
+      [TILE.MOUNTAIN]: T("#7d7873", "#54504b", "#a29c95", "#918c85", "#d1ccc4", "#69645f")
+    },
+    // ---- ОСЕНЬ ----
+    {
+      [TILE.DEEP]: T("#123a5c", "#0b2440", "#1d4f76", "#1a4a6e", "#265f88", "#0e3050"),
+      [TILE.WATER]: T("#1f5b86", "#153f61", "#3279a6", "#3d86b3", "#5aa0c8", "#1a4d74"),
+      [TILE.SAND]: T("#cdb28a", "#a78e68", "#e2c9a6", "#bd9f72", "#e6d3b4", "#c0a47a"),
+      [TILE.GRASS]: T("#9a8536", "#75632a", "#b8a24c", "#ad9440", "#c9b45e", "#8a762f"),
+      [TILE.FOREST]: T("#7a5629", "#5a3d1c", "#996e39", "#8f6733", "#b98748", "#6b4a24"),
+      [TILE.HILL]: T("#8a7a54", "#665a3d", "#a8976a", "#978660", "#b5a479", "#7a6b4a"),
+      [TILE.MOUNTAIN]: T("#7b7671", "#524e4a", "#a09a93", "#8f8a83", "#cfcac2", "#67635e")
+    },
+    // ---- ЗИМА ----
+    {
+      [TILE.DEEP]: T("#0e2a44", "#071a2e", "#173d5c", "#153856", "#1e4a6c", "#0a2138"),
+      [TILE.WATER]: T("#1a4a6b", "#113252", "#2a6489", "#356f95", "#4d88a8", "#154060"),
+      [TILE.SAND]: T("#d6d6d8", "#b0b0b4", "#eeeef0", "#c4c4c8", "#f2f2f4", "#c8c8cc"),
+      [TILE.GRASS]: T("#c6d6cd", "#9fb1a8", "#e4efe8", "#d2e0d8", "#f0f6f2", "#b4c5bc"),
+      [TILE.FOREST]: T("#4e6b5c", "#374d42", "#688775", "#5e7b6b", "#7d9a89", "#455f52"),
+      [TILE.HILL]: T("#9a9a94", "#727270", "#b8b8b2", "#a8a8a2", "#c8c8c4", "#888884"),
+      [TILE.MOUNTAIN]: T("#a2a2ac", "#767680", "#c8c8d2", "#b4b4be", "#e6e6ee", "#8e8e98")
+    }
+  ];
+  var TILE_HEIGHT = {
+    [TILE.DEEP]: -0.55,
+    [TILE.WATER]: -0.25,
+    [TILE.SAND]: 0,
+    [TILE.GRASS]: 0.1,
+    [TILE.FOREST]: 0.16,
+    [TILE.HILL]: 0.62,
+    [TILE.MOUNTAIN]: 1.35
+  };
+  var KEY = [
+    //  t     mul     tint (r,g,b,a)             sunAz  glow  sky
+    { t: 0, mul: 0.42, tint: [22, 34, 86, 0.46], az: -2.36, glow: 1, sky: "#070c1c" },
+    { t: 0.2, mul: 0.48, tint: [30, 40, 92, 0.4], az: -2.36, glow: 1, sky: "#0b1330" },
+    { t: 0.26, mul: 0.78, tint: [255, 148, 78, 0.3], az: -3.05, glow: 0.55, sky: "#3a2a44" },
+    { t: 0.32, mul: 0.96, tint: [255, 206, 140, 0.13], az: -2.75, glow: 0.1, sky: "#7fa4c8" },
+    { t: 0.5, mul: 1, tint: [255, 246, 224, 0.05], az: -2.36, glow: 0, sky: "#9dc4e4" },
+    { t: 0.7, mul: 0.97, tint: [255, 214, 150, 0.12], az: -1.95, glow: 0.06, sky: "#9ab8d8" },
+    { t: 0.78, mul: 0.76, tint: [255, 124, 74, 0.32], az: -1.6, glow: 0.6, sky: "#54344a" },
+    { t: 0.86, mul: 0.5, tint: [34, 42, 98, 0.42], az: -2.36, glow: 1, sky: "#141a3a" },
+    { t: 1, mul: 0.42, tint: [22, 34, 86, 0.46], az: -2.36, glow: 1, sky: "#070c1c" }
+  ];
+  var lerp = (a, b, k) => a + (b - a) * k;
+  function lightAt(dayTime) {
+    const t = (dayTime % 1 + 1) % 1;
+    let i = 0;
+    while (i < KEY.length - 2 && KEY[i + 1].t <= t) i++;
+    const a = KEY[i], b = KEY[i + 1];
+    const k = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
+    return {
+      mul: lerp(a.mul, b.mul, k),
+      tint: [
+        Math.round(lerp(a.tint[0], b.tint[0], k)),
+        Math.round(lerp(a.tint[1], b.tint[1], k)),
+        Math.round(lerp(a.tint[2], b.tint[2], k)),
+        lerp(a.tint[3], b.tint[3], k)
+      ],
+      sunAz: lerp(a.az, b.az, k),
+      glow: lerp(a.glow, b.glow, k),
+      sky: k < 0.5 ? a.sky : b.sky,
+      // длина тени: коротко в полдень, длинно на рассвете и закате
+      shadowLen: 0.55 + 1.9 * Math.min(1, Math.abs(t - 0.5) * 2.6)
+    };
+  }
+  var WEATHER_TINT = {
+    rain: { mul: 0.8, tint: [70, 96, 128, 0.24], desat: 0.35 },
+    storm: { mul: 0.62, tint: [50, 66, 100, 0.34], desat: 0.45 },
+    snow: { mul: 0.92, tint: [190, 212, 240, 0.2], desat: 0.3 },
+    fog: { mul: 0.86, tint: [176, 186, 198, 0.3], desat: 0.5 },
+    heat: { mul: 1.05, tint: [255, 208, 138, 0.14], desat: 0 }
+  };
+  function hex2rgb(h) {
+    const v = parseInt(h.slice(1), 16);
+    return [v >> 16 & 255, v >> 8 & 255, v & 255];
+  }
+  function hash2(x, y) {
+    let h = x * 374761393 + y * 668265263 | 0;
+    h = (h ^ h >>> 13) * 1274126177 | 0;
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+
+  // app/src/render/terrain.js
+  var CHUNK = 16;
+  var Terrain = class {
+    constructor(quality) {
+      this.q = quality;
+      this.chunks = /* @__PURE__ */ new Map();
+      this.season = -1;
+      this.worldSeed = null;
+      this.height = null;
+      this.shade = null;
+      this.low = null;
+      this.w = 0;
+      this.h = 0;
+    }
+    setQuality(q) {
+      this.q = q;
+      this.invalidate();
+    }
+    invalidate() {
+      this.chunks.clear();
+      this.low = null;
+      this.season = -1;
+    }
+    // --- поле высот и рельефное освещение (не зависит от сезона) ---
+    buildHeight(world) {
+      const W = world.w, H = world.h;
+      this.w = W;
+      this.h = H;
+      const raw = new Float32Array(W * H);
+      for (let i = 0; i < W * H; i++) raw[i] = TILE_HEIGHT[world.tiles[i]] ?? 0;
+      const hgt = new Float32Array(W * H);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          let s = 0, n = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+            const w = dx === 0 && dy === 0 ? 3 : 1;
+            s += raw[yy * W + xx] * w;
+            n += w;
+          }
+          hgt[y * W + x] = s / n;
+        }
+      }
+      const sh = new Float32Array(W * H);
+      const LX = -0.7071, LY = -0.7071;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const l = hgt[y * W + Math.max(0, x - 1)], r = hgt[y * W + Math.min(W - 1, x + 1)];
+          const u = hgt[Math.max(0, y - 1) * W + x], d = hgt[Math.min(H - 1, y + 1) * W + x];
+          const gx = (r - l) * 0.5, gy = (d - u) * 0.5;
+          const k = 1.15;
+          const nz = 1 / k;
+          const len = Math.hypot(gx, gy, nz) || 1;
+          const lam = (-gx * LX - gy * LY + nz * 0.9) / len;
+          sh[y * W + x] = Math.max(0.58, Math.min(1.42, 0.62 + lam * 0.78));
+        }
+      }
+      this.height = hgt;
+      this.shade = sh;
+      this.worldSeed = world.seed;
+    }
+    hAt(x, y) {
+      if (x < 0 || y < 0 || x >= this.w || y >= this.h) return -0.6;
+      return this.height[y * this.w + x];
+    }
+    // --- мини-карта всей местности: 2 пикселя на тайл, уже со светом ---
+    buildLow(sim2) {
+      const W = sim2.world.w, H = sim2.world.h;
+      const S = 2;
+      const cv = document.createElement("canvas");
+      cv.width = W * S;
+      cv.height = H * S;
+      const c = cv.getContext("2d");
+      const pal = TERRAIN[sim2.seasonIdx];
+      const img = c.createImageData(W * S, H * S);
+      const px = img.data;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const t = sim2.world.tiles[y * W + x];
+          const p = pal[t];
+          const rgb = hex2rgb(p.base);
+          let m = this.q.relief ? this.shade[y * W + x] : 1;
+          m *= 0.97 + hash2(x, y) * 0.06;
+          const r = Math.min(255, rgb[0] * m) | 0, g = Math.min(255, rgb[1] * m) | 0, b = Math.min(255, rgb[2] * m) | 0;
+          for (let sy = 0; sy < S; sy++) {
+            for (let sx = 0; sx < S; sx++) {
+              const o = ((y * S + sy) * W * S + (x * S + sx)) * 4;
+              px[o] = r;
+              px[o + 1] = g;
+              px[o + 2] = b;
+              px[o + 3] = 255;
+            }
+          }
+        }
+      }
+      c.putImageData(img, 0, 0);
+      this.low = cv;
+    }
+    ensure(sim2) {
+      if (this.worldSeed !== sim2.world.seed || !this.height) this.buildHeight(sim2.world);
+      if (this.season !== sim2.seasonIdx) {
+        this.chunks.clear();
+        this.low = null;
+        this.season = sim2.seasonIdx;
+      }
+      if (!this.low) this.buildLow(sim2);
+    }
+    chunk(sim2, cx, cy) {
+      const key = cx + "," + cy;
+      let cv = this.chunks.get(key);
+      if (cv) return cv;
+      cv = this.bake(sim2, cx, cy);
+      this.chunks.set(key, cv);
+      return cv;
+    }
+    // --- выпечка одного чанка ---
+    bake(sim2, cx, cy) {
+      const TP = this.q.tilePx;
+      const cv = document.createElement("canvas");
+      cv.width = CHUNK * TP;
+      cv.height = CHUNK * TP;
+      const c = cv.getContext("2d");
+      const world = sim2.world, W = world.w, H = world.h;
+      const pal = TERRAIN[sim2.seasonIdx];
+      const x0 = cx * CHUNK, y0 = cy * CHUNK;
+      c.imageSmoothingEnabled = true;
+      c.imageSmoothingQuality = "high";
+      const S = 2, PAD = 2;
+      c.drawImage(
+        this.low,
+        Math.max(0, x0 - PAD) * S,
+        Math.max(0, y0 - PAD) * S,
+        (CHUNK + PAD * 2) * S,
+        (CHUNK + PAD * 2) * S,
+        (Math.max(0, x0 - PAD) - x0) * TP,
+        (Math.max(0, y0 - PAD) - y0) * TP,
+        (CHUNK + PAD * 2) * TP,
+        (CHUNK + PAD * 2) * TP
+      );
+      for (let y = y0; y < y0 + CHUNK; y++) {
+        for (let x = x0; x < x0 + CHUNK; x++) {
+          if (x >= W || y >= H) continue;
+          const t = world.tiles[y * W + x];
+          if (t === TILE.WATER || t === TILE.DEEP) continue;
+          let same = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) {
+              same++;
+              continue;
+            }
+            if (world.tiles[yy * W + xx] === t) same++;
+          }
+          const interior = Math.max(0, (same - 5) / 4);
+          if (interior <= 0.02) continue;
+          const p = pal[t];
+          const m = this.q.relief ? this.shade[y * W + x] : 1;
+          c.globalAlpha = 0.22 * interior;
+          c.fillStyle = shadeHex(p.base, m * (0.97 + hash2(x, y) * 0.06));
+          c.fillRect((x - x0) * TP, (y - y0) * TP, TP, TP);
+        }
+      }
+      c.globalAlpha = 1;
+      for (let y = y0; y < y0 + CHUNK; y++) {
+        for (let x = x0; x < x0 + CHUNK; x++) {
+          if (x >= W || y >= H) continue;
+          this.detail(c, world, pal, x, y, (x - x0) * TP, (y - y0) * TP, TP, sim2.seasonIdx);
+        }
+      }
+      for (let y = y0; y < y0 + CHUNK; y++) {
+        for (let x = x0; x < x0 + CHUNK; x++) {
+          if (x >= W || y >= H) continue;
+          this.edges(c, world, pal, x, y, (x - x0) * TP, (y - y0) * TP, TP);
+        }
+      }
+      return cv;
+    }
+    // ---- детали одного тайла ----
+    detail(c, world, pal, x, y, px, py, TP, season) {
+      const t = world.tiles[y * world.w + x];
+      const p = pal[t];
+      const D = this.q.detail;
+      if (D < 0) return;
+      const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r3 = hash2(x * 3 + 7, y * 5 + 13);
+      if (t === TILE.GRASS) {
+        if (D === 0) return;
+        const n = D >= 2 ? 4 : 2;
+        c.strokeStyle = p.det2;
+        c.lineWidth = Math.max(1, TP * 0.045);
+        c.lineCap = "round";
+        for (let i = 0; i < n; i++) {
+          const hx = hash2(x * 13 + i, y * 7 + i * 3), hy = hash2(x * 5 + i * 11, y * 17 + i);
+          const gx = px + hx * TP, gy = py + hy * TP;
+          c.beginPath();
+          c.moveTo(gx, gy + TP * 0.08);
+          c.quadraticCurveTo(gx + TP * 0.03, gy, gx + (hx > 0.5 ? TP * 0.05 : -TP * 0.05), gy - TP * 0.08);
+          c.stroke();
+        }
+        if (D >= 2 && season < 2 && r3 > 0.86) {
+          c.fillStyle = ["#f0e28a", "#f2f2f2", "#e8a0c0"][r1 * 3 | 0];
+          c.beginPath();
+          c.arc(px + r1 * TP, py + r2 * TP, TP * 0.045, 0, 7);
+          c.fill();
+        }
+        return;
+      }
+      if (t === TILE.FOREST) {
+        const n = D >= 2 ? 3 : D === 1 ? 2 : 1;
+        for (let i = 0; i < n; i++) {
+          const hx = hash2(x * 31 + i * 5, y * 13 + i), hy = hash2(x * 7 + i, y * 23 + i * 3);
+          const tx = px + TP * (0.22 + hx * 0.56), ty = py + TP * (0.28 + hy * 0.48);
+          const rad = TP * (0.16 + hash2(x + i, y + i) * 0.09);
+          this.tree(c, tx, ty, rad, p, season, hash2(x * 3 + i, y * 3 + i));
+        }
+        return;
+      }
+      if (t === TILE.HILL) {
+        if (D < 1) return;
+        if (r2 > 0.62) {
+          c.fillStyle = p.det;
+          c.globalAlpha = 0.55;
+          c.beginPath();
+          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r3 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r3 * 0.03), r1 * 3, 0, 7);
+          c.fill();
+          c.globalAlpha = 1;
+        }
+        if (D >= 2 && r1 > 0.78) {
+          c.strokeStyle = p.det2;
+          c.globalAlpha = 0.45;
+          c.lineWidth = Math.max(1, TP * 0.04);
+          const gx = px + r3 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
+          c.beginPath();
+          c.moveTo(gx, gy + TP * 0.06);
+          c.lineTo(gx + TP * 0.02, gy - TP * 0.06);
+          c.stroke();
+          c.globalAlpha = 1;
+        }
+        return;
+      }
+      if (t === TILE.MOUNTAIN) {
+        const cxp = px + TP * (0.42 + r1 * 0.16), base = py + TP * 0.92;
+        const peak = py + TP * (0.06 + r2 * 0.14);
+        const wdt = TP * (0.42 + r3 * 0.12);
+        c.fillStyle = "rgba(0,0,0,0.28)";
+        c.beginPath();
+        c.moveTo(cxp, peak);
+        c.lineTo(cxp + wdt * 1.5, base);
+        c.lineTo(cxp - wdt * 0.1, base);
+        c.closePath();
+        c.fill();
+        c.fillStyle = p.lo;
+        c.beginPath();
+        c.moveTo(cxp, peak);
+        c.lineTo(cxp + wdt, base);
+        c.lineTo(cxp - wdt * 0.15, base);
+        c.closePath();
+        c.fill();
+        c.fillStyle = p.hi;
+        c.beginPath();
+        c.moveTo(cxp, peak);
+        c.lineTo(cxp - wdt * 0.15, base);
+        c.lineTo(cxp - wdt, base);
+        c.closePath();
+        c.fill();
+        if (D >= 1) {
+          c.fillStyle = p.det2;
+          const sy2 = peak + TP * 0.2;
+          c.beginPath();
+          c.moveTo(cxp, peak);
+          c.lineTo(cxp + wdt * 0.34, sy2);
+          c.lineTo(cxp + wdt * 0.16, sy2 - TP * 0.04);
+          c.lineTo(cxp - wdt * 0.08, sy2 + TP * 0.03);
+          c.lineTo(cxp - wdt * 0.32, sy2);
+          c.closePath();
+          c.fill();
+        }
+        return;
+      }
+      if (t === TILE.SAND) {
+        if (D < 1) return;
+        c.strokeStyle = p.det;
+        c.globalAlpha = 0.5;
+        c.lineWidth = Math.max(1, TP * 0.035);
+        for (let i = 0; i < 2; i++) {
+          const hy = hash2(x * 19 + i * 7, y * 11 + i);
+          c.beginPath();
+          c.moveTo(px + TP * 0.12, py + TP * (0.25 + hy * 0.5));
+          c.quadraticCurveTo(px + TP * 0.5, py + TP * (0.18 + hy * 0.5), px + TP * 0.88, py + TP * (0.28 + hy * 0.5));
+          c.stroke();
+        }
+        c.globalAlpha = 1;
+        return;
+      }
+      if (t === TILE.WATER || t === TILE.DEEP) {
+        if (D < 1) return;
+        c.strokeStyle = p.det2;
+        c.globalAlpha = t === TILE.DEEP ? 0.1 : 0.18;
+        c.lineWidth = Math.max(1, TP * 0.05);
+        c.lineCap = "round";
+        const hy = hash2(x * 3, y * 7);
+        c.beginPath();
+        c.moveTo(px + TP * 0.2, py + TP * (0.3 + hy * 0.4));
+        c.quadraticCurveTo(px + TP * 0.5, py + TP * (0.2 + hy * 0.4), px + TP * 0.8, py + TP * (0.32 + hy * 0.4));
+        c.stroke();
+        c.globalAlpha = 1;
+      }
+    }
+    tree(c, x, y, r, p, season, rnd) {
+      c.fillStyle = "rgba(0,0,0,0.26)";
+      c.beginPath();
+      c.ellipse(x + r * 0.45, y + r * 0.8, r * 0.85, r * 0.34, 0, 0, 7);
+      c.fill();
+      c.fillStyle = season === 3 ? "#4a3d33" : "#5a4433";
+      c.fillRect(x - r * 0.12, y + r * 0.1, r * 0.24, r * 0.72);
+      const lo = p.det, hi = p.det2;
+      c.fillStyle = lo;
+      c.beginPath();
+      c.arc(x + r * 0.28, y + r * 0.12, r * 0.72, 0, 7);
+      c.fill();
+      c.beginPath();
+      c.arc(x - r * 0.3, y + r * 0.2, r * 0.62, 0, 7);
+      c.fill();
+      c.fillStyle = hi;
+      c.beginPath();
+      c.arc(x - r * 0.16, y - r * 0.28, r * 0.66, 0, 7);
+      c.fill();
+      c.fillStyle = "rgba(255,255,255,0.16)";
+      c.beginPath();
+      c.arc(x - r * 0.34, y - r * 0.42, r * 0.26, 0, 7);
+      c.fill();
+      if (season === 3) {
+        c.fillStyle = "rgba(240,246,252,0.85)";
+        c.beginPath();
+        c.arc(x - r * 0.2, y - r * 0.44, r * 0.42, Math.PI * 1.05, Math.PI * 2.05);
+        c.fill();
+      }
+      if (season === 2 && rnd > 0.5) {
+        c.fillStyle = "rgba(226,140,52,0.35)";
+        c.beginPath();
+        c.arc(x + r * 0.2, y - r * 0.05, r * 0.5, 0, 7);
+        c.fill();
+      }
+    }
+    // ---- берег и обрывы ----
+    edges(c, world, pal, x, y, px, py, TP) {
+      const W = world.w, H = world.h;
+      const t = world.tiles[y * W + x];
+      const isWater2 = t === TILE.WATER || t === TILE.DEEP;
+      const at = (xx, yy) => xx < 0 || yy < 0 || xx >= W || yy >= H ? TILE.DEEP : world.tiles[yy * W + xx];
+      if (isWater2 && this.q.shoreFoam) {
+        const sides = [[0, -1, 0, 0, 1, 0], [0, 1, 0, 1, 1, 1], [-1, 0, 0, 0, 0, 1], [1, 0, 1, 0, 1, 1]];
+        for (const [dx, dy, ax, ay, bx, by] of sides) {
+          const n = at(x + dx, y + dy);
+          if (n === TILE.WATER || n === TILE.DEEP) continue;
+          c.strokeStyle = "rgba(226,242,255,0.55)";
+          c.lineWidth = Math.max(1.2, TP * 0.09);
+          c.beginPath();
+          c.moveTo(px + ax * TP, py + ay * TP);
+          c.lineTo(px + bx * TP, py + by * TP);
+          c.stroke();
+          c.strokeStyle = "rgba(226,242,255,0.18)";
+          c.lineWidth = Math.max(2, TP * 0.2);
+          c.stroke();
+        }
+        return;
+      }
+      if (!this.q.relief) return;
+      const hHere = this.hAt(x, y);
+      const hDown = this.hAt(x, y + 1);
+      if (hHere - hDown > 0.3) {
+        const g = c.createLinearGradient(0, py + TP * 0.72, 0, py + TP);
+        g.addColorStop(0, "rgba(0,0,0,0)");
+        g.addColorStop(1, `rgba(0,0,0,${Math.min(0.42, (hHere - hDown) * 0.34)})`);
+        c.fillStyle = g;
+        c.fillRect(px, py + TP * 0.72, TP, TP * 0.28);
+      }
+      const hRight = this.hAt(x + 1, y);
+      if (hHere - hRight > 0.3) {
+        const g = c.createLinearGradient(px + TP * 0.74, 0, px + TP, 0);
+        g.addColorStop(0, "rgba(0,0,0,0)");
+        g.addColorStop(1, `rgba(0,0,0,${Math.min(0.3, (hHere - hRight) * 0.26)})`);
+        c.fillStyle = g;
+        c.fillRect(px + TP * 0.74, py, TP * 0.26, TP);
+      }
+      const hUp = this.hAt(x, y - 1);
+      if (hHere - hUp > 0.3) {
+        c.fillStyle = `rgba(255,250,230,${Math.min(0.22, (hHere - hUp) * 0.2)})`;
+        c.fillRect(px, py, TP, TP * 0.14);
+      }
+    }
+    // ---- отрисовка видимых чанков ----
+    draw(ctx, sim2, ox, oy, z, cw, ch) {
+      this.ensure(sim2);
+      const TP = this.q.tilePx;
+      const scale = z / TP;
+      const chunkScreen = CHUNK * TP * scale;
+      const cxMin = Math.max(0, Math.floor(-ox / (CHUNK * z)));
+      const cxMax = Math.min(Math.ceil(sim2.world.w / CHUNK) - 1, Math.floor((cw - ox) / (CHUNK * z)));
+      const cyMin = Math.max(0, Math.floor(-oy / (CHUNK * z)));
+      const cyMax = Math.min(Math.ceil(sim2.world.h / CHUNK) - 1, Math.floor((ch - oy) / (CHUNK * z)));
+      ctx.imageSmoothingEnabled = scale < 1.35;
+      for (let cy = cyMin; cy <= cyMax; cy++) {
+        for (let cx = cxMin; cx <= cxMax; cx++) {
+          const cv = this.chunk(sim2, cx, cy);
+          ctx.drawImage(cv, ox + cx * CHUNK * z, oy + cy * CHUNK * z, chunkScreen + 1, chunkScreen + 1);
+        }
+      }
+    }
+    // ---- анимация воды: блики и рябь только по видимым водным тайлам ----
+    drawWater(ctx, sim2, ox, oy, z, cw, ch, time) {
+      if (!this.q.water) return;
+      const world = sim2.world, W = world.w;
+      const x0 = Math.max(0, Math.floor(-ox / z)), x1 = Math.min(W - 1, Math.ceil((cw - ox) / z));
+      const y0 = Math.max(0, Math.floor(-oy / z)), y1 = Math.min(world.h - 1, Math.ceil((ch - oy) / z));
+      if (x1 < x0 || y1 < y0) return;
+      if (z < 12) return;
+      if (!this._glint) {
+        const S = 64;
+        const cv = document.createElement("canvas");
+        cv.width = S;
+        cv.height = S / 2;
+        const c = cv.getContext("2d");
+        const g = c.createRadialGradient(S / 2, S / 4, 0, S / 2, S / 4, S / 2);
+        g.addColorStop(0, "rgba(190,230,255,1)");
+        g.addColorStop(1, "rgba(190,230,255,0)");
+        c.fillStyle = g;
+        c.fillRect(0, 0, S, S / 2);
+        this._glint = cv;
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const step = z < 20 ? 2 : 1;
+      for (let y = y0; y <= y1; y += step) {
+        for (let x = x0; x <= x1; x += step) {
+          const t = world.tiles[y * W + x];
+          if (t !== TILE.WATER && t !== TILE.DEEP) continue;
+          const ph = hash2(x, y) * 6.28;
+          const a = 0.5 + 0.5 * Math.sin(time * 1.6 + ph + x * 0.4 + y * 0.25);
+          const alpha = (t === TILE.DEEP ? 0.05 : 0.11) * a;
+          if (alpha < 0.02) continue;
+          ctx.globalAlpha = alpha;
+          const sx = ox + x * z, sy = oy + y * z + z * (0.36 + 0.12 * Math.sin(time + ph));
+          ctx.drawImage(this._glint, sx + z * 0.14, sy - z * 0.13, z * 0.72, z * 0.26);
+        }
+      }
+      ctx.restore();
+    }
+  };
+  function shadeHex(hex, m) {
+    const c = hex2rgb(hex);
+    return `rgb(${Math.min(255, c[0] * m) | 0},${Math.min(255, c[1] * m) | 0},${Math.min(255, c[2] * m) | 0})`;
+  }
+
+  // app/src/render/quality.js
+  var QUALITY_ORDER = ["eco", "medium", "high", "ultra"];
+  var QUALITY = {
+    ultra: {
+      id: "ultra",
+      ru: "Ультра",
+      tilePx: 32,
+      maxDpr: 2,
+      relief: true,
+      shoreFoam: true,
+      water: true,
+      clouds: true,
+      shadows: true,
+      bloom: true,
+      bloomDiv: 4,
+      godRays: true,
+      vignette: true,
+      grain: 0.03,
+      particles: 1,
+      detail: 2,
+      ambientProps: true,
+      birds: true,
+      fireflies: true
+    },
+    high: {
+      id: "high",
+      ru: "Высоко",
+      tilePx: 32,
+      maxDpr: 2,
+      relief: true,
+      shoreFoam: true,
+      water: true,
+      clouds: true,
+      shadows: true,
+      bloom: true,
+      bloomDiv: 6,
+      godRays: true,
+      vignette: true,
+      grain: 0,
+      particles: 0.8,
+      detail: 2,
+      ambientProps: true,
+      birds: true,
+      fireflies: true
+    },
+    medium: {
+      id: "medium",
+      ru: "Средне",
+      tilePx: 24,
+      maxDpr: 1.5,
+      relief: true,
+      shoreFoam: true,
+      water: true,
+      clouds: true,
+      shadows: true,
+      bloom: false,
+      bloomDiv: 8,
+      godRays: false,
+      vignette: true,
+      grain: 0,
+      particles: 0.5,
+      detail: 1,
+      ambientProps: true,
+      birds: false,
+      fireflies: true
+    },
+    eco: {
+      id: "eco",
+      ru: "Экономия",
+      tilePx: 16,
+      maxDpr: 1,
+      relief: false,
+      shoreFoam: false,
+      water: false,
+      clouds: false,
+      shadows: false,
+      bloom: false,
+      bloomDiv: 8,
+      godRays: false,
+      vignette: false,
+      grain: 0,
+      particles: 0.25,
+      detail: 0,
+      ambientProps: false,
+      birds: false,
+      fireflies: false
+    }
+  };
+  var LS_KEY = "frontier_quality";
+  function loadQualityId() {
+    try {
+      const v = localStorage.getItem(LS_KEY);
+      if (v === "auto" || QUALITY[v]) return v;
+    } catch {
+    }
+    return "auto";
+  }
+  function saveQualityId(id) {
+    try {
+      localStorage.setItem(LS_KEY, id);
+    } catch {
+    }
+  }
+  function makeAutoTuner(startId = "high") {
+    let elapsed = 0, frames = 0, slow = 0, current = startId, done = false;
+    const WINDOW = 10;
+    return {
+      get current() {
+        return current;
+      },
+      get done() {
+        return done;
+      },
+      sample(dt) {
+        if (done) return null;
+        elapsed += dt;
+        frames++;
+        if (dt > 1 / 40) slow++;
+        if (elapsed < 1.5) {
+          frames = 0;
+          slow = 0;
+          return null;
+        }
+        if (elapsed < WINDOW) {
+          if (frames > 60 && slow / frames > 0.7) return step(-1);
+          return null;
+        }
+        done = true;
+        const badRatio = frames ? slow / frames : 0;
+        if (badRatio > 0.35) return step(-1);
+        return null;
+      }
+    };
+    function step(dir) {
+      const i = QUALITY_ORDER.indexOf(current);
+      const ni = Math.max(0, Math.min(QUALITY_ORDER.length - 1, i + dir));
+      if (ni === i) {
+        done = true;
+        return null;
+      }
+      current = QUALITY_ORDER[ni];
+      elapsed = 0;
+      frames = 0;
+      slow = 0;
+      return current;
+    }
+  }
+  function guessQuality() {
+    const mem = navigator.deviceMemory || 4;
+    const cores = navigator.hardwareConcurrency || 4;
+    const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+    const px = (window.innerWidth || 1280) * (window.innerHeight || 720) * Math.min(2, window.devicePixelRatio || 1);
+    if (mem <= 2 || cores <= 2) return "eco";
+    if (coarse && px > 25e5) return "medium";
+    if (coarse) return "medium";
+    if (mem >= 8 && cores >= 8) return "ultra";
+    return "high";
+  }
+
   // app/src/render/renderer.js
   var TILE_PX = 32;
-  var SEASON_TILE = [
-    // DEEP, WATER, SAND, GRASS, FOREST, HILL, MOUNTAIN
-    ["#1d3a5f", "#2e5f8a", "#c9b98a", "#5f9e4f", "#3d7a3d", "#8a8a6a", "#7d7d85"],
-    // весна
-    ["#1a3557", "#2a587f", "#d4c084", "#6aa84f", "#357035", "#93936b", "#7d7d85"],
-    // лето
-    ["#1d3a5f", "#2e5f8a", "#c9b98a", "#9e8a3f", "#7a5a2d", "#8a7a5a", "#7d7d85"],
-    // осень
-    ["#16293f", "#24506e", "#dcdcdc", "#cfe0d8", "#5a7a68", "#9a9a92", "#a8a8b0"]
-    // зима
-  ];
   var Renderer = class {
     constructor(canvas2) {
       this.canvas = canvas2;
       this.ctx = canvas2.getContext("2d");
       this.cam = { x: 48, y: 48, zoom: 1 };
-      this.mapCache = null;
-      this.mapSeason = -1;
       this.particles = [];
+      this.fireflies = [];
+      this.birds = [];
+      this.clouds = null;
+      this.cloudsSeed = null;
       this.time = 0;
       this.dpr = Math.min(2, window.devicePixelRatio || 1);
+      this.grain = null;
+      this.grainAge = 0;
+      this.qualityId = loadQualityId();
+      this.quality = QUALITY[this.qualityId === "auto" ? guessQuality() : this.qualityId];
+      this.autoTuner = this.qualityId === "auto" ? makeAutoTuner(this.quality.id) : null;
+      this.terrain = new Terrain(this.quality);
+    }
+    // id ∈ QUALITY_ORDER или 'auto'
+    setQuality(id) {
+      this.qualityId = id;
+      saveQualityId(id);
+      if (id === "auto") {
+        this.autoTuner = makeAutoTuner("high");
+        this.quality = QUALITY[this.autoTuner.current];
+      } else {
+        this.autoTuner = null;
+        this.quality = QUALITY[id];
+      }
+      this.terrain.setQuality(this.quality);
+      this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
+      this.resize();
     }
     resize() {
       const w = window.innerWidth, h = window.innerHeight;
@@ -2677,68 +3408,22 @@ ${s}`, "console");
         y: (wy - this.cam.y) * TILE_PX * this.cam.zoom + this.canvas.height / this.dpr / 2
       };
     }
-    // --- пререндер карты в offscreen один раз на сезон ---
-    prerenderMap(sim2) {
-      const W = sim2.world.w, H = sim2.world.h;
-      if (!this.mapCache) {
-        this.mapCache = document.createElement("canvas");
-        this.mapCache.width = W * TILE_PX;
-        this.mapCache.height = H * TILE_PX;
-      }
-      const c = this.mapCache.getContext("2d");
-      const pal = SEASON_TILE[sim2.seasonIdx];
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const t = sim2.world.tiles[y * W + x];
-          c.fillStyle = pal[t];
-          c.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
-          const n = (x * 73856093 ^ y * 19349663) % 100 / 100;
-          c.fillStyle = n > 0.5 ? "rgba(255,255,255,0.045)" : "rgba(0,0,0,0.05)";
-          c.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
-          if (t === TILE.SAND) {
-            for (const [dx, dy, edge] of [[0, -1, "t"], [0, 1, "b"], [-1, 0, "l"], [1, 0, "r"]]) {
-              const nt = tileAt(sim2.world, x + dx, y + dy);
-              if (nt === TILE.WATER || nt === TILE.DEEP) {
-                c.fillStyle = "rgba(46,95,138,0.35)";
-                if (edge === "t") c.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, 5);
-                if (edge === "b") c.fillRect(x * TILE_PX, y * TILE_PX + TILE_PX - 5, TILE_PX, 5);
-                if (edge === "l") c.fillRect(x * TILE_PX, y * TILE_PX, 5, TILE_PX);
-                if (edge === "r") c.fillRect(x * TILE_PX + TILE_PX - 5, y * TILE_PX, 5, TILE_PX);
-              }
-            }
-          }
-          if (t === TILE.FOREST) {
-            const m = (x * 2654435761 ^ y * 40503) % 100 / 100;
-            c.fillStyle = m > 0.5 ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.06)";
-            c.beginPath();
-            c.arc(x * TILE_PX + 10 + m * 12, y * TILE_PX + 12 + m * 8, 6 + m * 3, 0, 7);
-            c.fill();
-          }
-          if (t === TILE.MOUNTAIN) {
-            c.fillStyle = "rgba(255,255,255,0.25)";
-            c.beginPath();
-            c.moveTo(x * TILE_PX + 16, y * TILE_PX + 6);
-            c.lineTo(x * TILE_PX + 24, y * TILE_PX + 20);
-            c.lineTo(x * TILE_PX + 8, y * TILE_PX + 20);
-            c.fill();
-          }
-        }
-      }
-      this.mapSeason = sim2.seasonIdx;
-    }
+    // ---------------------------------------------------------------------
     draw(sim2, dtReal) {
       this.time += dtReal;
-      if (this.mapSeason !== sim2.seasonIdx || !this.mapCache) this.prerenderMap(sim2);
+      this.tuneAuto(dtReal);
       const ctx = this.ctx;
       const dpr = this.dpr;
       const cw = this.canvas.width / dpr, ch = this.canvas.height / dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = "#0d1420";
+      const L = lightAt(sim2.dayTime);
+      ctx.fillStyle = L.sky;
       ctx.fillRect(0, 0, cw, ch);
       const z = TILE_PX * this.cam.zoom;
       const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
-      ctx.imageSmoothingEnabled = this.cam.zoom < 2;
-      ctx.drawImage(this.mapCache, ox, oy, this.mapCache.width * this.cam.zoom, this.mapCache.height * this.cam.zoom);
+      this.terrain.draw(ctx, sim2, ox, oy, z, cw, ch);
+      if (this.quality.water) this.terrain.drawWater(ctx, sim2, ox, oy, z, cw, ch, this.time);
+      if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
       if (sim2.showTerritory) this.drawTerritory(sim2, ctx, ox, oy, z);
       for (const f of sim2.factions) {
         if (!f.alive) continue;
@@ -2748,33 +3433,7 @@ ${s}`, "console");
           this.drawFactionSettlement(ctx, sx, sy, z, f, s, sim2);
         }
       }
-      const dayPhase = sim2.dayTime;
-      const night = dayPhase < 0.22 || dayPhase > 0.82;
-      for (const b of sim2.buildings) {
-        if (b.destroyed) continue;
-        const sx = ox + b.x * z, sy = oy + b.y * z;
-        const size = (b.size || 1) * z;
-        if (sx < -100 || sy < -100 || sx > cw + 100 || sy > ch + 100) continue;
-        this.drawBuilding(sim2, ctx, b, sx, sy, size, night);
-      }
-      for (const v of sim2.villagers) {
-        const sx = ox + v.x * z, sy = oy + v.y * z;
-        if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
-        this.drawVillager(ctx, sx, sy, z, v, sim2.eraIndex);
-      }
-      for (const a of sim2.animals) {
-        const sx = ox + a.x * z, sy = oy + a.y * z;
-        if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
-        ctx.fillStyle = a.kind === "mammoth" ? "#6b4f35" : "#a9825a";
-        const r = (a.kind === "mammoth" ? 0.32 : 0.2) * z;
-        ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, 7);
-        ctx.fill();
-        ctx.fillStyle = "rgba(0,0,0,0.3)";
-        ctx.beginPath();
-        ctx.arc(sx + r * 0.5, sy - r * 0.4, r * 0.3, 0, 7);
-        ctx.fill();
-      }
+      this.drawSortedEntities(sim2, ctx, ox, oy, z, cw, ch, L);
       if (sim2.placing) {
         const g = sim2.placing;
         const sx = ox + g.x * z, sy = oy + g.y * z;
@@ -2805,32 +3464,132 @@ ${s}`, "console");
         ctx.stroke();
         ctx.setLineDash([]);
       }
+      if (this.quality.fireflies) this.drawFireflies(sim2, ctx, ox, oy, z, cw, ch, dtReal, L);
+      if (this.quality.birds) this.drawBirds(ctx, cw, ch, dtReal, L);
       this.drawWeather(sim2, ctx, cw, ch, dtReal);
-      const darkness = night ? 0.38 : dayPhase < 0.3 ? (0.3 - dayPhase) * 1.2 : dayPhase > 0.75 ? (dayPhase - 0.75) * 3 : 0;
-      if (darkness > 0.01) {
-        ctx.fillStyle = `rgba(8,12,40,${Math.min(0.42, darkness)})`;
+      if (L.tint[3] > 8e-3) {
+        ctx.fillStyle = `rgba(${L.tint[0]},${L.tint[1]},${L.tint[2]},${L.tint[3]})`;
         ctx.fillRect(0, 0, cw, ch);
+      }
+      const wt = WEATHER_TINT[sim2.weather];
+      if (wt && wt.tint[3] > 8e-3) {
+        ctx.fillStyle = `rgba(${wt.tint[0]},${wt.tint[1]},${wt.tint[2]},${wt.tint[3]})`;
+        ctx.fillRect(0, 0, cw, ch);
+      }
+      if (this.quality.godRays) this.drawGodRays(ctx, cw, ch, L);
+      const sp = sim2.buildings.find((b) => b.id === "spire" && !b.destroyed);
+      if (sp && sim2.spire.stage >= 4) {
+        const sx = ox + sp.x * z + z, sy = oy + sp.y * z;
+        const grad = ctx.createLinearGradient(sx, sy, sx, 0);
+        grad.addColorStop(0, "rgba(125,227,255,0.7)");
+        grad.addColorStop(1, "rgba(125,227,255,0)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx - z * 0.12, 0, z * 0.24, sy);
+      }
+      if (this.quality.vignette) this.drawVignette(ctx, cw, ch);
+      if (this.quality.grain > 0) this.drawGrain(ctx, cw, ch);
+      this.drawMinimap(sim2, ctx, cw, ch);
+    }
+    // ---------------------------------------------------------------------
+    tuneAuto(dtReal) {
+      if (!this.autoTuner) return;
+      const next = this.autoTuner.sample(dtReal);
+      if (next) {
+        this.quality = QUALITY[next];
+        this.terrain.setQuality(this.quality);
+        this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
+        this.resize();
+      }
+    }
+    // ---------------------------------------------------------------------
+    // Единый Y-проход зданий/жителей/животных — иначе житель, стоящий "перед"
+    // высоким зданием, рисовался бы поверх его крыши (реальный баг прежней версии,
+    // где жители/животные всегда шли отдельными слоями ПОСЛЕ всех зданий).
+    drawSortedEntities(sim2, ctx, ox, oy, z, cw, ch, L) {
+      const items = [];
+      for (const b of sim2.buildings) {
+        if (b.destroyed) continue;
+        const sx = ox + b.x * z, sy = oy + b.y * z;
+        const size = (b.size || 1) * z;
+        if (sx < -100 || sy < -160 || sx > cw + 100 || sy > ch + 100) continue;
+        items.push({ y: b.y + (b.size || 1), kind: "b", b, sx, sy, size });
+      }
+      for (const v of sim2.villagers) {
+        const sx = ox + v.x * z, sy = oy + v.y * z;
+        if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
+        items.push({ y: v.y + 0.05, kind: "v", v, sx, sy });
+      }
+      for (const a of sim2.animals) {
+        const sx = ox + a.x * z, sy = oy + a.y * z;
+        if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
+        items.push({ y: a.y + 0.05, kind: "a", a, sx, sy });
+      }
+      items.sort((p, q) => p.y - q.y);
+      for (const it of items) {
+        if (it.kind === "b") this.drawBuilding(sim2, ctx, it.b, it.sx, it.sy, it.size);
+        else if (it.kind === "v") this.drawVillager(ctx, it.sx, it.sy, z, it.v, sim2.eraIndex);
+        else this.drawAnimal(ctx, it.sx, it.sy, z, it.a);
+      }
+      if (L.glow > 0.03) {
         for (const b of sim2.buildings) {
           if (b.destroyed || !b.done) continue;
           const def = BUILDINGS[b.id];
           if (!def.housing && !def.out) continue;
           const sx = ox + b.x * z + z / 2, sy = oy + b.y * z + z / 2;
-          ctx.fillStyle = sim2.eraIndex >= 7 ? "rgba(140,220,255,0.5)" : "rgba(255,190,90,0.55)";
+          if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
+          const warm = sim2.eraIndex < 7;
+          if (this.quality.bloom) {
+            const halo = this.glowSprite(warm);
+            const r = z * 0.75;
+            ctx.save();
+            ctx.globalCompositeOperation = "lighter";
+            ctx.globalAlpha = 0.55 * L.glow;
+            ctx.drawImage(halo, sx - r, sy - r, r * 2, r * 2);
+            ctx.restore();
+          }
+          ctx.fillStyle = warm ? `rgba(255,190,90,${0.55 * L.glow})` : `rgba(140,220,255,${0.55 * L.glow})`;
           ctx.beginPath();
           ctx.arc(sx, sy, z * 0.18, 0, 7);
           ctx.fill();
         }
-        const sp = sim2.buildings.find((b) => b.id === "spire" && !b.destroyed);
-        if (sp && sim2.spire.stage >= 4) {
-          const sx = ox + sp.x * z + z, sy = oy + sp.y * z;
-          const grad = ctx.createLinearGradient(sx, sy, sx, 0);
-          grad.addColorStop(0, "rgba(125,227,255,0.7)");
-          grad.addColorStop(1, "rgba(125,227,255,0)");
-          ctx.fillStyle = grad;
-          ctx.fillRect(sx - z * 0.12, 0, z * 0.24, sy);
-        }
       }
-      this.drawMinimap(sim2, ctx, cw, ch);
+    }
+    // Мягкий ореол свечения — ОДИН раз в offscreen-канвас, дальше только blit.
+    // Раньше здесь стоял ctx.filter='blur()' на каждое окно каждый кадр: именно он
+    // ронял 60 FPS до девяти на большом городе.
+    glowSprite(warm) {
+      const key = warm ? "_glowWarm" : "_glowCold";
+      if (this[key]) return this[key];
+      const S = 128;
+      const cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      const col = warm ? "255,190,90" : "140,220,255";
+      g.addColorStop(0, `rgba(${col},0.85)`);
+      g.addColorStop(0.35, `rgba(${col},0.32)`);
+      g.addColorStop(1, `rgba(${col},0)`);
+      c.fillStyle = g;
+      c.fillRect(0, 0, S, S);
+      this[key] = cv;
+      return cv;
+    }
+    drawAnimal(ctx, sx, sy, z, a) {
+      ctx.fillStyle = a.kind === "mammoth" ? "#6b4f35" : "#a9825a";
+      const r = (a.kind === "mammoth" ? 0.32 : 0.2) * z;
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.beginPath();
+      ctx.ellipse(sx + r * 0.3, sy + r * 0.75, r * 0.9, r * 0.28, 0, 0, 7);
+      ctx.fill();
+      ctx.fillStyle = a.kind === "mammoth" ? "#6b4f35" : "#a9825a";
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, 7);
+      ctx.fill();
+      ctx.fillStyle = "rgba(0,0,0,0.3)";
+      ctx.beginPath();
+      ctx.arc(sx + r * 0.5, sy - r * 0.4, r * 0.3, 0, 7);
+      ctx.fill();
     }
     drawFactionSettlement(ctx, sx, sy, z, f, s, sim2) {
       const col = f.def.color;
@@ -2886,7 +3645,7 @@ ${s}`, "console");
       }
     }
     // --- процедурный спрайт здания, эволюционирующий по эпохам ---
-    drawBuilding(sim2, ctx, b, sx, sy, size, night) {
+    drawBuilding(sim2, ctx, b, sx, sy, size) {
       const def = BUILDINGS[b.id];
       const eraVis = Math.max(sim2.eraIndex, BUILDING_ERA_IDX[b.id] || 0);
       const e = Math.min(eraVis, 9);
@@ -2948,25 +3707,15 @@ ${s}`, "console");
     eraPalette(e) {
       const pals = [
         { wall: "#8a6d4f", roof: "#6b4f35", trim: "#5d4a33" },
-        // stone: шкуры/земля
         { wall: "#c4a06a", roof: "#8a6d42", trim: "#a0522d" },
-        // bronze: глинобит
         { wall: "#9a8a72", roof: "#4a4a52", trim: "#3d3d45" },
-        // iron
         { wall: "#e8e0c8", roof: "#b08d57", trim: "#8a7a5a" },
-        // classical: мрамор
         { wall: "#b59a7a", roof: "#8a3d2d", trim: "#6b4f35" },
-        // medieval
         { wall: "#d4c4a0", roof: "#a0522d", trim: "#8a6d42" },
-        // renaissance
         { wall: "#9a6a52", roof: "#4a3d35", trim: "#3d3229" },
-        // industrial: кирпич
         { wall: "#aab4bc", roof: "#5a6b7a", trim: "#4aa3c7" },
-        // modern
         { wall: "#c8d4e8", roof: "#4a5a7a", trim: "#7d9de8" },
-        // digital
         { wall: "#e8f4f8", roof: "#2d4a5a", trim: "#7de3ff" }
-        // future
       ];
       return pals[e];
     }
@@ -3088,6 +3837,15 @@ ${s}`, "console");
       ctx.arc(cx, cy + size * 0.15, size * 0.3, 0, 7);
       ctx.fill();
       const flick = 0.85 + 0.15 * Math.sin(this.time * 9);
+      if (this.quality.bloom) {
+        const halo = this.glowSprite(true);
+        const r = size * 0.9 * flick;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = 0.5;
+        ctx.drawImage(halo, cx - r, cy - r, r * 2, r * 2);
+        ctx.restore();
+      }
       ctx.fillStyle = "#e8762d";
       ctx.beginPath();
       ctx.moveTo(cx - size * 0.15, cy + size * 0.15);
@@ -3154,6 +3912,15 @@ ${s}`, "console");
       }
       if (stage >= 3) {
         const pulse = 0.6 + 0.4 * Math.sin(time * 3);
+        if (this.quality.bloom) {
+          const halo = this.glowSprite(false);
+          const r = size * (0.5 + 0.2 * pulse);
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          ctx.globalAlpha = pulse * 0.6;
+          ctx.drawImage(halo, cx - r, sy + size * 0.45 - r, r * 2, r * 2);
+          ctx.restore();
+        }
         ctx.fillStyle = `rgba(125,227,255,${pulse})`;
         ctx.beginPath();
         ctx.arc(cx, sy + size * 0.45, size * 0.09 * pulse + size * 0.05, 0, 7);
@@ -3183,6 +3950,10 @@ ${s}`, "console");
     drawVillager(ctx, sx, sy, z, v, era) {
       const cloth = ["#8a6d4f", "#c4a06a", "#6a6a72", "#e8e0c8", "#8a3d2d", "#d4af37", "#5a4a42", "#4aa3c7", "#7d9de8", "#e8f4f8"][era];
       const r = Math.max(1.5, z * 0.09);
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + r * 0.9, r * 0.9, r * 0.3, 0, 0, 7);
+      ctx.fill();
       ctx.fillStyle = "#d8b08a";
       ctx.beginPath();
       ctx.arc(sx, sy - r * 1.6, r * 0.8, 0, 7);
@@ -3190,9 +3961,194 @@ ${s}`, "console");
       ctx.fillStyle = cloth;
       ctx.fillRect(sx - r * 0.7, sy - r * 0.8, r * 1.4, r * 1.8);
     }
+    // ---------------------------------------------------------------------
+    // Тени облаков — мировые координаты, детерминированы по сиду мира.
+    drawClouds(sim2, ctx, ox, oy, z, cw, ch) {
+      if (this.cloudsSeed !== sim2.world.seed) {
+        this.cloudsSeed = sim2.world.seed;
+        this.clouds = Array.from({ length: 6 }, (_, i) => ({
+          x: hash2(i, 1) * sim2.world.w,
+          y: hash2(i, 2) * sim2.world.h,
+          r: 8 + hash2(i, 3) * 10,
+          speed: 0.35 + hash2(i, 4) * 0.5,
+          dir: hash2(i, 5) * 6.28
+        }));
+      }
+      if (!this._cloudSprite) {
+        const S = 128;
+        const cv = document.createElement("canvas");
+        cv.width = S;
+        cv.height = S;
+        const c = cv.getContext("2d");
+        const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+        g.addColorStop(0, "rgba(40,50,70,0.30)");
+        g.addColorStop(0.6, "rgba(40,50,70,0.14)");
+        g.addColorStop(1, "rgba(40,50,70,0)");
+        c.fillStyle = g;
+        c.fillRect(0, 0, S, S);
+        this._cloudSprite = cv;
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = "multiply";
+      for (const c of this.clouds) {
+        const wx = ((c.x + Math.cos(c.dir) * this.time * c.speed) % sim2.world.w + sim2.world.w) % sim2.world.w;
+        const wy = ((c.y + Math.sin(c.dir) * this.time * c.speed * 0.5) % sim2.world.h + sim2.world.h) % sim2.world.h;
+        const sx = ox + wx * z, sy = oy + wy * z, r = c.r * z;
+        if (sx < -r || sy < -r || sx > cw + r || sy > ch + r) continue;
+        ctx.drawImage(this._cloudSprite, sx - r, sy - r * 0.55, r * 2, r * 1.1);
+      }
+      ctx.restore();
+    }
+    // Лучи рассвета/заката. Веер печётся в offscreen один раз, в кадре — один blit
+    // с переменной прозрачностью: 5 линейных градиентов в кадре того не стоили.
+    drawGodRays(ctx, cw, ch, L) {
+      const dawnDusk = L.tint[0] > L.tint[2] ? Math.min(1, L.tint[3] * 3) : 0;
+      const a = dawnDusk * 0.16;
+      if (a < 0.01) return;
+      if (!this._rays || this._raysW !== cw || this._raysH !== ch) {
+        const cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(cw));
+        cv.height = Math.max(1, Math.round(ch));
+        const c = cv.getContext("2d");
+        const ox0 = cw * 0.12, oy0 = -ch * 0.1;
+        for (let i = 0; i < 5; i++) {
+          const ang = -0.35 + i * 0.16;
+          const half = ch * 0.055;
+          const along = c.createLinearGradient(0, 0, ch * 1.4, 0);
+          along.addColorStop(0, "rgba(255,220,160,0.9)");
+          along.addColorStop(1, "rgba(255,220,160,0)");
+          const across = c.createLinearGradient(0, -half, 0, half);
+          across.addColorStop(0, "rgba(0,0,0,0)");
+          across.addColorStop(0.5, "rgba(0,0,0,1)");
+          across.addColorStop(1, "rgba(0,0,0,0)");
+          const layer = document.createElement("canvas");
+          layer.width = cv.width;
+          layer.height = cv.height;
+          const lc = layer.getContext("2d");
+          lc.translate(ox0, oy0);
+          lc.rotate(ang);
+          lc.fillStyle = along;
+          lc.fillRect(0, -half, ch * 1.5, half * 2);
+          lc.globalCompositeOperation = "destination-in";
+          lc.fillStyle = across;
+          lc.fillRect(0, -half, ch * 1.5, half * 2);
+          c.drawImage(layer, 0, 0);
+        }
+        this._rays = cv;
+        this._raysW = cw;
+        this._raysH = ch;
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = a;
+      ctx.drawImage(this._rays, 0, 0, cw, ch);
+      ctx.restore();
+    }
+    // Виньетка печётся в offscreen один раз на размер окна: полноэкранная заливка
+    // градиентом каждый кадр стоила ~4.6 мс — больше, чем вся местность.
+    drawVignette(ctx, cw, ch) {
+      if (!this._vig || this._vigW !== cw || this._vigH !== ch) {
+        const cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(cw));
+        cv.height = Math.max(1, Math.round(ch));
+        const c = cv.getContext("2d");
+        const g = c.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.35, cw / 2, ch / 2, Math.hypot(cw, ch) * 0.62);
+        g.addColorStop(0, "rgba(0,0,0,0)");
+        g.addColorStop(1, "rgba(0,0,0,0.38)");
+        c.fillStyle = g;
+        c.fillRect(0, 0, cw, ch);
+        this._vig = cv;
+        this._vigW = cw;
+        this._vigH = ch;
+      }
+      ctx.drawImage(this._vig, 0, 0, cw, ch);
+    }
+    // Зерно: 4 заранее сгенерированных кадра шума, паттерны создаются один раз.
+    // Пересборка ImageData и createPattern каждый кадр стоила заметных миллисекунд.
+    drawGrain(ctx, cw, ch) {
+      if (!this._grainFrames) {
+        this._grainFrames = [];
+        for (let f = 0; f < 4; f++) {
+          const cv = document.createElement("canvas");
+          cv.width = 96;
+          cv.height = 96;
+          const gc = cv.getContext("2d");
+          const img = gc.createImageData(96, 96);
+          for (let i = 0; i < img.data.length; i += 4) {
+            const v = Math.random() * 255 | 0;
+            img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+            img.data[i + 3] = 255;
+          }
+          gc.putImageData(img, 0, 0);
+          this._grainFrames.push(cv);
+        }
+        this._grainPatterns = null;
+      }
+      if (!this._grainPatterns) {
+        this._grainPatterns = this._grainFrames.map((cv) => ctx.createPattern(cv, "repeat"));
+      }
+      this.grainAge = (this.grainAge + 1) % 12;
+      ctx.save();
+      ctx.globalAlpha = this.quality.grain;
+      ctx.globalCompositeOperation = "overlay";
+      ctx.fillStyle = this._grainPatterns[this.grainAge / 3 | 0];
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.restore();
+    }
+    drawFireflies(sim2, ctx, ox, oy, z, cw, ch, dt, L) {
+      const target = Math.round(24 * this.quality.particles * L.glow);
+      while (this.fireflies.length < target) {
+        this.fireflies.push({
+          x: Math.random() * sim2.world.w,
+          y: Math.random() * sim2.world.h,
+          ph: Math.random() * 7,
+          r: 0.3 + Math.random() * 0.3,
+          drift: Math.random() * 6.28
+        });
+      }
+      if (this.fireflies.length > target) this.fireflies.length = target;
+      if (!target) return;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const f of this.fireflies) {
+        f.x += Math.cos(f.drift + this.time * 0.3) * f.r * dt;
+        f.y += Math.sin(f.drift + this.time * 0.3) * f.r * dt;
+        const t = tileAt(sim2.world, f.x, f.y);
+        if (t !== TILE.FOREST && t !== TILE.GRASS) continue;
+        const sx = ox + f.x * z, sy = oy + f.y * z;
+        if (sx < 0 || sy < 0 || sx > cw || sy > ch) continue;
+        const a = 0.35 + 0.35 * Math.sin(this.time * 3 + f.ph);
+        ctx.fillStyle = `rgba(220,255,140,${Math.max(0, a) * L.glow})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, Math.max(1, z * 0.028), 0, 7);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    drawBirds(ctx, cw, ch, dt, L) {
+      const target = Math.round(6 * this.quality.particles * (1 - L.glow));
+      while (this.birds.length < target) {
+        this.birds.push({ x: Math.random() * cw, y: ch * (0.1 + Math.random() * 0.3), s: 30 + Math.random() * 30, ph: Math.random() * 7 });
+      }
+      if (this.birds.length > target) this.birds.length = target;
+      ctx.strokeStyle = "rgba(40,40,50,0.55)";
+      ctx.lineWidth = 1.4;
+      for (const b of this.birds) {
+        b.x += b.s * dt;
+        b.y += Math.sin(this.time * 2 + b.ph) * 4 * dt;
+        if (b.x > cw + 20) b.x = -20;
+        const wing = Math.sin(this.time * 10 + b.ph) * 4;
+        ctx.beginPath();
+        ctx.moveTo(b.x - 6, b.y + wing);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineTo(b.x + 6, b.y + wing);
+        ctx.stroke();
+      }
+    }
     drawWeather(sim2, ctx, cw, ch, dt) {
       const w = sim2.weather;
-      const target = w === "rain" ? 90 : w === "snow" ? 70 : sim2.seasonIdx === 2 ? 20 : 0;
+      const base = w === "rain" ? 90 : w === "snow" ? 70 : sim2.seasonIdx === 2 ? 20 : 0;
+      const target = Math.round(base * this.quality.particles);
       while (this.particles.length < target) {
         this.particles.push({
           x: Math.random() * cw,
@@ -3236,14 +4192,37 @@ ${s}`, "console");
       const mx = cw - MW - 10, my = ch - MH - 10;
       ctx.fillStyle = "rgba(10,14,24,0.75)";
       ctx.fillRect(mx - 3, my - 3, MW + 6, MH + 6);
-      const pal = SEASON_TILE[sim2.seasonIdx];
-      const scale = MW / sim2.world.w;
-      for (let y = 0; y < sim2.world.h; y += 2) {
-        for (let x = 0; x < sim2.world.w; x += 2) {
-          ctx.fillStyle = pal[sim2.world.tiles[y * sim2.world.w + x]];
-          ctx.fillRect(mx + x * scale, my + y * scale, scale * 2 + 0.5, scale * 2 + 0.5);
+      if (!this._miniCache || this._miniSeason !== sim2.seasonIdx || this._miniSeed !== sim2.world.seed) {
+        const mc = document.createElement("canvas");
+        mc.width = MW;
+        mc.height = MH;
+        const mctx = mc.getContext("2d");
+        const scale2 = MW / sim2.world.w;
+        const img = mctx.createImageData(MW, MH);
+        this.terrain.ensure(sim2);
+        const low = this.terrain.low;
+        const lctx = low.getContext("2d");
+        const src = lctx.getImageData(0, 0, low.width, low.height).data;
+        const S = low.width / sim2.world.w;
+        for (let y = 0; y < MH; y++) {
+          for (let x = 0; x < MW; x++) {
+            const wx = Math.min(low.width - 1, Math.floor(x / scale2 * S));
+            const wy = Math.min(low.height - 1, Math.floor(y / scale2 * S));
+            const si = (wy * low.width + wx) * 4;
+            const di = (y * MW + x) * 4;
+            img.data[di] = src[si];
+            img.data[di + 1] = src[si + 1];
+            img.data[di + 2] = src[si + 2];
+            img.data[di + 3] = 255;
+          }
         }
+        mctx.putImageData(img, 0, 0);
+        this._miniCache = mc;
+        this._miniSeason = sim2.seasonIdx;
+        this._miniSeed = sim2.world.seed;
       }
+      ctx.drawImage(this._miniCache, mx, my, MW, MH);
+      const scale = MW / sim2.world.w;
       ctx.fillStyle = "#c9a227";
       for (const b of sim2.buildings) if (!b.destroyed) ctx.fillRect(mx + b.x * scale - 1, my + b.y * scale - 1, 3, 3);
       for (const f of sim2.factions) {
@@ -4180,6 +5159,9 @@ ${out}`;
   sim.sfx = (n) => audio.play(n);
   renderer.cam.x = sim.world.startX;
   renderer.cam.y = sim.world.startY;
+  window.__frontier = { get sim() {
+    return sim;
+  }, renderer, hud, audio, saveSys };
   function startPlacing(id) {
     sim.placing = { id, x: Math.round(renderer.cam.x), y: Math.round(renderer.cam.y), valid: false, reason: "" };
     updateGhost();

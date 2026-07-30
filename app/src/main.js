@@ -23,6 +23,9 @@ sim.sfx = (n) => audio.play(n);
 renderer.cam.x = sim.world.startX;
 renderer.cam.y = sim.world.startY;
 
+// Отладочный доступ из консоли браузера и из тестов производительности.
+window.__frontier = { get sim() { return sim; }, renderer, hud, audio, saveSys };
+
 // ---------- размещение зданий ----------
 function startPlacing(id) {
   sim.placing = { id, x: Math.round(renderer.cam.x), y: Math.round(renderer.cam.y), valid: false, reason: '' };

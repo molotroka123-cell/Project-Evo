@@ -90,7 +90,7 @@ export class Terrain {
         const rgb = hex2rgb(p.base);
         let m = this.q.relief ? this.shade[y * W + x] : 1;
         // лёгкая природная пестрота, чтобы заливка не была «пластиковой»
-        m *= 0.94 + hash2(x, y) * 0.12;
+        m *= 0.97 + hash2(x, y) * 0.06;
         const r = Math.min(255, rgb[0] * m) | 0, g = Math.min(255, rgb[1] * m) | 0, b = Math.min(255, rgb[2] * m) | 0;
         for (let sy = 0; sy < S; sy++) {
           for (let sx = 0; sx < S; sx++) {
@@ -146,6 +146,9 @@ export class Terrain {
       for (let x = x0; x < x0 + CHUNK; x++) {
         if (x >= W || y >= H) continue;
         const t = world.tiles[y * W + x];
+        // Вода должна оставаться гладкой: чёткая поквадратная подложка превращает
+        // её в шахматку из 32-пиксельных плиток. Объём ей дают блики в кадре.
+        if (t === TILE.WATER || t === TILE.DEEP) continue;
         let same = 0;
         for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
           const xx = x + dx, yy = y + dy;
@@ -156,8 +159,10 @@ export class Terrain {
         if (interior <= 0.02) continue;
         const p = pal[t];
         const m = this.q.relief ? this.shade[y * W + x] : 1;
-        c.globalAlpha = 0.42 * interior;
-        c.fillStyle = shadeHex(p.base, m * (0.94 + hash2(x, y) * 0.12));
+        // Пестрота должна совпадать с той, что уже заложена в мини-карту, иначе
+        // два разных шума складываются и дают шахматку из светлых/тёмных клеток.
+        c.globalAlpha = 0.22 * interior;
+        c.fillStyle = shadeHex(p.base, m * (0.97 + hash2(x, y) * 0.06));
         c.fillRect((x - x0) * TP, (y - y0) * TP, TP, TP);
       }
     }
@@ -221,15 +226,22 @@ export class Terrain {
     }
 
     if (t === TILE.HILL) {
-      // округлая шапка холма: свет сверху-слева, тень снизу-справа
-      c.fillStyle = p.hi; c.globalAlpha = 0.5;
-      c.beginPath(); c.ellipse(px + TP * 0.4, py + TP * 0.38, TP * 0.34, TP * 0.26, -0.5, 0, 7); c.fill();
-      c.fillStyle = p.lo; c.globalAlpha = 0.4;
-      c.beginPath(); c.ellipse(px + TP * 0.64, py + TP * 0.68, TP * 0.3, TP * 0.2, -0.5, 0, 7); c.fill();
-      c.globalAlpha = 1;
-      if (D >= 1 && r2 > 0.55) {
-        c.fillStyle = p.det;
-        c.beginPath(); c.arc(px + r1 * TP * 0.8 + TP * 0.1, py + r3 * TP * 0.7 + TP * 0.2, TP * 0.06, 0, 7); c.fill();
+      // Объём холмам даёт рельефное освещение всей карты. Одинаковый блик на
+      // КАЖДОМ тайле складывался в механическую сетку — поэтому детали редкие
+      // и разнесены по позиции, а не по фиксированной схеме.
+      if (D < 1) return;
+      if (r2 > 0.62) {
+        c.fillStyle = p.det; c.globalAlpha = 0.55;
+        c.beginPath();
+        c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r3 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r3 * 0.03), r1 * 3, 0, 7);
+        c.fill();
+        c.globalAlpha = 1;
+      }
+      if (D >= 2 && r1 > 0.78) {
+        c.strokeStyle = p.det2; c.globalAlpha = 0.45; c.lineWidth = Math.max(1, TP * 0.04);
+        const gx = px + r3 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
+        c.beginPath(); c.moveTo(gx, gy + TP * 0.06); c.lineTo(gx + TP * 0.02, gy - TP * 0.06); c.stroke();
+        c.globalAlpha = 1;
       }
       return;
     }
@@ -398,6 +410,20 @@ export class Terrain {
     if (x1 < x0 || y1 < y0) return;
     // при сильном отдалении блики сливаются в шум — не рисуем
     if (z < 12) return;
+    // Блик — заранее отрисованный спрайт. Раньше здесь был ctx.ellipse на каждый
+    // видимый водный тайл (до тысячи заливок в кадре) — это стоило десятков мс.
+    if (!this._glint) {
+      const S = 64;
+      const cv = document.createElement('canvas');
+      cv.width = S; cv.height = S / 2;
+      const c = cv.getContext('2d');
+      const g = c.createRadialGradient(S / 2, S / 4, 0, S / 2, S / 4, S / 2);
+      g.addColorStop(0, 'rgba(190,230,255,1)');
+      g.addColorStop(1, 'rgba(190,230,255,0)');
+      c.fillStyle = g;
+      c.fillRect(0, 0, S, S / 2);
+      this._glint = cv;
+    }
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     const step = z < 20 ? 2 : 1;
@@ -408,12 +434,10 @@ export class Terrain {
         const ph = hash2(x, y) * 6.28;
         const a = (0.5 + 0.5 * Math.sin(time * 1.6 + ph + x * 0.4 + y * 0.25));
         const alpha = (t === TILE.DEEP ? 0.05 : 0.11) * a;
-        if (alpha < 0.012) continue;
-        ctx.fillStyle = `rgba(180,225,255,${alpha})`;
-        const sx = ox + x * z, sy = oy + y * z;
-        ctx.beginPath();
-        ctx.ellipse(sx + z * 0.5, sy + z * (0.36 + 0.12 * Math.sin(time + ph)), z * 0.34, z * 0.09, 0, 0, 7);
-        ctx.fill();
+        if (alpha < 0.02) continue;
+        ctx.globalAlpha = alpha;
+        const sx = ox + x * z, sy = oy + y * z + z * (0.36 + 0.12 * Math.sin(time + ph));
+        ctx.drawImage(this._glint, sx + z * 0.14, sy - z * 0.13, z * 0.72, z * 0.26);
       }
     }
     ctx.restore();
