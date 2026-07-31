@@ -2,19 +2,19 @@
 import { Simulation } from '../src/core/simulation.js';
 import { createRng } from '../src/core/rng.js';
 import { FACTIONS, TECHS } from '../src/core/data.js';
-import { createBorders, updateBorders, attritionPerDay, ownerAt, ownerSide, OWNER_PLAYER } from '../src/core/systems/borders.js';
+import { createBorders, updateBorders, attritionPerDay } from '../src/core/systems/borders.js';
 import {
   createDiplomacy, tickDiplomacy, applyPlayerRel, serializeDiplomacy, deserializeDiplomacy,
   grantPassage, revokePassage, hasPassage, mayEnter, passageList, attritionMult, trespassScan,
   addCasusBelli, hasCasusBelli, casusBelliList, consumeCasusBelli, warLegitimacy,
   formAlliance, breakAlliance, isAllied, alliesOf, allianceList, evaluateAllianceOffer,
   callToArms, answerCall, pendingCallsFor,
-  openWar, closeWar, isAtWar, inTruce, warEnemies, warDurations, warStats,
+  openWar, closeWar, isAtWar, inTruce, warDurations, warStats,
   techValueFor, evaluateTechTrade, buildTechOffer, applyTechTrade, factionKnows,
   aiRel, adjustAiRel, clampRel, pairKey, dirKey,
   REL_MIN, REL_MAX, PASSAGE_DAYS, TRESPASS_GRACE, TRESPASS_CB_REL, CB_LIFETIME,
-  ALLY_MIN_REL, ALLY_BREAK_REL, CALL_REFUSE_REL, CALL_ACCEPT_ENEMY_REL, CALL_TTL,
-  JOINT_WAR_REL, WAR_MAX_DAYS, TRUCE_DAYS, TECH_TRADE_MIN_REL, TECH_TRADE_COOLDOWN,
+  ALLY_BREAK_REL, CALL_REFUSE_REL, CALL_ACCEPT_ENEMY_REL, CALL_TTL,
+  JOINT_WAR_REL, WAR_MAX_DAYS, TECH_TRADE_MIN_REL, TECH_TRADE_COOLDOWN,
 } from '../src/core/systems/diplomacy_ext.js';
 
 let pass = 0, fail = 0;
@@ -162,7 +162,7 @@ t('U27 призыв к оружию: согласие и отказ бьют п�
   const s3 = createDiplomacy();
   formAlliance(s3, 'player', 'wolves', 0);
   const c3 = callToArms(s3, 'wolves', 'player', 'guild', 5);
-  const no3 = answerCall(s3, c3.id, false, { day: 5, relations: { wolves: 20 } });
+  const no3 = answerCall(s3, c3.id, false, { day: 5, relations: { wolves: ALLY_BREAK_REL + 10 } });
   ok(no3.brokeAlliance && !isAllied(s3, 'player', 'wolves'), 'холодный союз пережил отказ');
   console.log(`   согласие: ${dW} к зовущему и ${dG} к его врагу; отказ: ${CALL_REFUSE_REL}`);
 });
@@ -326,9 +326,15 @@ t('20 сидов × 2000 дней: отношения в [-100, 100], войны
     const relations = {};
     for (const f of factions) relations[f.id] = rng.range(-40, 40);
     const s = createDiplomacy();
+    // Дерево знаний игрока с дырами: часть технологий у него есть, часть нет —
+    // только на таком раскладе обмен вообще имеет смысл для обеих сторон.
+    const playerTechs = new Set(TECHS.filter((_, i) => i < 36 && i % 3 === 0).map(x => x.id));
     let playerWars = [];
     for (let day = 1; day <= 2000; day++) {
       for (const f of factions) f.armyPts += rng.range(0.1, 0.6);
+      // Игрок время от времени задабривает соседей — иначе ветки союзов и
+      // обменов технологиями просто не включились бы ни разу.
+      if (rng.chance(0.02)) applyPlayerRel(relations, [{ fid: rng.pick(factions).id, dR: 12, why: 'Подарок' }]);
       // Ядро иногда само объявляет войну игроку и само же мирится — модуль
       // обязан пережить обе ситуации, не рассинхронизировавшись.
       for (const f of factions) {
@@ -338,11 +344,31 @@ t('20 сидов × 2000 дней: отношения в [-100, 100], войны
       const trespass = [];
       if (rng.chance(0.05)) trespass.push({ intruder: rng.pick(factions).id, owner: 'player' });
       if (rng.chance(0.05)) trespass.push({ intruder: 'player', owner: rng.pick(factions).id });
-      const out = tickDiplomacy(s, {
+      const ctx = {
         day, rng, factions, relations, playerWars, trespass,
-        player: { armyPower: 20 + day * 0.05, era: Math.floor(day / 220), techs: new Set(TECHS.slice(0, 5).map(x => x.id)) },
-      });
+        player: { armyPower: 20 + day * 0.05, era: Math.floor(day / 220), techs: playerTechs },
+      };
+      const out = tickDiplomacy(s, ctx);
       applyPlayerRel(relations, out.playerRel);
+      // Игрок за рулём: союзы принимает, право прохода выдаёт, технологиями
+      // меняется, на призывы отвечает то согласием, то отказом.
+      for (const of of out.offers) {
+        if (of.kind === 'alliance') formAlliance(s, 'player', of.fid, day);
+        else if (of.kind === 'passage') grantPassage(s, of.fid, 'player', day);
+        else if (of.kind === 'tech') {
+          const res = applyTechTrade(s, ctx, of.offer, day);
+          if (!res.ok) continue;
+          playerTechs.add(res.playerTech);
+          const f = factions.find(x => x.id === of.fid);
+          if (f) f.techCount += res.factionTechDelta;
+          applyPlayerRel(relations, res.playerRel);
+        }
+      }
+      for (const c of out.calls) {
+        const res = answerCall(s, c.id, rng.chance(0.5), { day, relations });
+        applyPlayerRel(relations, res.playerRel);
+        if (res.joinWar && !playerWars.includes(res.joinWar.enemy)) playerWars.push(res.joinWar.enemy);
+      }
       for (const w of out.warsEnded) if (w.a === 'player' || w.b === 'player') {
         playerWars = playerWars.filter(x => x !== (w.a === 'player' ? w.b : w.a));
       }
@@ -407,6 +433,9 @@ t('интеграция: живая Simulation + границы, 500 дней д
   let offers = 0, calls = 0, logs = 0;
   for (let i = 0; i < 500; i++) {
     sim.tick(1);
+    // Игрок ухаживает за первым соседом штатным подарком — так включаются
+    // ветки союза, права прохода и обмена технологиями.
+    if (i % 40 === 0) sim.adjustRel(sim.factions[0].id, 12, 'Подарок');
     updateBorders(borders, { world: sim.world, day: sim.day, version: sim.buildings.length + sim.day, buildings: sim.buildings, factions: sim.factions });
     const armies = [];
     if (sim.raids.warning && sim.raids.from) {

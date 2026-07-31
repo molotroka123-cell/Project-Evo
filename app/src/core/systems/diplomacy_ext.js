@@ -680,11 +680,11 @@ function _trespass(state, ctx, out, day) {
     if (mayEnter(state, e.intruder, e.owner, day)) continue; // договор — не нарушение
     const rec = state.trespass[k] || (state.trespass[k] = { days: 0, lastDay: day, cbDay: -1 });
     rec.days++; rec.lastDay = day;
-    _rel(state, ctx, out, e.owner, e.intruder, TRESPASS_REL_PER_DAY, 'Чужая армия на нашей земле');
+    _rel(state, out, e.owner, e.intruder, TRESPASS_REL_PER_DAY, 'Чужая армия на нашей земле');
     if (rec.days > TRESPASS_GRACE && rec.cbDay < 0) {
       rec.cbDay = day;
       addCasusBelli(state, e.owner, e.intruder, 'trespass', day);
-      _rel(state, ctx, out, e.owner, e.intruder, TRESPASS_CB_REL, 'Нарушение рубежей');
+      _rel(state, out, e.owner, e.intruder, TRESPASS_CB_REL, 'Нарушение рубежей');
       out.logs.push(`Армия ${sideName(e.intruder)} стоит на землях ${sideName(e.owner)} без права прохода — законный повод к войне.`);
     }
   }
@@ -772,7 +772,7 @@ function _wars(state, ctx, out, day, live) {
       if (warEnemies(state, o.id).some(x => foes.includes(x))) adjustAiRel(state, f.id, o.id, 0.5);
     }
     if ((ctx.playerWars || []).some(x => foes.includes(x))) {
-      _rel(state, ctx, out, 'player', f.id, JOINT_WAR_REL / 5, 'Общий враг');
+      _rel(state, out, 'player', f.id, JOINT_WAR_REL / 5, 'Общий враг');
     }
   }
 }
@@ -789,7 +789,7 @@ function _calls(state, ctx, out, day) {
     if (c.expires > day) continue;
     // Молчание — тот же отказ, только без объяснений.
     state.calls = state.calls.filter(x => x !== c);
-    _rel(state, ctx, out, c.target, c.caller, CALL_REFUSE_REL, 'Молчание на призыв союзника');
+    _rel(state, out, c.target, c.caller, CALL_REFUSE_REL, 'Молчание на призыв союзника');
     if (relTo(state, ctx, c.caller, c.target) + CALL_REFUSE_REL < ALLY_BREAK_REL) {
       breakAlliance(state, c.caller, c.target, day);
       out.logs.push(`Союз ${sideName(c.caller)} и ${sideName(c.target)} распался: призыв остался без ответа.`);
@@ -965,7 +965,7 @@ export function sideName(side) {
 
 // Пары с игроком уходят наружу дельтой (их проводит ядро), пары ИИ-ИИ
 // применяются на месте. Клампы стоят на обоих путях.
-function _rel(state, ctx, out, a, b, dR, why) {
+function _rel(state, out, a, b, dR, why) {
   _relPair(state, out.playerRel, a, b, dR, why);
 }
 
