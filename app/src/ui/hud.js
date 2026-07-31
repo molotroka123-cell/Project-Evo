@@ -1,12 +1,14 @@
 // ui/hud.js — весь DOM-интерфейс (presentation-слой).
 import { RES, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, UNITS, TRAIN_COST, SPIRE_STAGES, OBJECTIVES, FACTIONS, WEATHER, SEASONS, GREAT_TYPES } from '../core/data.js';
 import { FileSave } from '../save/saveSystem.js';
+import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
 
 const TABS = [
   { id: 'build', ru: 'Стройка', ic: '🏗' },
   { id: 'research', ru: 'Наука', ic: '📜' },
   { id: 'army', ru: 'Армия', ic: '⚔️' },
   { id: 'diplo', ru: 'Дипломатия', ic: '🤝' },
+  { id: 'market', ru: 'Рынок', ic: '⚖️' },
   { id: 'labor', ru: 'Труд', ic: '👷' },
   { id: 'goals', ru: 'Цели', ic: '🎯' },
   { id: 'log', ru: 'Журнал', ic: '📖' },
@@ -19,6 +21,7 @@ export class Hud {
     this.saveSys = saveSys;
     this.audio = audio;
     this.tab = 'build';
+    this.marketState = createMarketPanelState();
     this.speed = 1;
     this.el = {};
     for (const id of ['topbar', 'rFood', 'rWood', 'rStone', 'rSteel', 'rGold', 'rKnow', 'rPop', 'rHappy', 'eraBadge', 'dateBox',
@@ -251,6 +254,14 @@ export class Hud {
         this.renderPanel();
       };
     });
+    // Панель рынка держит собственный атрибут data-market: если бы она пользовалась
+    // data-sell/data-buy выше, тамошний c.onclick затёр бы её обработчик и любая
+    // кнопка продавала бы ровно 20 единиц вместо выбранного лота.
+    bindMarketPanel(root, this.sim, {
+      toast: (t, k) => this.toast(t, k),
+      audio: this.audio,
+      refresh: () => this.renderPanel(),
+    });
   }
 
   costStr(cost) {
@@ -396,6 +407,8 @@ export class Hud {
     }
     return html;
   }
+
+  panel_market() { return renderMarketPanel(this.sim, this.marketState); }
 
   panel_log() {
     const items = [...this.sim.log].reverse();

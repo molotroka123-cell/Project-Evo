@@ -5505,12 +5505,296 @@ ${s}`, "console");
     }
   };
 
+  // app/src/ui/panel_market.js
+  var TRADE_RES = Object.keys(MARKET_BASE);
+  var LOTS = [20, 100];
+  var BUY_MARKUP = 1.25;
+  var CARAVAN_PERIOD = 15;
+  var HIST_LEN = 12;
+  var FLAT = 0.02;
+  var RES_META = Object.fromEntries(RES.map((r) => [r.id, r]));
+  function createMarketPanelState() {
+    return { v: 1, hist: [] };
+  }
+  function observeMarket(state, sim2) {
+    if (!state || !sim2) return state;
+    if (!Array.isArray(state.hist)) state.hist = [];
+    const day = Math.floor(sim2.day || 0);
+    const last2 = state.hist[state.hist.length - 1];
+    if (last2 && last2.day === day) return state;
+    if (last2 && day < last2.day) state.hist.length = 0;
+    const p = {};
+    for (const id of TRADE_RES) p[id] = rawPrice(sim2, id);
+    state.hist.push({ day, p });
+    if (state.hist.length > HIST_LEN) state.hist.shift();
+    return state;
+  }
+  function rawPrice(sim2, resId) {
+    const prices = sim2 && sim2.market ? sim2.market.prices : null;
+    const p = prices ? prices[resId] : void 0;
+    return typeof p === "number" && isFinite(p) ? p : MARKET_BASE[resId];
+  }
+  function priceTrend(sim2, resId, state) {
+    const base = MARKET_BASE[resId];
+    const price = rawPrice(sim2, resId);
+    const ratio = base ? price / base : 1;
+    const out = {
+      price,
+      base,
+      ratio,
+      pct: Math.round((ratio - 1) * 100),
+      dir: ratio > 1 + FLAT ? 1 : ratio < 1 - FLAT ? -1 : 0,
+      recent: 0,
+      days: 0
+    };
+    const hist = state && Array.isArray(state.hist) ? state.hist : [];
+    if (hist.length >= 2) {
+      const first = hist[0];
+      const was = Number(first.p[resId]);
+      if (was > 0) {
+        const d = price / was - 1;
+        out.recent = d > FLAT ? 1 : d < -FLAT ? -1 : 0;
+        out.days = Math.max(1, Math.floor(sim2.day || 0) - first.day);
+      }
+    }
+    return out;
+  }
+  function marketQuote(sim2, resId, state) {
+    const meta = RES_META[resId] || { icon: "", ru: resId };
+    const rate = sim2.marketRate(resId);
+    const have = Math.floor(sim2.res[resId] || 0);
+    const cap = sim2.resCap && isFinite(sim2.resCap[resId]) ? sim2.resCap[resId] : Infinity;
+    const room = Math.max(0, Math.floor(cap - (sim2.res[resId] || 0)));
+    const gold = sim2.res.gold || 0;
+    const t = priceTrend(sim2, resId, state);
+    const lots = LOTS.map((n) => {
+      const income = n * rate;
+      const price = n * rate * BUY_MARKUP;
+      return {
+        n,
+        income,
+        price,
+        canSell: have >= n,
+        canBuy: gold >= price && room >= n,
+        // Причина всегда одна и самая важная: нет товара / нет денег / некуда класть.
+        buyWhy: room < n ? "склад полон" : gold < price ? "мало 🪙" : ""
+      };
+    });
+    return { id: resId, icon: meta.icon, ru: meta.ru, rate, buyRate: rate * BUY_MARKUP, have, cap, room, trend: t, lots };
+  }
+  function caravanStatus(sim2) {
+    if (!sim2.techs || !sim2.techs.has("trade")) {
+      return { active: false, markets: 0, daysLeft: 0, gold: 0, period: CARAVAN_PERIOD, boosts: [] };
+    }
+    const markets = sim2.countBuilding("market");
+    let gold = 0.6 * markets * sim2.globalMult("gold");
+    const boosts = [];
+    if (sim2.hasBuilding("shipyard")) {
+      gold *= 1.5;
+      boosts.push("Верфь ×1.5");
+    }
+    if (sim2.hasBuilding("train_station")) {
+      gold *= 2;
+      boosts.push("Вокзал ×2");
+    }
+    if (sim2.hasBuilding("airport")) {
+      gold *= 2;
+      boosts.push("Аэропорт ×2");
+    }
+    if (sim2.techs.has("internet")) {
+      gold *= 1.25;
+      boosts.push("Интернет ×1.25");
+    }
+    const daysLeft = Math.max(0, Math.ceil(sim2.caravanTimer ?? CARAVAN_PERIOD));
+    return { active: markets > 0, markets, daysLeft, gold, period: CARAVAN_PERIOD, boosts };
+  }
+  function tradeTreaties(sim2) {
+    const list = Array.isArray(sim2.treaties) ? sim2.treaties : [];
+    return list.map((t) => {
+      const f = typeof sim2.faction === "function" ? sim2.faction(t.b) : null;
+      const def = f && f.def || FACTIONS.find((x) => x.id === t.b) || null;
+      return {
+        fid: t.b,
+        name: def ? def.name : "Неизвестный сосед",
+        leader: def ? def.leader : "",
+        color: def ? def.color : "#c9a227",
+        atWar: (sim2.wars || []).some((w) => w.fid === t.b)
+      };
+    });
+  }
+  function marketBlocker(sim2) {
+    if (sim2.hasBuilding("market")) return null;
+    const def = BUILDINGS.market;
+    if (!sim2.techs.has("trade")) {
+      const tech = TECHS.find((t) => t.id === "trade");
+      return { kind: "tech", tech: tech ? tech.name : "Торговля", cost: sim2.techCost(tech), buildCost: def.cost };
+    }
+    const site = sim2.buildings.find((b) => b.id === "market" && !b.destroyed && !b.done);
+    if (site) {
+      const pct = Math.round(site.progress / site.buildDays * 100);
+      return { kind: "building", progress: Math.max(0, Math.min(99, pct)), buildCost: def.cost };
+    }
+    return { kind: "place", lack: sim2.lackCost(def.cost), buildCost: def.cost };
+  }
+  function renderMarketPanel(sim2, state = null) {
+    if (!sim2) return "";
+    observeMarket(state, sim2);
+    const blocker = marketBlocker(sim2);
+    if (blocker) return _renderClosed(sim2, blocker);
+    let html = _renderHeader(sim2);
+    html += '<h4 class="group">Курсы и сделки</h4>';
+    for (const id of TRADE_RES) html += _renderRow(marketQuote(sim2, id, state));
+    html += _renderTrade(sim2);
+    return html;
+  }
+  function _renderClosed(sim2, b) {
+    const cost = _costStr(sim2, b.buildCost);
+    let head = "";
+    if (b.kind === "tech") {
+      head = `<div class="card"><div class="ttl"><span>Рынок закрыт</span><span class="cost">📜${b.cost}</span></div>
+      <div class="desc">Обмен ресурсов открывает технология «${b.tech}» на вкладке «Наука».</div>
+      <div class="reason">Сначала изучите «${b.tech}», затем постройте Рынок: ${cost}</div></div>`;
+    } else if (b.kind === "building") {
+      head = `<div class="card"><div class="ttl"><span>Рынок строится</span><span class="cost">${b.progress}%</span></div>
+      <div class="desc">Торги откроются, как только каменщики закончат. Приставьте больше рабочих на вкладке «Труд» — приоритет «Стройка».</div></div>`;
+    } else {
+      head = `<div class="card"><div class="ttl"><span>Рынка нет</span><span class="cost">${cost}</span></div>
+      <div class="desc">Постройте Рынок на вкладке «Стройка»: особой клетки он не требует, ставится где угодно в поселении.</div>
+      ${b.lack ? `<div class="reason">Не хватает: ${b.lack}</div>` : '<div class="desc">Ресурсов на постройку хватает.</div>'}</div>`;
+    }
+    return head + `<div class="card"><div class="ttl"><span>Что даёт Рынок</span></div>
+    <div class="kv"><span>Продажа</span><span>Излишки 🍞🪵🪨⚙️ в 🪙</span></div>
+    <div class="kv"><span>Покупка</span><span>Нехватка за 🪙 (дороже на 25%)</span></div>
+    <div class="kv"><span>Караваны</span><span>🪙 раз в ${CARAVAN_PERIOD} дней</span></div>
+    <div class="kv"><span>Договоры</span><span>Снимают наценку 30%</span></div></div>`;
+  }
+  function _renderHeader(sim2) {
+    const treaties = tradeTreaties(sim2);
+    const markets = sim2.countBuilding("market");
+    const treasury = sim2.hasBuilding("treasury");
+    return `<div class="card"><div class="ttl"><span>Рынок</span><span class="cost">🪙 ${_gold(sim2.res.gold)}</span></div>
+    <div class="desc">Курс — золото за одну единицу товара. Покупка дороже продажи на 25%: посредник тоже ест.</div>
+    <div class="kv"><span>Рынков в поселении</span><span>${markets}</span></div>
+    <div class="kv"><span>Торговые договоры</span><span>${treaties.length ? `${treaties.length} · курс без наценки` : "нет · курс хуже на 30%"}</span></div>
+    <div class="kv"><span>Сокровищница</span><span>${treasury ? "есть · курс +20%" : "нет"}</span></div></div>`;
+  }
+  function _renderRow(q) {
+    const t = q.trend;
+    const arrow = t.dir > 0 ? "▲" : t.dir < 0 ? "▼" : "=";
+    const col = t.dir > 0 ? "var(--good)" : t.dir < 0 ? "var(--bad)" : "var(--warn)";
+    const sign = t.pct > 0 ? "+" : "";
+    const width = Math.max(0, Math.min(100, (t.ratio - 0.5) / 1.5 * 100));
+    const recent = t.days ? ` · за ${t.days} дн. ${t.recent > 0 ? "дорожает" : t.recent < 0 ? "дешевеет" : "стоит"}` : "";
+    const stock = isFinite(q.cap) ? `${q.have}/${q.cap}` : `${q.have}`;
+    let btns = '<div class="btns" style="display:flex;gap:8px;margin-top:8px">';
+    for (const l of q.lots) {
+      btns += `<button class="btn ${l.canSell ? "" : "disabled"}" style="flex:1;padding:8px;font-size:12px"
+      data-market="sell:${q.id}:${l.n}"${l.canSell ? "" : " disabled"}>Продать ${l.n} → +${_gold(l.income)}🪙</button>`;
+    }
+    btns += '</div><div class="btns" style="display:flex;gap:8px;margin-top:6px">';
+    for (const l of q.lots) {
+      btns += `<button class="btn ${l.canBuy ? "" : "disabled"}" style="flex:1;padding:8px;font-size:12px"
+      data-market="buy:${q.id}:${l.n}"${l.canBuy ? "" : " disabled"}>Купить ${l.n} → −${_gold(l.price)}🪙</button>`;
+    }
+    btns += "</div>";
+    const big = q.lots[q.lots.length - 1];
+    const why = [];
+    if (!big.canSell) why.push(`продать ${big.n}: в запасе ${q.have}`);
+    if (!big.canBuy) why.push(`купить ${big.n}: ${big.buyWhy}`);
+    return `<div class="card"><div class="ttl"><span>${q.icon} ${q.ru}</span>
+      <span class="cost" style="color:${col}">${_rate(q.rate)}🪙 ${arrow} ${sign}${t.pct}% к базе</span></div>
+    <div class="desc">В запасе ${stock} · продажа ${_rate(q.rate)}🪙 · покупка ${_rate(q.buyRate)}🪙${recent}</div>
+    <div class="relbar"><div style="width:${width.toFixed(0)}%;background:${col}"></div></div>
+    ${btns}
+    ${why.length ? `<div class="reason">Недоступно: ${why.join(" · ")}</div>` : ""}</div>`;
+  }
+  function _renderTrade(sim2) {
+    const car = caravanStatus(sim2);
+    const treaties = tradeTreaties(sim2);
+    if (!car.active && !treaties.length) return "";
+    let html = '<h4 class="group">Караваны и договоры</h4>';
+    if (car.active) {
+      html += `<div class="card"><div class="ttl"><span>🐫 Караван в пути</span><span class="cost">+${_gold(car.gold)}🪙</span></div>
+      <div class="desc">Прибудет через ${car.daysLeft} дн., затем уходит снова: круг — ${car.period} дней.</div>
+      <div class="kv"><span>Считается с рынков</span><span>${car.markets}</span></div>
+      ${car.boosts.length ? `<div class="kv"><span>Ускорители</span><span>${car.boosts.join(" · ")}</span></div>` : ""}</div>`;
+    }
+    for (const t of treaties) {
+      html += `<div class="card"><div class="ttl"><span><span style="color:${t.color}">⬤</span> ${t.name}</span>
+        <span class="cost">${t.atWar ? "война" : "торговля"}</span></div>
+      <div class="desc">${t.leader ? t.leader + " · " : ""}Договор снимает наценку 30% на все курсы.</div>
+      ${t.atWar ? '<div class="reason">Идёт война: договор висит на волоске.</div>' : ""}</div>`;
+    }
+    return html;
+  }
+  function handleMarketAction(sim2, spec) {
+    const parts = String(spec || "").split(":");
+    const [kind, resId, raw] = parts;
+    if (parts.length !== 3 || kind !== "sell" && kind !== "buy") return { ok: false, reason: "Неизвестная операция" };
+    if (!TRADE_RES.includes(resId)) return { ok: false, reason: "Этот товар на рынке не торгуется" };
+    const n = Number(raw);
+    if (!isFinite(n) || n <= 0) return { ok: false, reason: "Неверный объём сделки" };
+    const goldBefore = sim2.res.gold;
+    const resBefore = sim2.res[resId];
+    const r = kind === "sell" ? sim2.marketSell(resId, n) : sim2.marketBuy(resId, n);
+    if (!r.ok) return { ok: false, reason: r.reason, kind, resId, amount: n };
+    return {
+      ok: true,
+      kind,
+      resId,
+      amount: Math.abs(sim2.res[resId] - resBefore),
+      gold: Math.abs(sim2.res.gold - goldBefore)
+    };
+  }
+  function bindMarketPanel(root, sim2, opts = {}) {
+    if (!root || typeof root.querySelectorAll !== "function" || !sim2) return 0;
+    const nodes = root.querySelectorAll("[data-market]");
+    let bound = 0;
+    for (const el of Array.from(nodes)) {
+      const spec = el.dataset && el.dataset.market || (typeof el.getAttribute === "function" ? el.getAttribute("data-market") : "");
+      el.onclick = () => {
+        const r = handleMarketAction(sim2, spec);
+        if (!r.ok) {
+          if (opts.toast) opts.toast(r.reason, "warn");
+          if (opts.audio) opts.audio.play("deny");
+        } else {
+          const meta = RES_META[r.resId];
+          const icon = meta ? meta.icon : "";
+          if (opts.toast) {
+            opts.toast(r.kind === "sell" ? `Продано ${r.amount}${icon}: +${_gold(r.gold)}🪙` : `Куплено ${r.amount}${icon}: −${_gold(r.gold)}🪙`, "good");
+          }
+          if (opts.audio) opts.audio.play("coin");
+        }
+        if (opts.refresh) opts.refresh();
+        return r;
+      };
+      bound++;
+    }
+    return bound;
+  }
+  function _rate(v) {
+    return (Math.round(v * 1e3) / 1e3).toFixed(3);
+  }
+  function _gold(v) {
+    const a = Math.abs(v);
+    if (a >= 100) return String(Math.round(v));
+    return (Math.round(v * 10) / 10).toFixed(1);
+  }
+  function _costStr(sim2, cost) {
+    const m = typeof sim2.costMult === "function" ? sim2.costMult() : 1;
+    return Object.entries(cost || {}).map(([r, v]) => {
+      const meta = RES_META[r];
+      return `${meta ? meta.icon : r}${Math.ceil(v * m)}`;
+    }).join(" ") || "—";
+  }
+
   // app/src/ui/hud.js
   var TABS = [
     { id: "build", ru: "Стройка", ic: "🏗" },
     { id: "research", ru: "Наука", ic: "📜" },
     { id: "army", ru: "Армия", ic: "⚔️" },
     { id: "diplo", ru: "Дипломатия", ic: "🤝" },
+    { id: "market", ru: "Рынок", ic: "⚖️" },
     { id: "labor", ru: "Труд", ic: "👷" },
     { id: "goals", ru: "Цели", ic: "🎯" },
     { id: "log", ru: "Журнал", ic: "📖" }
@@ -5522,6 +5806,7 @@ ${s}`, "console");
       this.saveSys = saveSys2;
       this.audio = audio2;
       this.tab = "build";
+      this.marketState = createMarketPanelState();
       this.speed = 1;
       this.el = {};
       for (const id of [
@@ -5858,6 +6143,11 @@ ${out}`;
           this.renderPanel();
         };
       });
+      bindMarketPanel(root, this.sim, {
+        toast: (t, k) => this.toast(t, k),
+        audio: this.audio,
+        refresh: () => this.renderPanel()
+      });
     }
     costStr(cost) {
       return Object.entries(cost || {}).map(([r, v]) => {
@@ -5998,6 +6288,9 @@ ${out}`;
       </div>`;
       }
       return html;
+    }
+    panel_market() {
+      return renderMarketPanel(this.sim, this.marketState);
     }
     panel_log() {
       const items = [...this.sim.log].reverse();
