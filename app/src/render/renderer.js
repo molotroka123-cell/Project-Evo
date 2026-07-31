@@ -5,6 +5,7 @@ import { TILE, ERAS, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, SEASONS, WEATHER
 import { tileAt } from '../core/world.js';
 import { Terrain } from './terrain.js';
 import { SpriteCache } from './sprites.js';
+import { ArtPack } from './artpack.js';
 import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } from './quality.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 
@@ -30,6 +31,10 @@ export class Renderer {
     this.autoTuner = this.qualityId === 'auto' ? makeAutoTuner(this.quality.id) : null;
     this.terrain = new Terrain(this.quality);
     this.sprites = new SpriteCache(this.quality);
+    // Нарисованный арт, если он завезён. Отсутствие файлов — не ошибка:
+    // здание просто останется процедурным.
+    this.art = new ArtPack();
+    this.art.preload();
   }
 
   // id ∈ QUALITY_ORDER или 'auto'
@@ -351,6 +356,18 @@ export class Renderer {
       ctx.beginPath(); ctx.ellipse(sx + size / 2, sy + size * 0.85, size * 0.42, size * 0.14, 0, 0, 7); ctx.fill();
       this.drawSpire(ctx, sx, sy, size, sim.spire.stage, this.time);
       ctx.restore();
+      return;
+    }
+
+    // Нарисованный спрайт имеет приоритет над процедурным.
+    const painted = this.art.building(b.id);
+    if (painted) {
+      const dw = size * 1.5;
+      const dh = dw * (painted.naturalHeight / painted.naturalWidth);
+      const dx = sx + size / 2 - dw / 2, dy = sy + size - dh;
+      // Отдельную тень не рисуем: у нарисованного арта она запечена в спрайт
+      // самим промтом («small dark contact shadow hugging the base»).
+      ctx.drawImage(painted, dx, dy, dw, dh);
       return;
     }
 

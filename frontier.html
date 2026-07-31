@@ -4331,6 +4331,48 @@ ${s}`, "console");
     }
   };
 
+  // app/src/render/artpack.js
+  var MANIFEST = [];
+  var BASE2 = "assets/sprites/";
+  var ArtPack = class {
+    constructor() {
+      this.img = /* @__PURE__ */ new Map();
+      this.pending = /* @__PURE__ */ new Set();
+      this.enabled = true;
+    }
+    // Пытается начать загрузку всего, что заявлено в манифесте.
+    preload() {
+      if (!this.enabled) return;
+      for (const id of MANIFEST) this.request(id);
+    }
+    request(id) {
+      if (!this.enabled || this.img.has(id) || this.pending.has(id)) return;
+      if (!MANIFEST.includes(id)) return;
+      this.pending.add(id);
+      const im = new Image();
+      im.onload = () => {
+        this.img.set(id, im);
+        this.pending.delete(id);
+      };
+      im.onerror = () => {
+        this.pending.delete(id);
+      };
+      im.src = `${BASE2}buildings_${id}.png`;
+    }
+    // Возвращает картинку здания либо null, если её нет — тогда рисуем кодом.
+    building(id) {
+      if (!this.enabled) return null;
+      const im = this.img.get(id);
+      return im && im.complete && im.naturalWidth ? im : null;
+    }
+    get ready() {
+      return this.img.size;
+    }
+    get total() {
+      return MANIFEST.length;
+    }
+  };
+
   // app/src/render/quality.js
   var QUALITY_ORDER = ["eco", "medium", "high", "ultra"];
   var QUALITY = {
@@ -4511,6 +4553,8 @@ ${s}`, "console");
       this.autoTuner = this.qualityId === "auto" ? makeAutoTuner(this.quality.id) : null;
       this.terrain = new Terrain(this.quality);
       this.sprites = new SpriteCache(this.quality);
+      this.art = new ArtPack();
+      this.art.preload();
     }
     // id ∈ QUALITY_ORDER или 'auto'
     setQuality(id) {
@@ -4802,6 +4846,14 @@ ${s}`, "console");
         ctx.fill();
         this.drawSpire(ctx, sx, sy, size, sim2.spire.stage, this.time);
         ctx.restore();
+        return;
+      }
+      const painted = this.art.building(b.id);
+      if (painted) {
+        const dw2 = size * 1.5;
+        const dh2 = dw2 * (painted.naturalHeight / painted.naturalWidth);
+        const dx2 = sx + size / 2 - dw2 / 2, dy2 = sy + size - dh2;
+        ctx.drawImage(painted, dx2, dy2, dw2, dh2);
         return;
       }
       const spr = this.sprites.building(b.id, def, e, b.size || 1);

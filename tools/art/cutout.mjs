@@ -160,6 +160,21 @@ await mkdir(DST, { recursive: true });
 const results = [];
 for (const f of files) results.push(await processFile(join(SRC, f), DST));
 
+// Манифест: рендер грузит только то, что здесь перечислено. Грузить наугад
+// нельзя — на отсутствующие файлы браузер выдаст 404 в консоль, а приёмка
+// требует ноль красных ошибок.
+const ids = results
+  .filter(r => r.ok && /^buildings_(.+)\.png$/.test(r.out))
+  .map(r => r.out.match(/^buildings_(.+)\.png$/)[1])
+  .sort();
+const manifestPath = new URL('../../app/src/render/artpack.js', import.meta.url);
+const src = await readFile(manifestPath, 'utf8');
+await writeFile(manifestPath, src.replace(
+  /export const MANIFEST = \[[^\]]*\];/,
+  `export const MANIFEST = [${ids.map(i => `'${i}'`).join(', ')}];`,
+), 'utf8');
+console.log(`манифест обновлён: ${ids.length} зданий с нарисованным артом\n`);
+
 const good = results.filter(r => r.ok);
 const bad = results.filter(r => !r.ok);
 console.log(`Обработано: ${results.length}   годных: ${good.length}   на перегенерацию: ${bad.length}\n`);
