@@ -4,5 +4,13 @@
   },
   "dependencies": {
     "playwright": "^1.62.1"
+  },
+  "name": "frontier",
+  "private": true,
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "test": "node tools/test-all.mjs",
+    "shot": "node tools/shot.mjs",
+    "art": "node tools/art/cutout.mjs"
   }
 }
