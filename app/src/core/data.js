@@ -117,6 +117,12 @@ export const BUILDINGS = {
   pasture:       { name: 'Пастбище',           cost: { wood: 14 },                        workers: 3, out: { food: 2.4 }, needTile: TILE.GRASS, winter: true, req: 'animal_husbandry', desc: 'Еда даже зимой.' },
   farm:          { name: 'Ферма',              cost: { wood: 14 },                        workers: 4, out: { food: 3.0 }, needTile: TILE.GRASS, req: 'farming', desc: 'Основа питания. Зимой не работает.', evolve: 'farm' },
   granary:       { name: 'Амбар',              cost: { wood: 20, stone: 8 },              cap: { food: 300 }, req: 'pottery', desc: '+300 к максимуму еды.' },
+  // Склады под остальные ресурсы. Без них дерево и камень намертво вставали на
+  // 400, а сталь на 500: добыча шла, число в шапке не двигалось, и поднять
+  // потолок было нечем — амбар существовал только для еды.
+  woodshed:      { name: 'Дровяной склад',     cost: { wood: 24, stone: 6 },              cap: { wood: 400 }, req: 'masonry', desc: '+400 к максимуму дерева.' },
+  stoneyard:     { name: 'Каменный двор',      cost: { wood: 16, stone: 30 },             cap: { stone: 400 }, req: 'masonry', desc: '+400 к максимуму камня.' },
+  depot:         { name: 'Товарный склад',     cost: { stone: 60, steel: 20 },            cap: { wood: 600, stone: 600, steel: 400 }, req: 'industrialization', desc: '+600🪵 +600🪨 +400⚙️ к максимуму.' },
   mine:          { name: 'Шахта',              cost: { wood: 25, stone: 10 },             workers: 4, out: { stone: 1.6 }, needTile: TILE.MOUNTAIN, req: 'bronze', desc: 'Ставится вплотную к горе.' },
   smithy:        { name: 'Кузница',            cost: { wood: 20, stone: 15 },             workers: 3, out: { stone: 0.8 }, aura: { r: 2, gather: 1.1 }, req: 'bronze', desc: '+10% добычи соседям в радиусе 2.' },
   market:        { name: 'Рынок',              cost: { wood: 25, stone: 10 },             workers: 3, out: { gold: 0.8 }, req: 'trade', desc: 'Открывает обмен ресурсов и караваны.', evolve: 'market' },

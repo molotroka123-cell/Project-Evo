@@ -131,10 +131,19 @@ export class Hud {
   // ---------- верхняя полоса ----------
   refresh() {
     const s = this.sim;
-    this.el.rFood.innerHTML = `🍞 <b>${Math.floor(s.res.food)}</b><small>/${s.resCap.food}</small>`;
-    this.el.rWood.innerHTML = `🪵 <b>${Math.floor(s.res.wood)}</b>`;
-    this.el.rStone.innerHTML = `🪨 <b>${Math.floor(s.res.stone)}</b>`;
-    this.el.rSteel.innerHTML = `⚙️ <b>${Math.floor(s.res.steel)}</b>`;
+    // Знаменатель показывается у всех ограниченных ресурсов, а не только у еды:
+    // без него игрок не понимал, почему лесопилка работает, а дерево стоит.
+    // На потолке число подсвечивается — это сигнал строить склад.
+    const cap = (id, icon) => {
+      const v = Math.floor(s.res[id]), m = s.resCap[id];
+      if (!m || m >= 99999) return `${icon} <b>${v}</b>`;
+      const full = v >= m - 0.5;
+      return `${icon} <b${full ? ' style="color:var(--warn)"' : ''}>${v}</b><small>/${m}</small>`;
+    };
+    this.el.rFood.innerHTML = cap('food', '🍞');
+    this.el.rWood.innerHTML = cap('wood', '🪵');
+    this.el.rStone.innerHTML = cap('stone', '🪨');
+    this.el.rSteel.innerHTML = cap('steel', '⚙️');
     this.el.rGold.innerHTML = `🪙 <b>${Math.floor(s.res.gold)}</b>`;
     this.el.rKnow.innerHTML = `📜 <b>${Math.floor(s.res.knowledge)}</b>`;
     this.el.rPop.innerHTML = `👥 <b>${s.villagers.length}</b><small>/${s.housingCap()}</small>`;

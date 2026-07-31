@@ -536,7 +536,15 @@ export class Simulation {
       } else if (this.seasonIdx === 3 && !def.winter) mult *= 0.6;
     }
     if (out.knowledge && b.id === 'datacenter' && this.dcPenaltyDays > 0) mult *= 0.5;
+    // Склад продукта полон — не жечь сырьё впустую. Раньше фабрика при стали
+    // 500/500 продолжала есть камень и не производила ничего: игрок видел
+    // падающий камень при работающем здании и нулевом приросте стали.
     if (def.consume) {
+      let room = 0;
+      for (const r of Object.keys(out)) {
+        room = Math.max(room, (this.resCap[r] ?? Infinity) - this.res[r]);
+      }
+      if (room <= 1e-6) return;
       let can = true;
       for (const [r, c] of Object.entries(def.consume)) if (this.res[r] < c * dt) can = false;
       if (!can) return;
