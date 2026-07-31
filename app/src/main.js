@@ -119,7 +119,10 @@ function loadFromJson(json, silent) {
 
 // ---------- онбординг (один раз) ----------
 function maybeOnboard() {
-  if (localStorage.getItem('frontier_coached')) return;
+  // Safari в приватном режиме и при «блокировать все куки» кидает SecurityError
+  // на любом обращении к localStorage. Без try игра умирала прямо здесь,
+  // до первого кадра — «не начинается» именно так и выглядело.
+  try { if (localStorage.getItem('frontier_coached')) return; } catch { return; }
   const steps = [
     { x: 20, y: 60, text: '👆 Это <b>ресурсы</b>: еда, дерево, камень, сталь, золото и знания. Следи за едой — без неё жители умирают.', btn: 'Дальше' },
     { x: 20, y: window.innerHeight - 220, text: '🏗 Открой <b>СТРОЙКУ</b> внизу и выбери Хижину: перетащи призрак по карте и нажми ✓.', btn: 'Понял' },
@@ -363,7 +366,7 @@ if (location.hash.startsWith('#autostart')) {
     sim.execCommand('spire stage 5');
   }
   if (location.hash.includes('placing')) startPlacing('farm');
-  localStorage.setItem('frontier_coached', '1');
+  try { localStorage.setItem('frontier_coached', '1'); } catch { /* не критично */ }
 }
 // первый прогон HUD сразу, чтобы панель не ждала таймер
 hud.refresh();

@@ -1590,6 +1590,8 @@
     state.edges = [];
     state._acc = null;
     state._queue = null;
+    state.version = -1;
+    state.lastDay = -1;
   }
   function _acc(state, code) {
     if (!state._acc) state._acc = new Array(MAX_OWNER_CODE + 1).fill(null);
@@ -7464,12 +7466,18 @@ ${out}`;
       };
       c.querySelector("#coachSkip").onclick = () => {
         c.classList.remove("show");
-        localStorage.setItem("frontier_coached", "1");
+        try {
+          localStorage.setItem("frontier_coached", "1");
+        } catch {
+        }
       };
     }
     hideCoach() {
       this.el.coach.classList.remove("show");
-      localStorage.setItem("frontier_coached", "1");
+      try {
+        localStorage.setItem("frontier_coached", "1");
+      } catch {
+      }
     }
   };
 
@@ -7699,7 +7707,11 @@ ${out}`;
     if (!silent) hud.toast("Сейв загружен", "good");
   }
   function maybeOnboard() {
-    if (localStorage.getItem("frontier_coached")) return;
+    try {
+      if (localStorage.getItem("frontier_coached")) return;
+    } catch {
+      return;
+    }
     const steps = [
       { x: 20, y: 60, text: "👆 Это <b>ресурсы</b>: еда, дерево, камень, сталь, золото и знания. Следи за едой — без неё жители умирают.", btn: "Дальше" },
       { x: 20, y: window.innerHeight - 220, text: "🏗 Открой <b>СТРОЙКУ</b> внизу и выбери Хижину: перетащи призрак по карте и нажми ✓.", btn: "Понял" },
@@ -7944,7 +7956,10 @@ ${out}`;
       sim.execCommand("spire stage 5");
     }
     if (location.hash.includes("placing")) startPlacing("farm");
-    localStorage.setItem("frontier_coached", "1");
+    try {
+      localStorage.setItem("frontier_coached", "1");
+    } catch {
+    }
   }
   hud.refresh();
   requestAnimationFrame(frame);

@@ -615,7 +615,7 @@ export class Hud {
     c.style.top = Math.min(window.innerHeight - 160, Math.max(60, y)) + 'px';
     c.classList.add('show');
     c.querySelector('#coachNext').onclick = () => { this.audio.play('click'); onNext(); };
-    c.querySelector('#coachSkip').onclick = () => { c.classList.remove('show'); localStorage.setItem('frontier_coached', '1'); };
+    c.querySelector('#coachSkip').onclick = () => { c.classList.remove('show'); try { localStorage.setItem('frontier_coached', '1'); } catch { /* приватный режим */ } };
   }
-  hideCoach() { this.el.coach.classList.remove('show'); localStorage.setItem('frontier_coached', '1'); }
+  hideCoach() { this.el.coach.classList.remove('show'); try { localStorage.setItem('frontier_coached', '1'); } catch { /* приватный режим */ } }
 }

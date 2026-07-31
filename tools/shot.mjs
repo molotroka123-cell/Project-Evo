@@ -90,7 +90,9 @@ await mkdir(OUTDIR, { recursive: true });
 
 const want = process.argv.slice(2);
 const names = want.length ? want : Object.keys(SHOTS);
-const browser = await chromium.launch({ args: ['--enable-gpu', '--use-gl=swiftshader'] });
+// Хром в этом окружении предустановлен по фиксированному пути; версия пакета
+// playwright может с ним расходиться, поэтому путь задаём явно.
+const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--enable-gpu', '--use-gl=swiftshader'] });
 let errors = 0;
 
 for (const name of names) {
