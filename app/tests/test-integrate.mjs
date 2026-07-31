@@ -5,7 +5,7 @@
 // API Simulation, без прямых вызовов внутренностей модулей.
 import { Simulation } from '../src/core/simulation.js';
 import { DAYS_PER_SEASON } from '../src/core/data.js';
-import { systemsWorkMult } from '../src/core/systems/integrate.js';
+import { systemsWorkMult, civPanel } from '../src/core/systems/integrate.js';
 
 let ok = 0, fail = 0;
 const t = (name, cond, extra = '') => {
@@ -189,6 +189,54 @@ console.log('\n--- Детерминизм не сломан ---');
   t('одинаковый расход дров', near(a.sys.winter.totals.burned, b.sys.winter.totals.burned, 1e-9),
     `${a.sys.winter.totals.burned} против ${b.sys.winter.totals.burned}`);
   t('одинаковое состояние ГПСЧ', a.rng.getState() === b.rng.getState());
+}
+
+
+console.log('\n--- Соседи живут своей жизнью (civ_ai подключён) ---');
+{
+  const s = run(new Simulation(42), 2500);
+  const live = s.factions.filter(f => f.alive);
+  t('соседи живы', live.length >= 3, `живых ${live.length}`);
+  t('население соседей выросло', live.every(f => f.P > 10),
+    live.map(f => Math.round(f.P)).join('/'));
+  t('соседи изучают технологии', live.every(f => f.techCount > 5),
+    live.map(f => f.techCount).join('/'));
+
+  // Главное, ради чего модуль подключался: соседи должны РАЗЛИЧАТЬСЯ.
+  // Прежняя теневая экономика гнала всех по одной формуле от черт характера,
+  // и к этому дню они приходили почти одинаковыми.
+  const eras = live.map(f => f.era);
+  const techs = live.map(f => f.techCount);
+  t('эпохи соседей разошлись', new Set(eras).size > 1, eras.join('/'));
+  t('число технологий разошлось', Math.max(...techs) - Math.min(...techs) >= 3,
+    techs.join('/'));
+  t('кто-то основал второй город', live.some(f => f.settlements.length > 1),
+    live.map(f => f.settlements.length).join('/'));
+
+  // Модуль пишет обратно в объекты ядра — HUD и рейды читают именно их.
+  t('поля ядра заполнены модулем',
+    live.every(f => Number.isFinite(f.goldPts) && Number.isFinite(f.knowPts) && Number.isFinite(f.armyPts)));
+  t('нет отрицательного населения', live.every(f => f.P >= 0));
+
+  const panel = civPanel(s);
+  t('панель соседей отдаёт строки', Array.isArray(panel) && panel.length === live.length,
+    panel ? `строк ${panel.length}` : 'нет');
+}
+
+console.log('\n--- Состояние соседей переживает сейв ---');
+{
+  const s = run(new Simulation(42), 400);
+  const before = s.factions.map(f => `${f.id}:${f.techCount}:${Math.round(f.P)}`).join(' ');
+  const r = Simulation.deserialize(JSON.stringify(s.serialize()));
+  t('сейв с соседями загрузился', r.ok, r.ok ? '' : r.reason);
+  if (r.ok) {
+    const after = r.sim.factions.map(f => `${f.id}:${f.techCount}:${Math.round(f.P)}`).join(' ');
+    t('соседи восстановлены как были', before === after, `${before} -> ${after}`);
+    // Прогон после загрузки должен продолжиться, а не начаться заново.
+    run(r.sim, 200);
+    t('соседи продолжают развиваться после загрузки',
+      r.sim.factions.every(f => !f.alive || f.techCount >= 1));
+  }
 }
 
 console.log(`\n=== ${ok} OK / ${fail} FAIL ===`);

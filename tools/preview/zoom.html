@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Крупный план спрайтов</title>
+<style>
+  body { margin: 0; background: #55804a; color: #fff; font: 12px sans-serif; }
+  .row { display: flex; align-items: flex-end; gap: 10px; padding: 4px 8px; }
+  .lbl { width: 150px; }
+</style>
+</head>
+<body>
+<div id="out"></div>
+<script type="module">
+import { PeopleSprites } from '../../app/src/render/people.js';
+import { QUALITY } from '../../app/src/render/quality.js';
+const ps = new PeopleSprites(QUALITY.ultra);
+const out = document.getElementById('out');
+const K = 3.2;                            // увеличение для разглядывания
+const CASES = [
+  [0, 'hunter'], [0, 'lumber'], [1, 'farmer'], [2, 'soldier'], [3, 'scientist'],
+  [4, 'soldier'], [5, 'trader'], [6, 'miner'], [7, 'builder'], [9, 'scientist'],
+];
+for (const [era, prof] of CASES) {
+  const s = ps.sheet(era, prof, 0);
+  const row = document.createElement('div');
+  row.className = 'row';
+  const l = document.createElement('div');
+  l.className = 'lbl'; l.textContent = `эпоха ${era} · ${prof}`;
+  row.appendChild(l);
+  for (let d = 0; d < 4; d++) {
+    for (let f = 0; f < 4; f++) {
+      const cv = document.createElement('canvas');
+      cv.width = s.fw * K; cv.height = s.fh * K;
+      const c = cv.getContext('2d');
+      c.imageSmoothingEnabled = false;
+      c.drawImage(s.cv, f * s.fw, d * s.fh, s.fw, s.fh, 0, 0, s.fw * K, s.fh * K);
+      row.appendChild(cv);
+    }
+  }
+  out.appendChild(row);
+}
+</script>
+</body>
+</html>

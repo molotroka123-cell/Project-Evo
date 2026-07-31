@@ -10,6 +10,7 @@
 import { BUILDINGS, DAYS_PER_SEASON } from '../data.js';
 import * as W from './winter.js';
 import * as B from './borders.js';
+import * as C from './civ_ai.js';
 
 // ---------- Установка ----------
 
@@ -17,6 +18,7 @@ export function installSystems(sim) {
   sim.sys = {
     winter: W.createWinter(),
     borders: B.createBorders(sim.world.w, sim.world.h),
+    civ: C.createCivAi(sim.factions),
     // Последние отчёты держим для HUD: панель читает готовые числа, а не
     // пересчитывает то, что уже посчитано модулем.
     winterReport: null,
@@ -32,6 +34,46 @@ export function systemsNewDay(sim) {
   if (!sim.sys) return;
   tickWinterFor(sim);
   tickBordersFor(sim);
+}
+
+// ---------- Соседи ----------
+// Вызывается из tickFactions ВМЕСТО прежней теневой экономики. Возвращает true,
+// если модуль отработал — тогда ядро пропускает свой старый расчёт. Два правила
+// роста фракций одновременно дали бы двойной прирост населения и две разные
+// экспансии, поэтому здесь именно замена, а не добавка.
+export function systemsFactions(sim) {
+  if (!sim.sys || !sim.sys.civ) return false;
+
+  const out = C.tickCivAi(sim.sys.civ, {
+    day: sim.day,
+    rng: sim.rng,
+    world: sim.world,
+    factions: sim.factions,
+    relations: sim.relations,
+    difficulty: sim.difficulty,
+    playerWars: sim.wars.map(w => w.fid),
+    player: {
+      armyPower: sim.armyPower(),
+      era: sim.eraIndex,
+      settlements: [{ x: sim.world.startX, y: sim.world.startY }],
+    },
+  });
+
+  for (const text of out.logs) sim.addLog(text);
+
+  // Модуль решает, что сосед идёт войной, но объявляет войну ядро: только оно
+  // знает про перемирия, договоры и реакцию интерфейса.
+  for (const w of out.warOnPlayer) {
+    const f = sim.faction(w.fid || w);
+    if (f && !sim.atPeaceTreaty(f.id)) sim.declareWarOnPlayer(f);
+  }
+  return true;
+}
+
+// Строки для панели соседей: готовый текст, а не сырые числа.
+export function civPanel(sim) {
+  if (!sim.sys || !sim.sys.civ) return null;
+  return C.civReport(sim.sys.civ, sim.factions);
 }
 
 function tickWinterFor(sim) {
@@ -119,6 +161,7 @@ export function systemsSerialize(sim) {
   return {
     winter: W.serializeWinter(sim.sys.winter),
     borders: B.serializeBorders(sim.sys.borders),
+    civ: C.serializeCivAi(sim.sys.civ),
   };
 }
 
@@ -126,6 +169,7 @@ export function systemsRestore(sim, data) {
   if (!sim.sys || !data) return;
   if (data.winter) sim.sys.winter = W.deserializeWinter(data.winter);
   if (data.borders) sim.sys.borders = B.deserializeBorders(data.borders);
+  if (data.civ) sim.sys.civ = C.deserializeCivAi(data.civ, sim.factions);
 }
 
 // ---------- Для HUD ----------

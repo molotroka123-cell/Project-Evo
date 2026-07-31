@@ -4,7 +4,7 @@ import { createRng, makeNoise2D } from './rng.js';
 import * as D from './data.js';
 import { generateWorld, tileAt, isWater, stepToward, findNearestTile, hasNeighborTile, makeAnimal, aStar, findFactionSpawns } from './world.js';
 import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, NICKNAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
-import { installSystems, systemsNewDay, systemsHappyMod, systemsWorkMult, systemsSerialize, systemsRestore } from './systems/integrate.js';
+import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsSerialize, systemsRestore } from './systems/integrate.js';
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
@@ -1088,9 +1088,15 @@ export class Simulation {
     }
   }
 
-  // ---------- Фракции (теневая экономика) ----------
+  // ---------- Фракции ----------
+  // Живую экономику соседей ведёт systems/civ_ai.js: у каждого соседа свои
+  // постройки, склад, наука по настоящему дереву технологий и колонизация
+  // с проверкой рельефа. Прежний упрощённый расчёт ниже остаётся запасным
+  // путём — на случай сейва или отладки без подсистем.
   tickFactions() {
+    const byModule = systemsFactions(this);
     for (const f of this.factions) {
+      if (byModule) break;
       if (!f.alive) continue;
       const tr = f.def.traits;
       const weakMult = (f.weak && this.eraIndex < 6) ? 0.6 : 1;

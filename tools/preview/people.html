@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Просмотр спрайтов жителей</title>
+<style>
+  body { margin: 0; background: #4d7a3c; color: #fff; font: 13px/1.3 sans-serif; }
+  .row { display: flex; align-items: flex-end; gap: 4px; padding: 2px 8px; }
+  .lbl { width: 190px; font-size: 12px; opacity: .9; }
+  canvas { image-rendering: auto; }
+  h2 { margin: 6px 8px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="out"></div>
+<script type="module">
+import { PeopleSprites, PROF } from '../../app/src/render/people.js';
+import { QUALITY } from '../../app/src/render/quality.js';
+
+const ERAS = ['шкуры', 'бронза', 'железо', 'античность', 'кольчуга', 'камзол', 'роба', 'комбинезон', 'цифра', 'скафандр'];
+const DIRN = ['вниз', 'влево', 'вправо', 'вверх'];
+const ps = new PeopleSprites(QUALITY.ultra);
+const out = document.getElementById('out');
+
+function strip(era, prof, look, dir) {
+  const s = ps.sheet(era, prof, look);
+  const cv = document.createElement('canvas');
+  cv.width = s.fw * 4; cv.height = s.fh;
+  const c = cv.getContext('2d');
+  for (let f = 0; f < 4; f++) c.drawImage(s.cv, f * s.fw, dir * s.fh, s.fw, s.fh, f * s.fw, 0, s.fw, s.fh);
+  return cv;
+}
+
+// 1) все профессии в одной эпохе, все 4 направления
+for (const era of [0, 4, 7, 9]) {
+  const h = document.createElement('h2');
+  h.textContent = `ЭПОХА ${era} — ${ERAS[era]}`;
+  out.appendChild(h);
+  for (const prof of Object.keys(PROF)) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const l = document.createElement('div');
+    l.className = 'lbl'; l.textContent = prof;
+    row.appendChild(l);
+    for (let d = 0; d < 4; d++) row.appendChild(strip(era, prof, 0, d));
+    out.appendChild(row);
+  }
+}
+
+// 2) все эпохи одной профессией, вид вправо
+const h2 = document.createElement('h2');
+h2.textContent = 'ВСЕ ЭПОХИ (строитель, вид вправо и вниз)';
+out.appendChild(h2);
+for (let e = 0; e < 10; e++) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  const l = document.createElement('div');
+  l.className = 'lbl'; l.textContent = `${e} ${ERAS[e]}`;
+  row.appendChild(l);
+  row.appendChild(strip(e, 'builder', 0, 2));
+  row.appendChild(strip(e, 'builder', 1, 0));
+  out.appendChild(row);
+}
+
+// 3) масштаб как в игре: 32 px на тайл, зум 1 / 1.6 / 2.5
+const h3 = document.createElement('h2');
+h3.textContent = 'РЕАЛЬНЫЙ РАЗМЕР В ИГРЕ (зум 1.0 / 1.6 / 2.5)';
+out.appendChild(h3);
+const row = document.createElement('div');
+row.className = 'row';
+for (const zoom of [1, 1.6, 2.5]) {
+  const z = 32 * zoom, hh = z * 0.78;
+  const s = ps.sheet(4, 'soldier', 0);
+  const cv = document.createElement('canvas');
+  const w = hh * (s.fw / s.fh);
+  cv.width = Math.ceil(w * 8); cv.height = Math.ceil(hh);
+  const c = cv.getContext('2d');
+  for (let i = 0; i < 8; i++) {
+    c.drawImage(s.cv, (i % 4) * s.fw, ((i / 4) | 0) * s.fh, s.fw, s.fh, i * w, 0, w, hh);
+  }
+  row.appendChild(cv);
+}
+out.appendChild(row);
+window.__ready = true;
+</script>
+</body>
+</html>
