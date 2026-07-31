@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>ФРОНТИР — 40 улучшений на выбор</title>
+<style>
+  :root {
+    --bg: #0e1118; --bg2: #0a0d13; --panel: #151a24; --panel-hi: #1b2230;
+    --line: rgba(198,160,74,0.26); --line-soft: rgba(232,228,216,0.09);
+    --text: #eae6da; --dim: #96917f; --dim2: #6b6759;
+    --accent: #c6a04a; --accent-hi: #e0bd63;
+    --yes: #6fbf73; --no: #d97a6b; --maybe: #7fa8d4;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  :root[data-theme="light"], :root:not([data-theme="dark"]) {
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f5f1e6; --bg2: #ebe4d2; --panel: #fffdf8; --panel-hi: #f8f1e0;
+      --line: rgba(150,116,20,0.3); --line-soft: rgba(30,24,10,0.09);
+      --text: #221d12; --dim: #6b6450; --dim2: #948d76;
+      --accent: #96741a; --accent-hi: #785c12;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f1e6; --bg2: #ebe4d2; --panel: #fffdf8; --panel-hi: #f8f1e0;
+    --line: rgba(150,116,20,0.3); --line-soft: rgba(30,24,10,0.09);
+    --text: #221d12; --dim: #6b6450; --dim2: #948d76;
+    --accent: #96741a; --accent-hi: #785c12;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1100px 700px at 12% -12%, var(--bg2), var(--bg));
+    color: var(--text); font-family: Georgia, 'Times New Roman', serif; min-height: 100vh;
+  }
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 38px 20px 140px; }
+
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .15em; text-transform: uppercase; color: var(--accent); margin-bottom: 9px; }
+  h1 { font-size: clamp(27px, 4.2vw, 40px); line-height: 1.07; margin: 0 0 12px; text-wrap: balance; letter-spacing: -.01em; }
+  .lede { color: var(--dim); font-size: 15.5px; line-height: 1.62; max-width: 64ch; }
+  .lede b { color: var(--text); }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 20px 0 6px; font-family: system-ui, sans-serif; font-size: 12.5px; color: var(--dim); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  .toolbar {
+    position: sticky; top: 0; z-index: 10; margin: 18px 0 4px; padding: 11px 0;
+    background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line-soft);
+    display: flex; gap: 9px; align-items: center; flex-wrap: wrap; font-family: system-ui, sans-serif;
+  }
+  .toolbar button {
+    font-family: system-ui, sans-serif; font-size: 12.5px; padding: 7px 12px; border-radius: 7px;
+    background: var(--panel-hi); color: var(--text); border: 1px solid var(--line-soft); cursor: pointer;
+  }
+  .toolbar button:hover { border-color: var(--line); }
+  #tally { margin-left: auto; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #tally b { color: var(--yes); }
+
+  h2.group {
+    font-size: 17px; margin: 32px 0 4px; padding-bottom: 7px;
+    border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px;
+  }
+  h2.group span { font-family: var(--mono); font-size: 11px; color: var(--dim2); font-weight: 400; }
+
+  .row {
+    display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
+    background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px;
+    padding: 13px 15px; margin-top: 9px;
+  }
+  .row.on { border-color: color-mix(in srgb, var(--yes) 55%, transparent); }
+  .row.off { opacity: .45; }
+  .num { font-family: var(--mono); font-size: 11px; color: var(--dim2); }
+  .title { font-size: 15.5px; font-weight: 700; margin: 1px 0 4px; }
+  .desc { font-family: system-ui, sans-serif; font-size: 13px; line-height: 1.55; color: var(--dim); }
+  .src { font-family: system-ui, sans-serif; font-size: 11.5px; color: var(--dim2); margin-top: 5px; }
+  .tags { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+  .tag { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line-soft); color: var(--dim); }
+  .tag.big { color: var(--no); border-color: color-mix(in srgb, var(--no) 40%, transparent); }
+  .tag.mid { color: var(--accent-hi); border-color: var(--line); }
+  .tag.sml { color: var(--yes); border-color: color-mix(in srgb, var(--yes) 40%, transparent); }
+
+  .pick { display: flex; flex-direction: column; gap: 5px; }
+  .pick button {
+    font-family: system-ui, sans-serif; font-size: 12px; font-weight: 600; width: 74px;
+    padding: 6px 0; border-radius: 6px; cursor: pointer;
+    background: transparent; color: var(--dim); border: 1px solid var(--line-soft);
+  }
+  .pick button.sel[data-v="1"] { background: var(--yes); color: #08160a; border-color: var(--yes); }
+  .pick button.sel[data-v="0"] { background: var(--no); color: #1a0806; border-color: var(--no); }
+
+  #out {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 95%, transparent); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line); padding: 12px 20px;
+  }
+  #out .inner { max-width: 1020px; margin: 0 auto; display: flex; gap: 10px; align-items: center; }
+  #out textarea {
+    flex: 1; height: 46px; resize: vertical; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line-soft); border-radius: 7px; padding: 8px 10px;
+    font-family: var(--mono); font-size: 12px;
+  }
+  #copy {
+    font-family: system-ui, sans-serif; font-size: 13px; font-weight: 700; white-space: nowrap;
+    background: var(--accent); color: #171104; border: none; padding: 12px 18px; border-radius: 7px; cursor: pointer;
+  }
+  #copy.done { background: var(--yes); color: #08160a; }
+  @media (max-width: 620px) {
+    .row { grid-template-columns: 1fr; }
+    .pick { flex-direction: row; }
+    .pick button { flex: 1; width: auto; }
+    #out .inner { flex-direction: column; align-items: stretch; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">ФРОНТИР · выбор направления</div>
+  <h1>40 улучшений — что делаем</h1>
+  <p class="lede">
+    Механики взяты из настоящих стратегий: <b>Rise of Nations</b> (границы и истощение),
+    <b>Banished</b> (выживание без денег), <b>Frostpunk</b> (законы и мораль),
+    <b>Anno</b> (цепочки производства), <b>Against the Storm</b>, <b>Civilization</b>.
+    Жми <b>Да</b> или <b>Нет</b> на каждом, потом нажми «Скопировать ответ» внизу и пришли мне строку.
+    По умолчанию всё выключено — включай только то, что правда хочешь.
+  </p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--yes)"></i> малое — до часа работы</span>
+    <span><i class="dot" style="background:var(--accent-hi)"></i> среднее — несколько часов</span>
+    <span><i class="dot" style="background:var(--no)"></i> крупное — день и больше</span>
+  </div>
+
+  <div class="toolbar">
+    <button id="allYes">Все — да</button>
+    <button id="allNo">Все — нет</button>
+    <button id="onlySmall">Только малые</button>
+    <button id="clear">Сбросить</button>
+    <div id="tally">выбрано: <b>0</b> из 40</div>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<div id="out"><div class="inner">
+  <textarea id="answer" readonly placeholder="Отметь хоть один пункт — здесь появится строка для меня"></textarea>
+  <button id="copy">Скопировать ответ</button>
+</div></div>
+
+<script id="data" type="application/json">[{"id": "U01", "group": "Границы и территория", "size": "m", "src": "Rise of Nations", "tags": ["карта", "стратегия"], "title": "Национальные границы вокруг поселения", "desc": "У каждой стороны есть зримая граница, растущая от числа и уровня зданий. Оверлей территорий в игре уже есть — здесь он становится механикой: строить можно только в своих границах."}, {"id": "U02", "group": "Границы и территория", "size": "m", "src": "Rise of Nations — attrition", "tags": ["война"], "title": "Истощение на чужой земле", "desc": "Вражеская армия, зашедшая в ваши границы без снабжения, теряет бойцов каждый день. Оборона перестаёт быть только стенами: глубина территории сама защищает."}, {"id": "U03", "group": "Границы и территория", "size": "m", "src": "Rise of Nations — border push", "tags": ["стратегия"], "title": "Давление границ и спорные земли", "desc": "Границы соседей упираются друг в друга, сильнейший оттесняет слабого. Захват территории без единого боя — за счёт застройки и технологий."}, {"id": "U04", "group": "Границы и территория", "size": "s", "src": "Civilization", "tags": ["экономика"], "title": "Налог с подконтрольной земли", "desc": "Золото капает пропорционально площади ваших границ. Даёт смысл расширяться, а не сидеть на одном пятачке."}, {"id": "U05", "group": "Выживание и население", "size": "m", "src": "Banished", "tags": ["экономика", "жители"], "title": "Возраст, семьи и поколения", "desc": "Жители стареют, заводят семьи, дети растут и заменяют стариков. Демографическая яма становится реальной угрозой, а не абстракцией."}, {"id": "U06", "group": "Выживание и население", "size": "s", "src": "Banished", "tags": ["жители"], "title": "Профессии с обучением", "desc": "Житель, долго работающий в одной отрасли, получает ранг и добывает больше. Терять опытного работника становится обидно."}, {"id": "U07", "group": "Выживание и население", "size": "m", "src": "Frostpunk", "tags": ["выживание"], "title": "Отопление и суровая зима", "desc": "Зимой нужен запас дров, иначе жители болеют и умирают. Сезон превращается из декорации в настоящий цикл подготовки."}, {"id": "U08", "group": "Выживание и население", "size": "s", "src": "Banished", "tags": ["экономика"], "title": "Разнообразие еды влияет на здоровье", "desc": "Однообразный рацион снижает здоровье и рождаемость. Ферма, пастбище и порт становятся дополняющими, а не взаимозаменяемыми."}, {"id": "U09", "group": "Выживание и население", "size": "s", "src": "Against the Storm", "tags": ["жители"], "title": "Запросы жителей", "desc": "Поселение периодически просит конкретное — «нужен храм», «нужна баня». Выполнил — счастье вверх, проигнорировал — вниз."}, {"id": "U10", "group": "Выживание и население", "size": "m", "src": "RimWorld", "tags": ["жители"], "title": "Именные жители с характером", "desc": "У каждого имя, черта и история. Смерть конкретного человека читается в журнале как событие, а не как минус единица."}, {"id": "U11", "group": "Экономика и логистика", "size": "l", "src": "Anno 1800", "tags": ["экономика"], "title": "Цепочки производства", "desc": "Не «шахта даёт сталь», а руда → плавильня → сталь. Здания начинают зависеть друг от друга, планировка города обретает смысл."}, {"id": "U12", "group": "Экономика и логистика", "size": "m", "src": "Anno, Factorio", "tags": ["логистика"], "title": "Склады и носильщики", "desc": "Ресурс лежит у здания, пока его не отнесут на склад. Видно тележки, расстояние до склада начинает решать."}, {"id": "U13", "group": "Экономика и логистика", "size": "s", "src": "нужно в любом случае", "tags": ["интерфейс"], "title": "Складские здания поднимают потолок ресурсов", "desc": "Сейчас дерево намертво встаёт на 400, камень на 400, сталь на 500, и в интерфейсе даже не написано, что это потолок. Амбар для еды есть — нужны такие же для остального."}, {"id": "U14", "group": "Экономика и логистика", "size": "s", "src": "нужно в любом случае", "tags": ["интерфейс", "баг"], "title": "Показывать потолок у всех ресурсов", "desc": "У еды в шапке есть «/200», у остальных — нет. Игрок не понимает, почему добыча идёт, а число стоит."}, {"id": "U15", "group": "Экономика и логистика", "size": "s", "src": "нужно в любом случае", "tags": ["баг"], "title": "Не тратить сырьё, когда склад продукта полон", "desc": "Сейчас фабрика при полном складе стали продолжает жрать камень и не производит ничего. Чистая утечка ресурсов."}, {"id": "U16", "group": "Экономика и логистика", "size": "m", "src": "Anno, Civilization", "tags": ["торговля"], "title": "Экран рынка", "desc": "Рынок можно построить, он обещает обмен ресурсов, цель игры требует его возвести — но интерфейса торговли в игре нет вообще. Курсы и караваны в ядре уже посчитаны."}, {"id": "U17", "group": "Экономика и логистика", "size": "m", "src": "Rise of Nations, Anno", "tags": ["торговля"], "title": "Торговые пути с соседями", "desc": "Караван ходит по конкретному маршруту, доход зависит от расстояния и от того, цел ли путь. Война рвёт торговлю физически."}, {"id": "U18", "group": "Экономика и логистика", "size": "m", "src": "Rise of Nations, Settlers", "tags": ["логистика"], "title": "Дороги ускоряют жителей", "desc": "Грунтовая, каменная, укреплённая. Караваны и жители по дороге ходят заметно быстрее — появляется смысл планировать город."}, {"id": "U19", "group": "Война", "size": "m", "src": "AoE, Rise of Nations", "tags": ["война"], "title": "Армия на карте, а не число в панели", "desc": "Сейчас армия — абстрактная цифра во вкладке, бойцов на карте не существует. Отряды станут видимыми: марш колонной, осада, оборона стен."}, {"id": "U20", "group": "Война", "size": "m", "src": "AoE, Total War", "tags": ["война"], "title": "Контр-цикл родов войск в бою", "desc": "Копья бьют конницу, конница — стрелков, стрелки — пехоту. Таблица контр-циклов в данных уже лежит, в расчёте боя не участвует."}, {"id": "U21", "group": "Война", "size": "s", "src": "Rise of Nations", "tags": ["война"], "title": "Высота даёт бонус", "desc": "Отряд на холме получает преимущество к дальнему бою. Рельеф начинает влиять на выбор места обороны."}, {"id": "U22", "group": "Война", "size": "m", "src": "AoE, Stronghold", "tags": ["война"], "title": "Осада стен и ворот", "desc": "Тараны бьют ворота, лестницы — стены. Два разных пути штурма вместо одного числа обороны."}, {"id": "U23", "group": "Война", "size": "s", "src": "Total War", "tags": ["война"], "title": "Захват вражеских осадных машин", "desc": "Разгромил расчёт — машина твоя. Даёт смысл целиться в артиллерию, а не бить по общей куче."}, {"id": "U24", "group": "Война", "size": "m", "src": "Rise of Nations, Civ", "tags": ["война"], "title": "Свои походы на соседей", "desc": "Сейчас воевать можно только обороняясь: рейды приходят к вам. Появится возможность самому отправить армию и взять чужой город."}, {"id": "U25", "group": "Дипломатия и разведка", "size": "m", "src": "Civilization", "tags": ["дипломатия"], "title": "Шпионаж", "desc": "Разведчик показывает чужие города и технологии, может украсть технологию или сорвать стройку. Провал — дипломатический скандал."}, {"id": "U26", "group": "Дипломатия и разведка", "size": "s", "src": "Civilization", "tags": ["дипломатия"], "title": "Право прохода армий", "desc": "Без договора о проходе чужая армия на вашей земле — законный повод к войне. Связывается с истощением из U02."}, {"id": "U27", "group": "Дипломатия и разведка", "size": "m", "src": "Civilization, EU4", "tags": ["дипломатия"], "title": "Союзы и совместные войны", "desc": "Соседи зовут воевать вместе, отказ портит отношения. Фракции уже воюют между собой — вас в это начнут втягивать."}, {"id": "U28", "group": "Дипломатия и разведка", "size": "s", "src": "Civilization", "tags": ["дипломатия"], "title": "Обмен технологиями", "desc": "Меняться открытиями с дружественными фракциями. Диффузия технологий в игре уже есть — здесь она становится осознанной сделкой."}, {"id": "U29", "group": "Решения и мораль", "size": "m", "src": "Frostpunk — book of laws", "tags": ["сюжет"], "title": "Свод законов", "desc": "Раз в эпоху принимаете закон с необратимым выбором: детский труд или школы, вера или наука, порядок или свобода. Каждый меняет правила экономики."}, {"id": "U30", "group": "Решения и мораль", "size": "s", "src": "Frostpunk", "tags": ["сюжет"], "title": "Шкала надежды и недовольства", "desc": "Две отдельные шкалы вместо одного «счастья». Падение надежды до нуля — конец партии, и игрок видит, как к этому катится."}, {"id": "U31", "group": "Решения и мораль", "size": "m", "src": "Crusader Kings, RimWorld", "tags": ["сюжет"], "title": "Цепочки событий", "desc": "События с продолжением: беженец, которого приняли, через год приводит караван или предаёт. Сейчас все события одноразовые."}, {"id": "U32", "group": "Решения и мораль", "size": "s", "src": "Frostpunk, Banished", "tags": ["сюжет"], "title": "Хроника поселения", "desc": "Летопись важных решений и потерь, которую можно перечитать. Экран победы уже показывает хронику — здесь она ведётся всю партию."}, {"id": "U33", "group": "Мир и карта", "size": "m", "src": "Civilization, Northgard", "tags": ["карта"], "title": "Туман войны и разведка", "desc": "Карта закрыта, пока не разведана, и помнит увиденное. Появляется смысл в скаутах и в самом исследовании мира."}, {"id": "U34", "group": "Мир и карта", "size": "m", "src": "Civilization, Northgard", "tags": ["карта"], "title": "Руины и нейтральные лагеря", "desc": "На карте разбросаны развалины с добычей и лагеря разбойников. Мир перестаёт быть пустым между вами и соседями."}, {"id": "U35", "group": "Мир и карта", "size": "s", "src": "Banished, Frostpunk", "tags": ["мир"], "title": "Стихийные бедствия", "desc": "Лесные пожары от грозы, разлив реки, засуха, буря. Погода уже влияет на добычу — здесь она начинает угрожать."}, {"id": "U36", "group": "Мир и карта", "size": "m", "src": "Anno, Northgard", "tags": ["карта"], "title": "Несколько поселений", "desc": "Основывать выселки и вторые города вместо одного пятачка. Самое крупное изменение в списке — меняет всю игру."}, {"id": "U37", "group": "Интерфейс и удобство", "size": "s", "src": "любая современная стратегия", "tags": ["интерфейс"], "title": "Очередь строительства", "desc": "Ставить несколько зданий подряд с таймерами и порядком, а не по одному."}, {"id": "U38", "group": "Интерфейс и удобство", "size": "s", "src": "Civilization, Anno", "tags": ["интерфейс"], "title": "Статистика партии с графиками", "desc": "Графики населения, ресурсов и армии по времени. Видно, где всё пошло не так."}, {"id": "U39", "group": "Интерфейс и удобство", "size": "s", "src": "Civilization", "tags": ["интерфейс"], "title": "Умные уведомления с переходом к месту", "desc": "Уведомления собираются в стопку справа, клик уводит камеру к событию. Сейчас тосты просто всплывают и пропадают."}, {"id": "U40", "group": "Интерфейс и удобство", "size": "s", "src": "Civilization, AoE", "tags": ["интерфейс"], "title": "Настройка партии перед стартом", "desc": "Размер карты, сид, число соседей, сложность, агрессия событий. Сейчас выбирается только количество фракций."}]</script>
+<script>
+(function () {
+  const items = JSON.parse(document.getElementById('data').textContent);
+  const LS = 'frontier_upgrades_v1';
+  let pick = {};
+  try { pick = JSON.parse(localStorage.getItem(LS) || '{}'); } catch (e) {}
+
+  const listEl = document.getElementById('list');
+  const tallyEl = document.getElementById('tally');
+  const answerEl = document.getElementById('answer');
+  const SIZE = { s: ['sml','малое'], m: ['mid','среднее'], l: ['big','крупное'] };
+
+  function render() {
+    listEl.innerHTML = '';
+    let lastG = null;
+    items.forEach((it, i) => {
+      if (it.group !== lastG) {
+        lastG = it.group;
+        const h = document.createElement('h2');
+        h.className = 'group';
+        const n = items.filter(x => x.group === it.group).length;
+        h.innerHTML = it.group + '<span>' + n + ' шт.</span>';
+        listEl.appendChild(h);
+      }
+      const v = pick[it.id];
+      const row = document.createElement('div');
+      row.className = 'row' + (v === 1 ? ' on' : v === 0 ? ' off' : '');
+      const [cls, word] = SIZE[it.size];
+      row.innerHTML =
+        '<div>' +
+          '<div class="num">' + it.id + '</div>' +
+          '<div class="title">' + it.title + '</div>' +
+          '<div class="desc">' + it.desc + '</div>' +
+          (it.src ? '<div class="src">Откуда: ' + it.src + '</div>' : '') +
+          '<div class="tags"><span class="tag ' + cls + '">' + word + '</span>' +
+            (it.tags || []).map(t => '<span class="tag">' + t + '</span>').join('') +
+          '</div>' +
+        '</div>' +
+        '<div class="pick">' +
+          '<button data-v="1" class="' + (v === 1 ? 'sel' : '') + '">Да</button>' +
+          '<button data-v="0" class="' + (v === 0 ? 'sel' : '') + '">Нет</button>' +
+        '</div>';
+      row.querySelectorAll('.pick button').forEach(b => {
+        b.addEventListener('click', () => {
+          const val = +b.dataset.v;
+          pick[it.id] = pick[it.id] === val ? undefined : val;
+          if (pick[it.id] === undefined) delete pick[it.id];
+          save(); render();
+        });
+      });
+      listEl.appendChild(row);
+    });
+    updateAnswer();
+  }
+
+  function save() { try { localStorage.setItem(LS, JSON.stringify(pick)); } catch (e) {} }
+
+  function updateAnswer() {
+    const yes = items.filter(i => pick[i.id] === 1).map(i => i.id);
+    const no = items.filter(i => pick[i.id] === 0).length;
+    tallyEl.innerHTML = 'выбрано: <b>' + yes.length + '</b> из ' + items.length +
+      (no ? ' · отклонено ' + no : '');
+    answerEl.value = yes.length
+      ? 'ДЕЛАЕМ: ' + yes.join(', ')
+      : '';
+  }
+
+  document.getElementById('allYes').onclick = () => { items.forEach(i => pick[i.id] = 1); save(); render(); };
+  document.getElementById('allNo').onclick = () => { items.forEach(i => pick[i.id] = 0); save(); render(); };
+  document.getElementById('onlySmall').onclick = () => {
+    items.forEach(i => pick[i.id] = i.size === 's' ? 1 : 0); save(); render();
+  };
+  document.getElementById('clear').onclick = () => { pick = {}; save(); render(); };
+  document.getElementById('copy').onclick = function () {
+    if (!answerEl.value) return;
+    navigator.clipboard.writeText(answerEl.value).then(() => {
+      this.textContent = 'Скопировано ✓'; this.classList.add('done');
+      setTimeout(() => { this.textContent = 'Скопировать ответ'; this.classList.remove('done'); }, 1500);
+    });
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>
