@@ -574,6 +574,11 @@ export function birthConditions(ctx) {
   else if (happy < 40) m *= 0.6;
   const free = (ctx.housingCap ?? Infinity) - (ctx.pop ?? 0);
   if (free <= 2) m *= 0.5;
+  // Фронтирный бум: пока поселение крошечное, а земли и жилья в избытке, семьи
+  // заводят детей охотнее. Без этого стартовые шесть жителей ядра слишком часто
+  // не успевали дать второе поколение и деревня тихо вымирала от старости.
+  const pop = ctx.pop ?? 0;
+  if (pop > 0 && pop < 14 && free > 2) m *= 1.5;
   m *= ctx.birthMult ?? 1;
   return m;
 }
