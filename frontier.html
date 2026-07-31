@@ -127,7 +127,11 @@
   #placeCancel { border-color: var(--bad); color: var(--bad); }
 
   /* ===== Модалки ===== */
-  .modal-wrap { position: fixed; inset: 0; z-index: 50; background: rgba(5,8,14,0.7); display: none; align-items: center; justify-content: center; padding: 16px; }
+  /* Выше стартового экрана (60): «Новая игра» открывает модалку выбора соседей
+     прямо с заставки, и при 50 она оказывалась ПОД непрозрачной заставкой —
+     клик «ничего не делал». Победа (55) и баннер эпохи (45) с модалкой
+     одновременно не живут, им порядок не важен. */
+  .modal-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(5,8,14,0.7); display: none; align-items: center; justify-content: center; padding: 16px; }
   .modal-wrap.show { display: flex; }
   .modal { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 14px; padding: 18px; width: min(94vw, 440px); max-height: 80vh; overflow-y: auto; }
   .modal h3 { color: var(--accent); margin-bottom: 10px; font-size: 16px; }
