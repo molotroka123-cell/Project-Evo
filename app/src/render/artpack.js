@@ -50,7 +50,11 @@ export class ArtPack {
     // Битый или недокачанный файл не должен ронять кадр: просто останемся
     // на процедурной отрисовке этого здания.
     im.onerror = () => { this.pending.delete(id); };
-    im.src = `${BASE}buildings_${id}.png`;
+    // Сборка с ключом --embed-art кладёт картинки прямо в файл. Тогда игра
+    // рисует настоящий арт и в одиночном frontier.html без интернета, а не
+    // только на сайте, где спрайты лежат отдельными файлами рядом.
+    const baked = typeof window !== 'undefined' && window.__FRONTIER_ART__;
+    im.src = (baked && baked[id]) || `${BASE}buildings_${id}.png`;
   }
 
   // Возвращает картинку здания либо null, если её нет — тогда рисуем кодом.

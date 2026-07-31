@@ -7728,7 +7728,8 @@ ${s}`, "console");
       im.onerror = () => {
         this.pending.delete(id);
       };
-      im.src = `${BASE2}buildings_${id}.png`;
+      const baked = typeof window !== "undefined" && window.__FRONTIER_ART__;
+      im.src = baked && baked[id] || `${BASE2}buildings_${id}.png`;
     }
     // Возвращает картинку здания либо null, если её нет — тогда рисуем кодом.
     building(id) {

@@ -60,6 +60,35 @@ const res = await build({
 });
 
 const js = res.outputFiles[0].text;
+
+// --- вшивание арта в сам файл ------------------------------------------------
+// Без этого frontier.html ищет картинки рядом с собой: на сайте они лежат и
+// отдаются, а скачанный одиночный файл остаётся с процедурными зданиями.
+// Ключ --embed-art печёт спрайты прямо в HTML — файл тяжелеет, зато работает
+// офлайн ровно так же, как на сайте.
+function embedArt() {
+  if (!process.argv.includes('--embed-art')) return '';
+  const dir = join(ROOT, 'app', 'assets', 'sprites');
+  let files = [];
+  try { files = readdirSync(dir); } catch { return ''; }
+  const pics = files.filter(f => /^buildings_.+\.(png|webp)$/i.test(f)).sort();
+  if (!pics.length) return '';
+
+  const map = {};
+  let bytes = 0;
+  for (const f of pics) {
+    const id = f.replace(/^buildings_/i, '').replace(/\.(png|webp)$/i, '');
+    const buf = readFileSync(join(dir, f));
+    bytes += buf.length;
+    const mime = /\.webp$/i.test(f) ? 'image/webp' : 'image/png';
+    map[id] = `data:${mime};base64,${buf.toString('base64')}`;
+  }
+  console.log(`  арт вшит в файл: ${pics.length} шт., ${(bytes / 1048576).toFixed(1)} МБ исходных`);
+  // Рендер читает window.__FRONTIER_ART__ раньше, чем просит файл с диска.
+  return `<script>window.__FRONTIER_ART__=${JSON.stringify(map)};</script>\n`;
+}
+const artTag = embedArt();
+
 const html = readFileSync(HTML_IN, 'utf8');
 if (!html.includes(MARKER)) {
   console.error('ОШИБКА: в app/index.html не найдена строка подключения модуля:', MARKER);
@@ -67,7 +96,7 @@ if (!html.includes(MARKER)) {
 }
 // </script> внутри строк JS разорвал бы тег — экранируем на всякий случай.
 const safeJs = js.replace(/<\/script>/gi, '<\\/script>');
-writeFileSync(OUT, html.replace(MARKER, `<script>\n${safeJs}\n</script>`), 'utf8');
+writeFileSync(OUT, html.replace(MARKER, `${artTag}<script>\n${safeJs}\n</script>`), 'utf8');
 
 const kb = (statSync(OUT).size / 1024).toFixed(0);
 console.log(`frontier.html собран: ${kb} КБ (bundle ${(js.length / 1024).toFixed(0)} КБ) · нарисованных спрайтов: ${artCount}`);
