@@ -1,0 +1,147 @@
+// core/systems/integrate.js — слой подключения модулей к ядру.
+//
+// Зачем отдельный файл: модули писались независимо и каждый ждёт свой ctx.
+// Если раскидать сборку этих ctx по simulation.js, ядро превратится в свалку
+// переходников. Здесь ядро видит четыре функции, а вся склейка — тут.
+//
+// Правило: модуль НИКОГДА не трогает sim напрямую. Он получает данные, возвращает
+// отчёт, а применяет отчёт к миру этот файл. Так модуль остаётся тестируемым
+// в одиночку, а ядро — не зависящим от внутренностей модуля.
+import { BUILDINGS, DAYS_PER_SEASON } from '../data.js';
+import * as W from './winter.js';
+import * as B from './borders.js';
+
+// ---------- Установка ----------
+
+export function installSystems(sim) {
+  sim.sys = {
+    winter: W.createWinter(),
+    borders: B.createBorders(sim.world.w, sim.world.h),
+    // Последние отчёты держим для HUD: панель читает готовые числа, а не
+    // пересчитывает то, что уже посчитано модулем.
+    winterReport: null,
+    borderStats: null,
+  };
+}
+
+// ---------- Раз в сутки ----------
+// Вызывается из onNewDay ПОСЛЕ расчёта еды и ДО фильтра мёртвых: зима помечает
+// замёрзших hp=0, а вычищает их общий фильтр ядра — двух списков мёртвых не бывает.
+
+export function systemsNewDay(sim) {
+  if (!sim.sys) return;
+  tickWinterFor(sim);
+  tickBordersFor(sim);
+}
+
+function tickWinterFor(sim) {
+  const s = sim.sys;
+  const ctx = winterCtx(sim);
+  const rep = W.tickWinter(s.winter, ctx, sim.rng);
+  s.winterReport = rep;
+
+  // Дрова сжигаются реально: это единственный расход дерева, который нельзя
+  // отложить, и он и делает зиму зимой.
+  if (rep.burned > 0) sim.res.wood = Math.max(0, sim.res.wood - rep.burned);
+
+  // Имена замёрзших модуль уже положил в rep.events — своего второго списка
+  // здесь быть не должно, иначе каждая смерть попадает в журнал дважды.
+  if (rep.deathCount > 0) {
+    sim.addChronicle(`Морозы унесли ${rep.deathCount} ${W.plural(rep.deathCount, 'жизнь', 'жизни', 'жизней')}.`);
+  }
+  for (const e of rep.events) sim.addLog(e.text, e.type === 'warn' ? 'bad' : e.type);
+}
+
+function winterCtx(sim) {
+  return {
+    day: sim.day,
+    dayInSeason: sim.day % DAYS_PER_SEASON,
+    seasonIdx: sim.seasonIdx,
+    weather: sim.weather,
+    villagers: sim.villagers,
+    pop: sim.villagers.length,
+    wood: sim.res.wood,
+    woodPerDay: woodIncome(sim),
+    housingCap: sim.housingCap(),
+    buildings: sim.buildings,
+    techs: sim.techs,
+  };
+}
+
+// Прогноз «хватит ли дров до весны» врёт, если не знать притока. Считаем по тем
+// же таблицам, что и производство: сколько дерева даст день при текущих зданиях.
+function woodIncome(sim) {
+  let sum = 0;
+  for (const b of sim.buildings) {
+    if (!b.done || b.destroyed) continue;
+    const def = BUILDINGS[b.id];
+    if (def && def.out && def.out.wood) sum += def.out.wood * (b.workers ? b.workers.length : 0);
+  }
+  return sum * sim.globalMult('wood');
+}
+
+function tickBordersFor(sim) {
+  const s = sim.sys;
+  const version = B.worldVersion(sim.buildings, sim.factions);
+  const changed = B.updateBorders(s.borders, {
+    world: sim.world, day: sim.day, version,
+    buildings: sim.buildings.filter(b => b.done && !b.destroyed),
+    factions: sim.factions.filter(f => f.alive),
+  });
+  if (changed || !s.borderStats) s.borderStats = B.territoryStats(s.borders);
+
+  // Земельный налог: территория начинает приносить доход, а не только красить
+  // карту. Это делает захват земли осмысленным до появления городов.
+  const tax = B.landTaxPerDay(s.borders, 'player', { techs: sim.techs });
+  if (tax > 0) sim.res.gold += tax * sim.globalMult('gold');
+}
+
+// ---------- Модификаторы, которые ядро подмешивает в свои формулы ----------
+
+// Штраф к счастью от холода. Ядро прибавляет это в happiness().
+export function systemsHappyMod(sim) {
+  if (!sim.sys) return 0;
+  return W.happyMod(sim.sys.winter);
+}
+
+// Больные не работают. Ядро умножает на это выработку.
+export function systemsWorkMult(sim) {
+  if (!sim.sys) return 1;
+  const sick = sim.sys.winter.sick || 0;
+  const pop = Math.max(1, sim.villagers.length);
+  return Math.max(0.4, 1 - (sick / pop) * 0.8);
+}
+
+// ---------- Сохранение ----------
+
+export function systemsSerialize(sim) {
+  if (!sim.sys) return null;
+  return {
+    winter: W.serializeWinter(sim.sys.winter),
+    borders: B.serializeBorders(sim.sys.borders),
+  };
+}
+
+export function systemsRestore(sim, data) {
+  if (!sim.sys || !data) return;
+  if (data.winter) sim.sys.winter = W.deserializeWinter(data.winter);
+  if (data.borders) sim.sys.borders = B.deserializeBorders(data.borders);
+}
+
+// ---------- Для HUD ----------
+
+export function winterPanel(sim) {
+  if (!sim.sys) return null;
+  return {
+    status: W.winterStatus(sim.sys.winter, winterCtx(sim)),
+    forecast: W.winterForecast(winterCtx(sim)),
+    breakdown: W.demandBreakdown(winterCtx(sim)),
+    history: W.winterHistory(sim.sys.winter),
+    report: sim.sys.winterReport,
+  };
+}
+
+export function territoryPanel(sim) {
+  if (!sim.sys) return null;
+  return sim.sys.borderStats;
+}

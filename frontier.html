@@ -693,6 +693,38 @@
     { id: "o24", text: "Эпоха Будущего", check: "era:9" },
     { id: "o25", text: "Постройте ШПИЛЬ ЦИВИЛИЗАЦИИ", check: "spire:5" }
   ];
+  var NICKNAMES = [
+    "Кремень",
+    "Смолян",
+    "Тихий",
+    "Косматый",
+    "Быстрый",
+    "Меткий",
+    "Рудник",
+    "Соколик",
+    "Вихрь",
+    "Кузнец",
+    "Гончар",
+    "Пахарь",
+    "Бортник",
+    "Ловчий",
+    "Скорый",
+    "Упрямый",
+    "Молчун",
+    "Зоркий",
+    "Смелый",
+    "Хлебник",
+    "Ткач",
+    "Ясень",
+    "Дубрава",
+    "Заря",
+    "Стрелец",
+    "Кожемяка",
+    "Медвежатник",
+    "Рыбарь",
+    "Древень",
+    "Светлый"
+  ];
   var NAMES = ["Алёна", "Борис", "Вела", "Горд", "Дана", "Егор", "Жана", "Зорян", "Ива", "Крам", "Лада", "Милан", "Нора", "Олег", "Пламена", "Радо", "Света", "Тверд", "Уля", "Хорс", "Цвета", "Чага", "Шана", "Эль", "Яромир", "Яна", "Велимир", "Гост", "Добрыня", "Злата"];
   var GREAT_TYPES = [
     { id: "scientist", ru: "Учёный", desc: "+📜 (300 × номер эпохи)" },
@@ -917,6 +949,913 @@
     return spawns;
   }
 
+  // app/src/core/systems/winter.js
+  var WINTER_SEASON = 3;
+  var WINTER_DAYS = DAYS_PER_SEASON;
+  var WOOD_PER_POP = 0.055;
+  var WOOD_PER_HEARTH = 0.25;
+  var WOOD_PER_HOMELESS = 0.09;
+  var SEV_MIN = 0.55;
+  var SEV_PEAK = 1;
+  var COLD_SICK = 2;
+  var COLD_DEATH = 5;
+  var COLD_THAW = 0.75;
+  var COLD_MAX = 12;
+  var SICK_RATE = 0.05;
+  var DEATH_RATE = 0.06;
+  var DEATHS_PER_DAY = 2;
+  var SURVIVOR_FLOOR = 0.5;
+  var HAPPY_FLOOR = -30;
+  var HEAT_WEATHER = { snow: 1.3, rain: 1.1, cloud: 1.05, sun: 1 };
+  var INSULATION_TECH = {
+    masonry: 0.9,
+    // кладка: стены держат тепло
+    construction: 0.94,
+    // акведуки и печи по-нормальному
+    steam: 0.92,
+    // паровое отопление
+    electricity: 0.88,
+    plastics: 0.9
+    // утеплители
+  };
+  var INSULATION_BUILDING = {
+    power_plant: 0.85,
+    // централизованное тепло от станции
+    npp: 0.85,
+    fusion_reactor: 0.8,
+    solar: 0.95
+  };
+  var INSULATION_FLOOR = 0.35;
+  var CARE_BUILDING = { clinic: 0.5, hospital: 0.5, sewers: 0.7 };
+  var CARE_TECH = { medicine: 0.9, penicillin: 0.85 };
+  var CARE_FLOOR = 0.15;
+  var COMFORT_BUILDING = { aqueduct: 0.85, temple: 0.9, amphitheater: 0.9, media_tower: 0.85 };
+  var COMFORT_FLOOR = 0.4;
+  var SEV_SUM = (() => {
+    let s = 0;
+    for (let i = 0; i < WINTER_DAYS; i++) s += severity(i);
+    return s;
+  })();
+  var WINTER_WEATHER_AVG = (() => {
+    let sum = 0, tot = 0;
+    for (const [w, p] of WEATHER_TABLE[WINTER_SEASON]) {
+      sum += (HEAT_WEATHER[w] ?? 1) * p;
+      tot += p;
+    }
+    return tot ? sum / tot : 1;
+  })();
+  function createWinter() {
+    return {
+      cold: 0,
+      // накопленный недотоп, «сутки без дров»
+      sick: 0,
+      // сколько жителей слегло от холода
+      happy: 0,
+      // текущий штраф к счастью (<= 0)
+      lastDay: -1,
+      // защита от двойного вызова в один игровой день
+      flags: { chill: false, sick: false, death: false, warm: false },
+      current: null,
+      // сводка идущей зимы
+      history: [],
+      // сводки прошлых зим, последние 20
+      totals: { burned: 0, deaths: 0, sick: 0, coldDays: 0 }
+    };
+  }
+  function serializeWinter(state) {
+    const s = state || createWinter();
+    return {
+      cold: round2(s.cold),
+      sick: s.sick,
+      happy: round2(s.happy),
+      lastDay: s.lastDay,
+      flags: { ...s.flags },
+      current: s.current ? { ...s.current } : null,
+      history: s.history.slice(-20).map((h) => ({ ...h })),
+      totals: { ...s.totals }
+    };
+  }
+  function deserializeWinter(data) {
+    const s = createWinter();
+    if (!data || typeof data !== "object") return s;
+    s.cold = num(data.cold, 0);
+    s.sick = Math.max(0, Math.round(num(data.sick, 0)));
+    s.happy = Math.min(0, num(data.happy, 0));
+    s.lastDay = Number.isFinite(data.lastDay) ? data.lastDay : -1;
+    s.flags = { ...s.flags, ...data.flags || {} };
+    s.current = data.current ? { ...data.current } : null;
+    s.history = Array.isArray(data.history) ? data.history.slice(-20).map((h) => ({ ...h })) : [];
+    s.totals = { ...s.totals, ...data.totals || {} };
+    return s;
+  }
+  function severity(dayInSeason) {
+    const last2 = Math.max(1, WINTER_DAYS - 1);
+    const t = clamp(num(dayInSeason, 0) / last2, 0, 1);
+    return SEV_MIN + (SEV_PEAK - SEV_MIN) * Math.sin(Math.PI * t);
+  }
+  function hearthCount(builtIds, pop) {
+    if (pop <= 0) return 0;
+    const caps = [];
+    for (const id of builtIds) {
+      const h = BUILDINGS[id] && BUILDINGS[id].housing;
+      if (h > 0) caps.push(h);
+    }
+    caps.sort((a, b) => b - a);
+    let covered = 0, n = 0;
+    for (const c of caps) {
+      if (covered >= pop) break;
+      covered += c;
+      n++;
+    }
+    return n;
+  }
+  function insulationMult(ctx) {
+    const c = readCtx(ctx);
+    let m = 1;
+    for (const [id, k] of Object.entries(INSULATION_TECH)) if (c.hasTech(id)) m *= k;
+    for (const [id, k] of Object.entries(INSULATION_BUILDING)) if (c.hasBuilding(id)) m *= k;
+    return Math.max(INSULATION_FLOOR, m);
+  }
+  function careMult(ctx) {
+    const c = readCtx(ctx);
+    let m = 1;
+    for (const [id, k] of Object.entries(CARE_BUILDING)) if (c.hasBuilding(id)) m *= k;
+    for (const [id, k] of Object.entries(CARE_TECH)) if (c.hasTech(id)) m *= k;
+    return Math.max(CARE_FLOOR, m);
+  }
+  function comfortMult(ctx) {
+    const c = readCtx(ctx);
+    let m = 1;
+    for (const [id, k] of Object.entries(COMFORT_BUILDING)) if (c.hasBuilding(id)) m *= k;
+    return Math.max(COMFORT_FLOOR, m);
+  }
+  function baseDemand(ctx) {
+    const c = readCtx(ctx);
+    if (c.pop <= 0) return 0;
+    const homeless = Math.max(0, c.pop - c.housingCap);
+    const raw = c.pop * WOOD_PER_POP + c.hearths * WOOD_PER_HEARTH + homeless * WOOD_PER_HOMELESS;
+    return raw * insulationMult(ctx);
+  }
+  function heatDemand(ctx) {
+    const c = readCtx(ctx);
+    if (!c.isWinter) return 0;
+    return baseDemand(ctx) * severity(c.dayInSeason) * (HEAT_WEATHER[c.weather] ?? 1);
+  }
+  function winterForecast(ctx) {
+    const c = readCtx(ctx);
+    const base = baseDemand(ctx);
+    let sevLeft = 0, daysLeft = WINTER_DAYS, daysToWinter = 0;
+    if (c.isWinter) {
+      daysLeft = Math.max(0, WINTER_DAYS - c.dayInSeason);
+      for (let i = c.dayInSeason; i < WINTER_DAYS; i++) sevLeft += severity(i);
+    } else {
+      sevLeft = SEV_SUM;
+      daysToWinter = (WINTER_SEASON - c.seasonIdx) * DAYS_PER_SEASON - c.dayInSeason;
+      if (daysToWinter < 0) daysToWinter += 4 * DAYS_PER_SEASON;
+    }
+    const need = base * sevLeft * WINTER_WEATHER_AVG;
+    const have = Math.max(0, c.wood);
+    const income = Math.max(0, num(c.woodPerDay, 0));
+    const projected = have + income * daysToWinter;
+    const deficit = Math.max(0, need - projected);
+    const perDayAvg = daysLeft > 0 ? need / daysLeft : 0;
+    const perDayPeak = base * SEV_PEAK * WINTER_WEATHER_AVG;
+    const coverDays = perDayAvg > 0 ? projected / perDayAvg : Infinity;
+    const level = deficit <= 0 ? "ok" : projected >= need * 0.6 ? "warn" : "bad";
+    let text;
+    if (c.pop <= 0) {
+      text = "Греть некого.";
+    } else if (c.isWinter) {
+      text = `Зима: осталось ${daysLeft} дн., расход ~${fmt(perDayAvg)}🪵/день. ` + (deficit > 0 ? `Дров ${fmt(have)}, не хватает ${fmt(deficit)}🪵 — люди начнут мёрзнуть.` : `Дров ${fmt(have)} — до весны хватит.`);
+    } else {
+      const when = daysToWinter <= 0 ? "вот-вот" : `через ${daysToWinter} дн.`;
+      text = `Зима ${when}: нужно ~${fmt(need)}🪵 на сезон, будет ${fmt(projected)}🪵. ` + (deficit > 0 ? `Не хватает ${fmt(deficit)}🪵 — запасайте дрова.` : "Запаса достаточно.");
+    }
+    return {
+      isWinter: c.isWinter,
+      daysToWinter,
+      daysLeft,
+      pop: c.pop,
+      hearths: c.hearths,
+      need: round2(need),
+      have: round2(have),
+      projected: round2(projected),
+      deficit: round2(deficit),
+      income: round2(income),
+      perDayAvg: round2(perDayAvg),
+      perDayPeak: round2(perDayPeak),
+      coverDays: Number.isFinite(coverDays) ? round2(coverDays) : Infinity,
+      ready: deficit <= 0,
+      level,
+      text
+    };
+  }
+  function tickWinter(state, ctx, rng) {
+    const s = state || createWinter();
+    const c = readCtx(ctx);
+    const rep = {
+      day: c.day,
+      winter: c.isWinter,
+      demand: 0,
+      burned: 0,
+      deficit: 0,
+      ratio: 1,
+      cold: s.cold,
+      sick: s.sick,
+      newSick: 0,
+      recovered: 0,
+      deaths: [],
+      deathCount: 0,
+      stage: "ok",
+      happyMod: Math.round(s.happy),
+      events: []
+    };
+    if (s.lastDay === c.day) return rep;
+    s.lastDay = c.day;
+    if (!c.isWinter) {
+      closeWinter(s, c);
+      s.cold = Math.max(0, s.cold - COLD_THAW * 2);
+      if (s.sick > 0) {
+        const heal = Math.max(1, Math.floor(s.sick * 0.34));
+        s.sick = Math.max(0, s.sick - heal);
+        rep.recovered = heal;
+      }
+      s.happy = s.happy < 0 ? Math.min(0, s.happy + 3) : 0;
+      forecastWarnings(s, c, rep);
+      return finish(s, rep, "ok");
+    }
+    openWinter(s, c);
+    const demand = heatDemand(ctx);
+    const burned = Math.min(demand, Math.max(0, c.wood));
+    const deficit = Math.max(0, demand - burned);
+    const d = demand > 1e-9 ? deficit / demand : 0;
+    rep.demand = round2(demand);
+    rep.burned = round2(burned);
+    rep.deficit = round2(deficit);
+    rep.ratio = round2(1 - d);
+    s.totals.burned += burned;
+    if (s.current) {
+      s.current.burned += burned;
+      s.current.need += demand;
+    }
+    if (d > 0.02) {
+      s.cold = Math.min(COLD_MAX, s.cold + d);
+      s.totals.coldDays++;
+      if (s.current) s.current.coldDays++;
+    } else {
+      s.cold = Math.max(0, s.cold - COLD_THAW);
+    }
+    const stage = stageOf(s.cold, d);
+    const care = careMult(ctx);
+    if ((stage === "sick" || stage === "death") && c.pop > 1) {
+      const press = Math.min(2, s.cold / COLD_SICK);
+      const expect = c.pop * SICK_RATE * d * press * care;
+      const n = Math.min(c.pop - s.sick, roll(expect, rng));
+      if (n > 0) {
+        s.sick += n;
+        rep.newSick = n;
+        s.totals.sick += n;
+        if (s.current) s.current.sick += n;
+      }
+    } else if (d <= 0.02 && s.sick > 0) {
+      const heal = Math.max(1, Math.floor(s.sick * 0.25));
+      s.sick = Math.max(0, s.sick - heal);
+      rep.recovered = heal;
+    }
+    if (stage === "death" && s.sick > 0 && c.pop > 1) {
+      const startPop = s.current && s.current.pop > 0 ? s.current.pop : c.pop;
+      const floorPop = Math.max(1, Math.ceil(startPop * SURVIVOR_FLOOR));
+      const expect = s.sick * DEATH_RATE * d * care;
+      let n = Math.min(roll(expect, rng), s.sick, c.pop - 1, c.pop - floorPop, DEATHS_PER_DAY);
+      if (n > 0) {
+        rep.deathCount = n;
+        s.sick = Math.max(0, s.sick - n);
+        s.totals.deaths += n;
+        if (s.current) s.current.deaths += n;
+        rep.deaths = takeVictims(c.villagers, n, rng);
+      }
+    }
+    s.sick = Math.min(s.sick, Math.max(0, c.pop - rep.deathCount));
+    const popNow = Math.max(1, c.pop - rep.deathCount);
+    const raw = d * 12 + Math.min(12, s.cold * 1.5) + Math.min(8, s.sick / popNow * 20);
+    const target = raw > 0 ? -Math.min(-HAPPY_FLOOR, raw * comfortMult(ctx)) : 0;
+    s.happy = approach(s.happy, target, 4);
+    messages(s, c, rep, stage, d);
+    return finish(s, rep, stage);
+  }
+  function happyMod(state) {
+    if (!state) return 0;
+    return Math.round(Math.min(0, state.happy));
+  }
+  function stageOf(cold, d) {
+    if (cold >= COLD_DEATH) return "death";
+    if (cold >= COLD_SICK) return "sick";
+    if (cold > 0 || d > 0.02) return "chill";
+    return "ok";
+  }
+  function finish(s, rep, st) {
+    rep.stage = st;
+    rep.cold = round2(s.cold);
+    rep.sick = s.sick;
+    rep.happyMod = happyMod(s);
+    return rep;
+  }
+  function readCtx(ctx) {
+    const o = ctx || {};
+    if (o.__winterCtx) return o;
+    const ids = [];
+    const src = o.buildings || o.builtIds || [];
+    for (const b of src) {
+      if (typeof b === "string") {
+        ids.push(b);
+        continue;
+      }
+      if (!b || !b.id) continue;
+      if (b.done === false || b.destroyed) continue;
+      ids.push(b.id);
+    }
+    const techs = o.techs;
+    const hasTech = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
+    const idSet = new Set(ids);
+    const villagers = Array.isArray(o.villagers) ? o.villagers : null;
+    const pop = Math.max(0, Math.round(num(o.pop, villagers ? villagers.filter((v) => !v || v.hp === void 0 || v.hp > 0).length : 0)));
+    const day = Math.max(0, Math.round(num(o.day, 0)));
+    const dayInSeason = Math.max(0, Math.round(num(o.dayInSeason, day % DAYS_PER_SEASON)));
+    const seasonIdx = Number.isFinite(o.seasonIdx) ? o.seasonIdx : Math.floor(day / DAYS_PER_SEASON) % 4;
+    const housingCap = Number.isFinite(o.housingCap) ? o.housingCap : ids.reduce((a, id) => a + (BUILDINGS[id] && BUILDINGS[id].housing || 0), 0);
+    return {
+      __winterCtx: true,
+      day,
+      dayInSeason,
+      seasonIdx,
+      isWinter: seasonIdx === WINTER_SEASON,
+      weather: o.weather || "sun",
+      pop,
+      villagers,
+      wood: num(o.wood, 0),
+      woodPerDay: num(o.woodPerDay, 0),
+      housingCap,
+      ids,
+      hasTech,
+      hasBuilding: (id) => idSet.has(id),
+      hearths: hearthCount(ids, pop)
+    };
+  }
+  function openWinter(s, c) {
+    if (!s.current || s.current.startDay !== c.day - c.dayInSeason) {
+      s.current = {
+        startDay: c.day - c.dayInSeason,
+        year: Math.floor(c.day / 100),
+        pop: c.pop,
+        need: 0,
+        burned: 0,
+        coldDays: 0,
+        sick: 0,
+        deaths: 0
+      };
+      s.flags = { chill: false, sick: false, death: false, warm: false };
+    }
+  }
+  function closeWinter(s, c) {
+    if (!s.current) return;
+    s.history.push({
+      year: s.current.year,
+      pop: s.current.pop,
+      need: round2(s.current.need),
+      burned: round2(s.current.burned),
+      coldDays: s.current.coldDays,
+      sick: s.current.sick,
+      deaths: s.current.deaths
+    });
+    if (s.history.length > 20) s.history.shift();
+    s.current = null;
+    s.flags = { chill: false, sick: false, death: false, warm: false };
+  }
+  function forecastWarnings(s, c, rep) {
+    if (c.pop <= 0) return;
+    const autumn = c.seasonIdx === WINTER_SEASON - 1;
+    if (!autumn || c.dayInSeason !== 0 && c.dayInSeason !== 12) return;
+    const f = winterForecast(c);
+    if (f.level === "ok" && c.dayInSeason === 12) return;
+    rep.forecast = f;
+    rep.events.push({ text: `❄ ${f.text}`, type: f.level === "ok" ? "info" : "warn" });
+  }
+  function messages(s, c, rep, st, d) {
+    if (c.dayInSeason === 0) {
+      const f = winterForecast(c);
+      rep.forecast = f;
+      rep.events.push({ text: `❄ Зима пришла. ${f.text}`, type: f.ready ? "info" : "warn" });
+    }
+    if (d > 0.02 && !s.flags.chill) {
+      s.flags.chill = true;
+      s.flags.warm = false;
+      rep.events.push({
+        text: `❄ Дров не хватает: топим на ${Math.round((1 - d) * 100)}%. Люди мёрзнут — счастье падает.`,
+        type: "warn"
+      });
+    }
+    if (d <= 0.02 && s.flags.chill && s.cold <= 0.01) {
+      s.flags.chill = false;
+      if (!s.flags.warm) {
+        s.flags.warm = true;
+        rep.events.push({ text: "Дома снова прогрелись — холод отступил.", type: "good" });
+      }
+    }
+    if (rep.newSick > 0) {
+      rep.events.push({
+        text: `🤒 От холода слегло ${rep.newSick} ${plural(rep.newSick, "житель", "жителя", "жителей")}${s.sick > rep.newSick ? ` (всего больных ${s.sick})` : ""}. Нужны дрова, иначе будут смерти.`,
+        type: "bad"
+      });
+      s.flags.sick = true;
+    }
+    for (const name of rep.deaths) rep.events.push({ text: `☠ ${name} замёрз насмерть.`, type: "bad" });
+    if (rep.deathCount > 0 && !s.flags.death) {
+      s.flags.death = true;
+      rep.events.push({ text: "❄ Мороз начал убивать. Топите чем угодно.", type: "bad" });
+    }
+    if (st === "sick" && !s.flags.sick && rep.newSick === 0) {
+      s.flags.sick = true;
+      rep.events.push({ text: "❄ В домах стужа третьи сутки — начинаются болезни.", type: "warn" });
+    }
+  }
+  function takeVictims(villagers, n, rng) {
+    const names = [];
+    if (!villagers || !villagers.length) {
+      for (let i = 0; i < n; i++) names.push("Житель");
+      return names;
+    }
+    const alive = villagers.filter((v) => v.hp === void 0 || v.hp > 0);
+    for (let i = 0; i < n && alive.length > 1; i++) {
+      const idx = rng ? rng.int(0, alive.length - 1) : alive.length - 1;
+      const v = alive.splice(idx, 1)[0];
+      v.hp = 0;
+      names.push(v.name || "Житель");
+    }
+    return names;
+  }
+  function roll(expect, rng) {
+    if (!(expect > 0)) return 0;
+    const whole = Math.floor(expect);
+    const frac = expect - whole;
+    const hit = rng ? rng.next() < frac : frac >= 0.5;
+    return whole + (hit ? 1 : 0);
+  }
+  function approach(cur, target, step) {
+    if (cur < target) return Math.min(target, cur + step);
+    if (cur > target) return Math.max(target, cur - step);
+    return target;
+  }
+  function plural(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+  function clamp(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function num(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round2(v) {
+    return Math.round(v * 100) / 100;
+  }
+  function fmt(v) {
+    return (Math.round(v * 10) / 10).toFixed(1);
+  }
+
+  // app/src/core/systems/borders.js
+  var OWNER_NONE = 0;
+  var OWNER_PLAYER = 1;
+  var FACTION_CODE = Object.fromEntries(FACTIONS.map((f, i) => [f.id, i + 2]));
+  var CODE_SIDE = [null, "player", ...FACTIONS.map((f) => f.id)];
+  var MAX_OWNER_CODE = CODE_SIDE.length - 1;
+  var INFLUENCE_THRESHOLD = 0.2;
+  var INFLUENCE_CUTOFF = INFLUENCE_THRESHOLD / 10;
+  var MAX_RADIUS = 22;
+  var EPS = 1e-6;
+  var TAX_PER_TILE = 0.01;
+  var TAX_MOUNTAIN = 0.5;
+  var B_INDEX = Object.fromEntries(Object.keys(BUILDINGS).map((k, i) => [k, i + 1]));
+  function buildingWeight(b) {
+    const def = BUILDINGS[b.id];
+    if (!def) return 0;
+    let w = 1;
+    let costSum = 0;
+    for (const v of Object.values(def.cost || {})) costSum += v;
+    w += costSum / 80;
+    if (def.housing) w += def.housing / 8;
+    if (def.defense) w += def.defense / 6;
+    if (def.unique) w += 3;
+    if (b.id === "campfire") w += 4;
+    if ((def.size || 1) > 1) w *= 1.6;
+    return w;
+  }
+  function settlementWeight(f, s) {
+    const n = Math.max(1, f.settlements ? f.settlements.length : 1);
+    const w = 2 + f.P / n * 0.12;
+    return s && s.capital ? w * 1.5 : w;
+  }
+  function createBorders(w = 96, h = 96) {
+    const n = w * h;
+    return {
+      w,
+      h,
+      owners: new Uint8Array(n),
+      // код владельца каждой клетки
+      depth: new Uint8Array(n),
+      // глубина внутри своей территории, 1 = кромка
+      areas: new Float64Array(MAX_OWNER_CODE + 1),
+      // облагаемая площадь по владельцам
+      tiles: new Int32Array(MAX_OWNER_CODE + 1),
+      // просто число клеток
+      edges: [],
+      // рёбра границы для рендера
+      version: -1,
+      // версия состава зданий/поселений на момент счёта
+      lastDay: -1,
+      // игровой день последнего пересчёта
+      recomputes: 0,
+      // счётчик пересчётов (метрика и проверка кэша)
+      lastMs: 0,
+      // длительность последнего пересчёта, мс
+      _acc: null,
+      // Float32Array[code] — аккумуляторы влияния
+      _queue: null
+      // очередь BFS для карты глубины
+    };
+  }
+  function worldVersion(buildings, factions) {
+    let v = 17;
+    if (buildings) {
+      for (const b of buildings) {
+        if (!b.done || b.destroyed) continue;
+        v = Math.imul(v, 31) + ((B_INDEX[b.id] || 0) * 8191 + b.x * 97 + b.y * 7919) | 0;
+      }
+    }
+    if (factions) {
+      for (const f of factions) {
+        if (!f.alive) continue;
+        v = Math.imul(v, 31) + ((FACTION_CODE[f.id] || 0) * 65521 + Math.round(f.P)) | 0;
+        for (const s of f.settlements || []) {
+          v = Math.imul(v, 31) + (s.x * 97 + s.y * 7919 + (s.capital ? 5 : 0)) | 0;
+        }
+      }
+    }
+    return v;
+  }
+  function updateBorders(state, ctx) {
+    const { world, day = 0, version = 0, buildings = [], factions = [], force = false } = ctx || {};
+    if (!world) throw new Error("updateBorders: не передан world");
+    _ensureSize(state, world.w, world.h);
+    const first = state.lastDay < 0;
+    if (!force && !first) {
+      if (day <= state.lastDay) return false;
+      if (version === state.version) return false;
+    }
+    const t0 = _now();
+    _recompute(state, world, buildings, factions);
+    state.lastMs = _now() - t0;
+    state.version = version;
+    state.lastDay = day;
+    state.recomputes++;
+    return true;
+  }
+  function ownerCode(side) {
+    if (typeof side === "number") return side >= 0 && side <= MAX_OWNER_CODE ? side : OWNER_NONE;
+    if (side === "player") return OWNER_PLAYER;
+    return FACTION_CODE[side] || OWNER_NONE;
+  }
+  function ownerSide(code) {
+    return CODE_SIDE[code] || null;
+  }
+  function ownerName(code) {
+    if (code === OWNER_PLAYER) return "Ваши земли";
+    const f = FACTIONS[code - 2];
+    return f ? f.name : "Ничья земля";
+  }
+  function landTaxPerDay(state, side, opts = {}) {
+    const code = ownerCode(side);
+    if (!code) return 0;
+    return state.areas[code] * TAX_PER_TILE * (opts.mult ?? 1);
+  }
+  function territoryStats(state) {
+    const out = [];
+    for (let c = 1; c <= MAX_OWNER_CODE; c++) {
+      if (!state.tiles[c]) continue;
+      out.push({ code: c, side: ownerSide(c), name: ownerName(c), tiles: state.tiles[c], tax: landTaxPerDay(state, c) });
+    }
+    out.sort((a, b) => b.tiles - a.tiles);
+    return out;
+  }
+  function serializeBorders(state) {
+    return {
+      v: 1,
+      w: state.w,
+      h: state.h,
+      version: state.version,
+      lastDay: state.lastDay,
+      // Территория — крупные однородные пятна, поэтому RLE ужимает 9216 байт
+      // до сотен чисел; полный массив раздувал бы сейв на порядок.
+      rle: _rleEncode(state.owners),
+      areas: Array.from(state.areas)
+    };
+  }
+  function deserializeBorders(data) {
+    const w = data && data.w || 96, h = data && data.h || 96;
+    const state = createBorders(w, h);
+    if (!data || !data.rle) return state;
+    _rleDecode(data.rle, state.owners);
+    state.version = data.version ?? -1;
+    state.lastDay = data.lastDay ?? -1;
+    if (data.areas) for (let i = 0; i < state.areas.length && i < data.areas.length; i++) state.areas[i] = data.areas[i];
+    _countTiles(state);
+    _buildDepth(state);
+    _buildEdges(state);
+    return state;
+  }
+  function _now() {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  }
+  function _ensureSize(state, w, h) {
+    if (state.w === w && state.h === h && state.owners.length === w * h) return;
+    const fresh = createBorders(w, h);
+    state.w = w;
+    state.h = h;
+    state.owners = fresh.owners;
+    state.depth = fresh.depth;
+    state.areas = fresh.areas;
+    state.tiles = fresh.tiles;
+    state.edges = [];
+    state._acc = null;
+    state._queue = null;
+  }
+  function _acc(state, code) {
+    if (!state._acc) state._acc = new Array(MAX_OWNER_CODE + 1).fill(null);
+    if (!state._acc[code]) state._acc[code] = new Float32Array(state.w * state.h);
+    return state._acc[code];
+  }
+  function _recompute(state, world, buildings, factions) {
+    const W = state.w, H = state.h, N = W * H;
+    const src = [];
+    const active = [];
+    const mark = (code) => {
+      if (!active.includes(code)) active.push(code);
+    };
+    for (const b of buildings) {
+      if (!b.done || b.destroyed) continue;
+      const w = buildingWeight(b);
+      if (w <= 0) continue;
+      const half = ((b.size || 1) - 1) / 2;
+      src.push({ code: OWNER_PLAYER, x: b.x + half, y: b.y + half, w });
+      mark(OWNER_PLAYER);
+    }
+    for (const f of factions) {
+      if (!f.alive) continue;
+      const code = FACTION_CODE[f.id];
+      if (!code) continue;
+      for (const s of f.settlements || []) {
+        const w = settlementWeight(f, s);
+        if (w <= 0) continue;
+        src.push({ code, x: s.x, y: s.y, w });
+        mark(code);
+      }
+    }
+    active.sort((a, b) => a - b);
+    for (const code of active) _acc(state, code).fill(0);
+    for (const s of src) {
+      const acc = _acc(state, s.code);
+      const r = Math.min(MAX_RADIUS, Math.sqrt(Math.max(0, s.w / INFLUENCE_CUTOFF - 1)));
+      const r2 = r * r;
+      const x0 = Math.max(0, Math.ceil(s.x - r)), x1 = Math.min(W - 1, Math.floor(s.x + r));
+      const y0 = Math.max(0, Math.ceil(s.y - r)), y1 = Math.min(H - 1, Math.floor(s.y + r));
+      for (let y = y0; y <= y1; y++) {
+        const dy = y - s.y, dy2 = dy * dy, row = y * W;
+        for (let x = x0; x <= x1; x++) {
+          const dx = x - s.x, d2 = dx * dx + dy2;
+          if (d2 > r2) continue;
+          acc[row + x] += s.w / (1 + d2);
+        }
+      }
+    }
+    const owners = state.owners, tiles = world.tiles;
+    const areas = state.areas, cnt = state.tiles;
+    areas.fill(0);
+    cnt.fill(0);
+    for (let i = 0; i < N; i++) {
+      const t = tiles[i];
+      if (t === TILE.DEEP || t === TILE.WATER) {
+        owners[i] = OWNER_NONE;
+        continue;
+      }
+      let best = 0, bestCode = OWNER_NONE, tie = false;
+      for (let k = 0; k < active.length; k++) {
+        const code = active[k];
+        const v = state._acc[code][i];
+        if (v > best + EPS) {
+          best = v;
+          bestCode = code;
+          tie = false;
+        } else if (bestCode !== OWNER_NONE && Math.abs(v - best) <= EPS) tie = true;
+      }
+      if (bestCode !== OWNER_NONE && best >= INFLUENCE_THRESHOLD && !tie) {
+        owners[i] = bestCode;
+        cnt[bestCode]++;
+        areas[bestCode] += t === TILE.MOUNTAIN ? TAX_MOUNTAIN : 1;
+      } else owners[i] = OWNER_NONE;
+    }
+    _buildDepth(state);
+    _buildEdges(state);
+  }
+  function _countTiles(state) {
+    state.tiles.fill(0);
+    for (let i = 0; i < state.owners.length; i++) {
+      const o = state.owners[i];
+      if (o) state.tiles[o]++;
+    }
+  }
+  function _buildDepth(state) {
+    const W = state.w, H = state.h, N = W * H;
+    const owners = state.owners, depth = state.depth;
+    depth.fill(0);
+    if (!state._queue || state._queue.length !== N) state._queue = new Int32Array(N);
+    const q = state._queue;
+    let head = 0, tail = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x, o = owners[i];
+        if (!o) continue;
+        const edge = x === 0 || owners[i - 1] !== o || x === W - 1 || owners[i + 1] !== o || y === 0 || owners[i - W] !== o || y === H - 1 || owners[i + W] !== o;
+        if (edge) {
+          depth[i] = 1;
+          q[tail++] = i;
+        }
+      }
+    }
+    while (head < tail) {
+      const i = q[head++], o = owners[i], d = depth[i];
+      const x = i % W, y = i / W | 0;
+      const nd = d < 255 ? d + 1 : 255;
+      if (x > 0) {
+        const j = i - 1;
+        if (owners[j] === o && !depth[j]) {
+          depth[j] = nd;
+          q[tail++] = j;
+        }
+      }
+      if (x < W - 1) {
+        const j = i + 1;
+        if (owners[j] === o && !depth[j]) {
+          depth[j] = nd;
+          q[tail++] = j;
+        }
+      }
+      if (y > 0) {
+        const j = i - W;
+        if (owners[j] === o && !depth[j]) {
+          depth[j] = nd;
+          q[tail++] = j;
+        }
+      }
+      if (y < H - 1) {
+        const j = i + W;
+        if (owners[j] === o && !depth[j]) {
+          depth[j] = nd;
+          q[tail++] = j;
+        }
+      }
+    }
+  }
+  function _buildEdges(state) {
+    const W = state.w, H = state.h;
+    const owners = state.owners;
+    const edges = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x, o = owners[i];
+        if (!o) continue;
+        if (x === 0 || owners[i - 1] !== o) edges.push({ x1: x, y1: y, x2: x, y2: y + 1, owner: o });
+        if (x === W - 1 || owners[i + 1] !== o) edges.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1, owner: o });
+        if (y === 0 || owners[i - W] !== o) edges.push({ x1: x, y1: y, x2: x + 1, y2: y, owner: o });
+        if (y === H - 1 || owners[i + W] !== o) edges.push({ x1: x, y1: y + 1, x2: x + 1, y2: y + 1, owner: o });
+      }
+    }
+    state.edges = edges;
+  }
+  function _rleEncode(arr) {
+    const out = [];
+    if (!arr.length) return out;
+    let cur = arr[0], n = 1;
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i] === cur) {
+        n++;
+        continue;
+      }
+      out.push(cur, n);
+      cur = arr[i];
+      n = 1;
+    }
+    out.push(cur, n);
+    return out;
+  }
+  function _rleDecode(rle, target) {
+    let p = 0;
+    for (let i = 0; i + 1 < rle.length; i += 2) {
+      const val = rle[i], n = rle[i + 1];
+      for (let k = 0; k < n && p < target.length; k++) target[p++] = val;
+    }
+    return target;
+  }
+
+  // app/src/core/systems/integrate.js
+  function installSystems(sim2) {
+    sim2.sys = {
+      winter: createWinter(),
+      borders: createBorders(sim2.world.w, sim2.world.h),
+      // Последние отчёты держим для HUD: панель читает готовые числа, а не
+      // пересчитывает то, что уже посчитано модулем.
+      winterReport: null,
+      borderStats: null
+    };
+  }
+  function systemsNewDay(sim2) {
+    if (!sim2.sys) return;
+    tickWinterFor(sim2);
+    tickBordersFor(sim2);
+  }
+  function tickWinterFor(sim2) {
+    const s = sim2.sys;
+    const ctx = winterCtx(sim2);
+    const rep = tickWinter(s.winter, ctx, sim2.rng);
+    s.winterReport = rep;
+    if (rep.burned > 0) sim2.res.wood = Math.max(0, sim2.res.wood - rep.burned);
+    if (rep.deathCount > 0) {
+      sim2.addChronicle(`Морозы унесли ${rep.deathCount} ${plural(rep.deathCount, "жизнь", "жизни", "жизней")}.`);
+    }
+    for (const e of rep.events) sim2.addLog(e.text, e.type === "warn" ? "bad" : e.type);
+  }
+  function winterCtx(sim2) {
+    return {
+      day: sim2.day,
+      dayInSeason: sim2.day % DAYS_PER_SEASON,
+      seasonIdx: sim2.seasonIdx,
+      weather: sim2.weather,
+      villagers: sim2.villagers,
+      pop: sim2.villagers.length,
+      wood: sim2.res.wood,
+      woodPerDay: woodIncome(sim2),
+      housingCap: sim2.housingCap(),
+      buildings: sim2.buildings,
+      techs: sim2.techs
+    };
+  }
+  function woodIncome(sim2) {
+    let sum = 0;
+    for (const b of sim2.buildings) {
+      if (!b.done || b.destroyed) continue;
+      const def = BUILDINGS[b.id];
+      if (def && def.out && def.out.wood) sum += def.out.wood * (b.workers ? b.workers.length : 0);
+    }
+    return sum * sim2.globalMult("wood");
+  }
+  function tickBordersFor(sim2) {
+    const s = sim2.sys;
+    const version = worldVersion(sim2.buildings, sim2.factions);
+    const changed = updateBorders(s.borders, {
+      world: sim2.world,
+      day: sim2.day,
+      version,
+      buildings: sim2.buildings.filter((b) => b.done && !b.destroyed),
+      factions: sim2.factions.filter((f) => f.alive)
+    });
+    if (changed || !s.borderStats) s.borderStats = territoryStats(s.borders);
+    const tax = landTaxPerDay(s.borders, "player", { techs: sim2.techs });
+    if (tax > 0) sim2.res.gold += tax * sim2.globalMult("gold");
+  }
+  function systemsHappyMod(sim2) {
+    if (!sim2.sys) return 0;
+    return happyMod(sim2.sys.winter);
+  }
+  function systemsWorkMult(sim2) {
+    if (!sim2.sys) return 1;
+    const sick = sim2.sys.winter.sick || 0;
+    const pop = Math.max(1, sim2.villagers.length);
+    return Math.max(0.4, 1 - sick / pop * 0.8);
+  }
+  function systemsSerialize(sim2) {
+    if (!sim2.sys) return null;
+    return {
+      winter: serializeWinter(sim2.sys.winter),
+      borders: serializeBorders(sim2.sys.borders)
+    };
+  }
+  function systemsRestore(sim2, data) {
+    if (!sim2.sys || !data) return;
+    if (data.winter) sim2.sys.winter = deserializeWinter(data.winter);
+    if (data.borders) sim2.sys.borders = deserializeBorders(data.borders);
+  }
+
   // app/src/core/simulation.js
   var DAY_SECONDS = 6;
   var EAT_PER_DAY = 0.7;
@@ -996,6 +1935,7 @@
         if (p) this.animals.push(makeAnimal(this.rng, "mammoth", p.x, p.y));
       }
       this.spawnFactions();
+      installSystems(this);
       this.addChronicle(`Основание поселения. ${ERAS[0].ru}, ${ERAS[0].years}.`);
       this.addLog("Поселение основано. Постройте Хижину — цели слева подскажут путь.");
     }
@@ -1242,6 +2182,7 @@
       if (this.hasGreat("prophet")) h += 10;
       h += WEATHER[this.weather].happy;
       h += this._happyBonus || 0;
+      h += systemsHappyMod(this);
       this._happy = Math.max(0, Math.min(100, Math.round(h)));
       return this._happy;
     }
@@ -1255,7 +2196,7 @@
     }
     // ---------- Население ----------
     spawnVillager(x, y) {
-      const name = this.rng.pick(NAMES) + " " + this.rng.pick(["с", "м", "д", "в", "г", "л"]) + this.rng.pick(["а", "о", "и", "ь", ""]);
+      const name = this.rng.pick(NAMES) + " " + this.rng.pick(NICKNAMES);
       this.villagers.push({
         name,
         x,
@@ -1400,7 +2341,7 @@
     tickVillagers(dt) {
       const speed = MOVE_SPEED * (this.techs.has("wheel") ? 1.2 : 1);
       const happy = this._happy ?? this.happiness();
-      const happyMult = happy < 35 ? 0.7 : 1;
+      const happyMult = (happy < 35 ? 0.7 : 1) * systemsWorkMult(this);
       for (const v of this.villagers) {
         if (v.hp <= 0) continue;
         if (v.atWork) {
@@ -1554,7 +2495,7 @@
       if (!t) return;
       const gather = this.globalMult("gather") * WEATHER[this.weather].gather;
       const happy = this.happiness();
-      const happyMult = happy < 35 ? 0.7 : 1;
+      const happyMult = (happy < 35 ? 0.7 : 1) * systemsWorkMult(this);
       if (t.kind === "build") {
         if (t.b.done || t.b.destroyed) {
           this.release(v);
@@ -1732,10 +2673,10 @@
     onNewDay() {
       const pop = this.villagers.length;
       const table = WEATHER_TABLE[this.seasonIdx];
-      let roll = this.rng.range(0, 100), acc = 0;
+      let roll2 = this.rng.range(0, 100), acc = 0;
       for (const [w, p] of table) {
         acc += p;
-        if (roll <= acc) {
+        if (roll2 <= acc) {
           this.weather = w;
           break;
         }
@@ -1797,6 +2738,7 @@
         this._happyBonus += this._happyBonus > 0 ? -1 : 1;
         if (Math.abs(this._happyBonus) < 1) this._happyBonus = 0;
       }
+      systemsNewDay(this);
       for (const v of this.villagers) {
         v.age++;
         let life = 11e3;
@@ -2117,11 +3059,11 @@
         if (!actions.length) continue;
         const exps = actions.map((a) => Math.exp(a.U / T2));
         const sum = exps.reduce((a, b) => a + b, 0);
-        let roll = this.rng.next() * sum;
+        let roll2 = this.rng.next() * sum;
         let chosen = actions[0];
         for (let i = 0; i < actions.length; i++) {
-          roll -= exps[i];
-          if (roll <= 0) {
+          roll2 -= exps[i];
+          if (roll2 <= 0) {
             chosen = actions[i];
             break;
           }
@@ -2639,6 +3581,7 @@ ${s}`, "console");
         mission: this.mission,
         moonDone: this.moonDone,
         marsDone: this.marsDone,
+        sys: systemsSerialize(this),
         rngState: this.rng.getState(),
         log: this.log.slice(-80)
       };
@@ -2691,6 +3634,7 @@ ${s}`, "console");
       sim2.mission = data.mission;
       sim2.moonDone = data.moonDone;
       sim2.marsDone = data.marsDone;
+      systemsRestore(sim2, data.sys);
       sim2.log = data.log || [];
       for (const f of sim2.factions) {
         if (!(f.id in sim2.relations)) sim2.relations[f.id] = 0;

@@ -3,7 +3,8 @@
 import { createRng, makeNoise2D } from './rng.js';
 import * as D from './data.js';
 import { generateWorld, tileAt, isWater, stepToward, findNearestTile, hasNeighborTile, makeAnimal, aStar, findFactionSpawns } from './world.js';
-import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
+import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, NICKNAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
+import { installSystems, systemsNewDay, systemsHappyMod, systemsWorkMult, systemsSerialize, systemsRestore } from './systems/integrate.js';
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
@@ -99,6 +100,8 @@ export class Simulation {
     }
     // фракции
     this.spawnFactions();
+    // подсистемы (зима, границы) — ставятся последними: им нужен готовый мир
+    installSystems(this);
     this.addChronicle(`Основание поселения. ${ERAS[0].ru}, ${ERAS[0].years}.`);
     this.addLog('Поселение основано. Постройте Хижину — цели слева подскажут путь.');
   }
@@ -337,6 +340,9 @@ export class Simulation {
     // за 30🪙 +15, авария на АЭС −15). Копились в _happyBonus, но happiness()
     // их не читал — все эти события не меняли счастье ни на единицу.
     h += this._happyBonus || 0;
+    // Мёрзнущие недовольны раньше, чем начинают болеть: это первый сигнал игроку,
+    // что дров не хватит до весны.
+    h += systemsHappyMod(this);
     this._happy = Math.max(0, Math.min(100, Math.round(h)));
     return this._happy;
   }
@@ -347,7 +353,10 @@ export class Simulation {
 
   // ---------- Население ----------
   spawnVillager(x, y) {
-    const name = this.rng.pick(NAMES) + ' ' + this.rng.pick(['с', 'м', 'д', 'в', 'г', 'л']) + this.rng.pick(['а', 'о', 'и', 'ь', '']);
+    // Прежний генератор клеил к имени огрызок в две буквы — выходило «Цвета ви»
+    // и «Шана с». Берём настоящие прозвища: читается как имя человека, а не как
+    // мусор в строке.
+    const name = this.rng.pick(NAMES) + ' ' + this.rng.pick(NICKNAMES);
     this.villagers.push({
       name, x, y, tx: x, ty: y, age: this.rng.int(1800, 9000),
       job: 'idle', target: null, path: null, busy: 0, hp: 100, home: null,
@@ -486,7 +495,9 @@ export class Simulation {
   tickVillagers(dt) {
     const speed = MOVE_SPEED * (this.techs.has('wheel') ? 1.2 : 1);
     const happy = this._happy ?? this.happiness();
-    const happyMult = happy < 35 ? 0.7 : 1;
+    // Слёгшие от холода не выходят на работу — падение выработки видно сразу,
+    // ещё до первых похорон.
+    const happyMult = (happy < 35 ? 0.7 : 1) * systemsWorkMult(this);
     for (const v of this.villagers) {
       if (v.hp <= 0) continue;
       // житель на рабочем месте: производит непрерывно
@@ -629,7 +640,10 @@ export class Simulation {
     if (!t) return;
     const gather = this.globalMult('gather') * WEATHER[this.weather].gather;
     const happy = this.happiness();
-    const happyMult = happy < 35 ? 0.7 : 1;
+    // Ручной промысел — собирательство, охота, рубка — идёт через этот путь, а не
+    // через produceAt. Слёгшие обязаны и здесь приносить меньше, иначе половина
+    // экономики болезнь просто не замечает.
+    const happyMult = (happy < 35 ? 0.7 : 1) * systemsWorkMult(this);
     if (t.kind === 'build') {
       // Житель просто стоит на площадке; весь прогресс начисляется в
       // tickConstruction по игровому времени. Раньше здесь было
@@ -875,6 +889,9 @@ export class Simulation {
       this._happyBonus += this._happyBonus > 0 ? -1 : 1;
       if (Math.abs(this._happyBonus) < 1) this._happyBonus = 0;
     }
+    // Подсистемы — до общего сбора мёртвых: зима помечает замёрзших hp=0,
+    // и их убирает тот же фильтр, что и умерших от старости.
+    systemsNewDay(this);
     // старение и смерть
     for (const v of this.villagers) {
       v.age++;
@@ -1615,6 +1632,7 @@ export class Simulation {
       relations: this.relations, relFactors: this.relFactors, treaties: this.treaties, wars: this.wars, aiWars: this.aiWars,
       market: this.market, caravanTimer: this.caravanTimer,
       mission: this.mission, moonDone: this.moonDone, marsDone: this.marsDone,
+      sys: systemsSerialize(this),
       rngState: this.rng.getState(),
       log: this.log.slice(-80),
     };
@@ -1651,6 +1669,7 @@ export class Simulation {
     sim.treaties = data.treaties || []; sim.wars = data.wars || []; sim.aiWars = data.aiWars || [];
     sim.market = data.market || sim.market; sim.caravanTimer = data.caravanTimer ?? 15;
     sim.mission = data.mission; sim.moonDone = data.moonDone; sim.marsDone = data.marsDone;
+    systemsRestore(sim, data.sys);
     sim.log = data.log || [];
     for (const f of sim.factions) {
       if (!(f.id in sim.relations)) sim.relations[f.id] = 0;
