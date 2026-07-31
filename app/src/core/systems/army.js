@@ -372,6 +372,15 @@ function headcount(f) {
   return n;
 }
 
+// «Живая сила» без контр и рельефа: по ней меряется, насколько сторона побита.
+// Считать потери по головам нельзя: в смешанной армии первыми выбивает дешёвую
+// массу, и отряд с целыми рыцарями «бежал бы», потеряв обозную пехоту.
+function rawPower(f) {
+  let p = 0;
+  for (const [uid, n] of Object.entries(f.units)) if (n > 0) p += n * powerOf(uid, f.powerBonus);
+  return p;
+}
+
 // Урон раскладывается по стекам пропорционально численности (кто в строю —
 // тот и под ударом), а цена одной смерти = сила юнита × TOUGHNESS: рыцаря
 // выбить дороже, чем ополченца.
@@ -422,7 +431,7 @@ export function resolveBattle(a, b, ctx = {}, rng) {
   if (!rng) throw new Error('resolveBattle: нужен rng');
   const A = workForce(a, ctx.multA), B = workForce(b, ctx.multB);
   const tileA = ctx.tileA ?? TILE.GRASS, tileB = ctx.tileB ?? TILE.GRASS;
-  const startA = headcount(A), startB = headcount(B);
+  const startA = rawPower(A), startB = rawPower(B);
   const beforeA = { units: intCounts(A.units), engines: intCounts(A.engines) };
   const beforeB = { units: intCounts(B.units), engines: intCounts(B.engines) };
   // Пороги стойкости тянутся ДО первого раунда и всегда в одном порядке —
@@ -440,8 +449,8 @@ export function resolveBattle(a, b, ctx = {}, rng) {
     const dmgB = atkB * ROUND_RATE * rng.range(1 - ROUND_VAR, 1 + ROUND_VAR);
     applyDamage(B, dmgA);
     applyDamage(A, dmgB);
-    const lossA = startA > 0 ? 1 - headcount(A) / startA : 1;
-    const lossB = startB > 0 ? 1 - headcount(B) / startB : 1;
+    const lossA = startA > 0 ? 1 - rawPower(A) / startA : 1;
+    const lossB = startB > 0 ? 1 - rawPower(B) / startB : 1;
     const brokeA = headcount(A) <= 1e-6 || lossA >= routA;
     const brokeB = headcount(B) <= 1e-6 || lossB >= routB;
     if (brokeA || brokeB) {
@@ -473,8 +482,8 @@ export function resolveBattle(a, b, ctx = {}, rng) {
   loserAfter.engines = {};
   // Победитель тоже теряет машины — тем больше, чем тяжелее далась победа.
   const winnerLoss = winner === 'a'
-    ? (startA > 0 ? 1 - headcount(A) / startA : 0)
-    : (startB > 0 ? 1 - headcount(B) / startB : 0);
+    ? (startA > 0 ? 1 - rawPower(A) / startA : 0)
+    : (startB > 0 ? 1 - rawPower(B) / startB : 0);
   for (const [eid, n] of Object.entries({ ...winnerAfter.engines })) {
     let left = n;
     for (let i = 0; i < n; i++) if (rng.chance(winnerLoss * 0.5)) left--;
@@ -489,12 +498,12 @@ export function resolveBattle(a, b, ctx = {}, rng) {
     a: {
       before: beforeA, after: afterA,
       losses: diffCounts(beforeA.units, afterA.units),
-      lossFrac: startA > 0 ? 1 - headcount(A) / startA : 0,
+      lossFrac: startA > 0 ? 1 - rawPower(A) / startA : 0,
     },
     b: {
       before: beforeB, after: afterB,
       losses: diffCounts(beforeB.units, afterB.units),
-      lossFrac: startB > 0 ? 1 - headcount(B) / startB : 0,
+      lossFrac: startB > 0 ? 1 - rawPower(B) / startB : 0,
     },
     captured, destroyedEngines: destroyed,
   };
