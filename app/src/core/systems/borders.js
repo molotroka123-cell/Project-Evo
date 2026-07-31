@@ -287,6 +287,10 @@ function _ensureSize(state, w, h) {
   state.owners = fresh.owners; state.depth = fresh.depth;
   state.areas = fresh.areas; state.tiles = fresh.tiles;
   state.edges = []; state._acc = null; state._queue = null;
+  // Массивы обнулились — кэш обязан считаться протухшим. Без сброса version
+  // updateBorders увидит «состав не менялся» и оставит карту пустой навсегда
+  // (проявляется при загрузке сейва от мира другого размера).
+  state.version = -1; state.lastDay = -1;
 }
 
 function _acc(state, code) {

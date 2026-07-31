@@ -250,6 +250,7 @@ export function generateWorld2(seed, rng = null, opts = {}) {
   const st = pickStart(world, lm);
   world.startX = st.x; world.startY = st.y;
   if (opts.startArea !== false) { carveStartArea(world, st.x, st.y); refreshRivers(world); }
+  if (opts.protectStart !== false) protectStart(world, st.x, st.y);
   // Пересчёт после вырезания поляны: она могла соединить или рассечь массивы суши.
   lm = analyzeLandmasses(world);
   world.landmass = lm.map; world.landmasses = lm.list;
@@ -706,6 +707,25 @@ function refreshRivers(world) {
   }
   keep.sort((a, b) => b.len - a.len);
   world.rivers = keep;
+}
+
+// Стартовая долина пригодна для жизни — это правило ядра, а не поблажка:
+// generateWorld уже гарантирует там траву, лес, холм и гору. Если бы климат
+// говорил «пустыня», игрок начинал бы с фермами ×0.25 и −4 счастья, то есть
+// проигрывал бы по броску сида ещё до первого хода. Меняем только НЕПРИГОДНЫЕ
+// биомы поляны; тайга, тропики, степь и пойма остаются как есть — это уже игра.
+export function protectStart(world, cx, cy, r = 5) {
+  if (!world.biome) return 0;
+  let fixed = 0;
+  for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+    const i = idx(world, cx + dx, cy + dy);
+    if (i < 0) continue;
+    const b = world.biome[i];
+    if (b === BIOME.DESERT || b === BIOME.TUNDRA || (b === BIOME.ALPINE && world.tiles[i] !== TILE.MOUNTAIN)) {
+      world.biome[i] = BIOME.TEMPERATE; fixed++;
+    }
+  }
+  return fixed;
 }
 
 // Та же гарантированная стартовая поляна, что и в generateWorld: без неё

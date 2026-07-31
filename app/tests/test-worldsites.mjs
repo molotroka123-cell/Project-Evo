@@ -1,6 +1,7 @@
 // Headless-тесты модуля worldsites (U33 туман, U34 руины/лагеря, U36 выселки).
 // Запуск: node app/tests/test-worldsites.mjs
-import { WorldSites, FOG, SITE_DEFS, OUTPOST, SIGHT } from '../src/core/systems/worldsites.js';
+import { WorldSites, FOG, SITE_DEFS, OUTPOST, SIGHT, BANDIT } from '../src/core/systems/worldsites.js';
+import { Simulation } from '../src/core/simulation.js';
 import { generateWorld } from '../src/core/world.js';
 import { createRng, makeNoise2D } from '../src/core/rng.js';
 import { WALKABLE, TILE } from '../src/core/data.js';
@@ -100,18 +101,60 @@ t('лагерь: слабый штурм отбит, сильный уничто
 
 t('лагеря шлют налёты, разорённые — молчат', () => {
   const s = makeSites(42);
-  let raids = 0;
+  let raids = 0, firstDay = 0;
   for (let day = 1; day <= 400; day++) {
-    for (const ev of s.tickDay({ day, eraIndex: 2 })) if (ev.type === 'banditRaid') raids++;
+    for (const ev of s.tickDay({ day, eraIndex: 2 })) {
+      if (ev.type !== 'banditRaid') continue;
+      raids++; if (!firstDay) firstDay = day;
+      if (!ev.textLose || !ev.textWin) throw new Error('нет русских строк события');
+    }
   }
-  if (raids < 5) throw new Error('налётов почти нет: ' + raids);
+  if (raids < 3) throw new Error('налётов почти нет: ' + raids);
+  if (firstDay < BANDIT.firstRaidDay) throw new Error('налёт до конца форы: день ' + firstDay);
   for (const c of s.liveCamps()) c.destroyed = true;
   let after = 0;
   for (let day = 401; day <= 800; day++) {
     for (const ev of s.tickDay({ day, eraIndex: 2 })) if (ev.type === 'banditRaid') after++;
   }
   if (after !== 0) throw new Error('разорённые лагеря продолжают налёты: ' + after);
-  console.log(`   за 400 дней: ${raids} налётов от ${s.sites.filter(p => p.kind === 'camp').length} лагерей`);
+  console.log(`   за 400 дней: ${raids} налётов от ${s.sites.filter(p => p.kind === 'camp').length} лагерей, первый на день ${firstDay}`);
+});
+
+t('пресс разбойников ограничен СУММАРНО, а не на лагерь', () => {
+  // Регрессия на реальную поломку: восемь лагерей с независимыми таймерами
+  // давали налёт раз в восемь дней и выкашивали племя. Проверяем на сидах,
+  // где лагерей больше всего, что суммарная частота держится в рамках.
+  for (const seed of [1, 7, 13, 42, 99, 2024]) {
+    const s = makeSites(seed);
+    const camps = s.sites.filter(p => p.kind === 'camp').length;
+    if (camps > 6) throw new Error(`сид ${seed}: ${camps} лагерей — слишком много`);
+    const days = [];
+    for (let day = 1; day <= 1000; day++) {
+      for (const ev of s.tickDay({ day, eraIndex: 4 })) if (ev.type === 'banditRaid') days.push(day);
+    }
+    for (let i = 1; i < days.length; i++) {
+      if (days[i] - days[i - 1] < BANDIT.globalGap) {
+        throw new Error(`сид ${seed}: два налёта подряд через ${days[i] - days[i - 1]} дн.`);
+      }
+    }
+    const maxRaids = Math.ceil((1000 - BANDIT.firstRaidDay) / BANDIT.globalGap);
+    if (days.length > maxRaids) throw new Error(`сид ${seed}: ${days.length} налётов при потолке ${maxRaids}`);
+  }
+});
+
+t('кража ограничена долей запасов — малое племя не добивается', () => {
+  const s = makeSites(42);
+  let ev = null;
+  for (let day = 1; day <= 400 && !ev; day++) {
+    ev = s.tickDay({ day, eraIndex: 2 }).find(e => e.type === 'banditRaid') || null;
+  }
+  if (!ev) throw new Error('за 400 дней ни одного налёта');
+  if (!(ev.stealPct > 0 && ev.stealPct < 1)) throw new Error('нет доли кражи');
+  // Формула из блока INTEGRATION: у нищего племени уносят копейки, у богатого — потолок.
+  const poor = Math.min(ev.steal, 20 * ev.stealPct);
+  const rich = Math.min(ev.steal, 5000 * ev.stealPct);
+  if (poor > 5) throw new Error('у голодающих отбирают слишком много: ' + poor);
+  if (rich !== ev.steal) throw new Error('у богатых кража не упирается в потолок');
 });
 
 // ---------------------------------------------------------------- U33
@@ -370,6 +413,73 @@ t('таблица обзора покрывает здания и не даёт 
   for (const o of obs) if (!(o.r > 0)) throw new Error('нулевой радиус обзора');
   const withOptics = s.observers([{ x: 10, y: 10, id: 'hut', done: true }], [], new Set(['optics']));
   if (withOptics[0].r !== SIGHT.building + SIGHT.opticsBonus) throw new Error('оптика не расширяет обзор');
+});
+
+// ------------------------------------------------- интеграция с ядром
+// Модуль подмешивается к настоящей Simulation ровно теми вызовами, что описаны
+// в блоке INTEGRATION. Чужие файлы при этом не правятся — обёртки живут в тесте.
+function wire(seed) {
+  const s = new Simulation(seed);
+  s.sites = new WorldSites(s.world, s.rng, { seed: s.seed });
+  const origDay = s.onNewDay.bind(s);
+  s.onNewDay = () => {
+    for (const ev of s.sites.tickDay({ day: s.day, eraIndex: s.eraIndex })) {
+      if (ev.type === 'banditRaid') {
+        const mine = s.armyPower() + s.defensePower();
+        if (mine >= ev.power) { s.repelled++; s.res.gold += ev.power; }
+        else s.res.food = Math.max(0, s.res.food - Math.min(ev.steal, s.res.food * ev.stealPct));
+      } else if (ev.type === 'convoyArrived') {
+        for (const [r, v] of Object.entries(ev.cargo)) s.res[r] = Math.min(s.resCap[r] || 99999, s.res[r] + v);
+      }
+    }
+    origDay();
+  };
+  const origStep = s.tickStep.bind(s);
+  s.tickStep = (dt) => { origStep(dt); s.sites.updateFog(s.sites.observers(s.buildings, s.villagers, s.techs)); };
+  return s;
+}
+
+t('баланс не поехал: партия с модулем живёт не хуже базовой', () => {
+  // Именно этот тест поймал реальную поломку — первая версия налётов вымаривала
+  // племя, которое без модуля доживало до 400-го дня вдесятером.
+  const open = (s) => {
+    s.execCommand('give wood 200'); s.execCommand('give food 300');
+    s.placeBuilding('hut', 44, 44); s.placeBuilding('lumber', 46, 42);
+    for (let i = 0; i < 800; i++) s.tick(0.5);
+  };
+  for (const seed of [42, 7]) {
+    const base = new Simulation(seed); open(base);
+    const mod = wire(seed); open(mod);
+    if (mod.villagers.length < 3) throw new Error(`сид ${seed}: с модулем племя вымерло (${mod.villagers.length})`);
+    // Небольшая просадка — это и есть цена новой угрозы; обвал вдвое — поломка.
+    if (mod.villagers.length < Math.ceil(base.villagers.length / 2)) {
+      throw new Error(`сид ${seed}: население ${mod.villagers.length} против базовых ${base.villagers.length}`);
+    }
+    console.log(`   сид ${seed}: база ${base.villagers.length} жит. / с модулем ${mod.villagers.length} жит., `
+      + `разведано ${(mod.sites.exploredFraction() * 100).toFixed(0)}%`);
+  }
+});
+
+t('интеграция: туман открывается по ходу игры, сейв ядра остаётся круговым', () => {
+  const s = wire(42);
+  s.execCommand('give wood 200'); s.execCommand('give food 300');
+  for (let i = 0; i < 400; i++) s.tick(0.5);
+  const explored = s.sites.exploredFraction();
+  if (explored <= 0.01) throw new Error('туман не открывается игрой: ' + explored);
+  if (explored > 0.6) throw new Error('карта открылась сама собой: ' + explored);
+  if (s.sites.knownSites().length === 0) throw new Error('игрок не нашёл ни одной точки за 200 дней');
+  if (s.sites.knownSites().length === s.sites.sites.length) throw new Error('видны все точки сразу — туман не фильтрует');
+  // Поле sites кладётся в обычный сейв ядра и переживает круг целиком.
+  const save = { ...s.serialize(), sites: s.sites.serialize() };
+  const json = JSON.stringify(save);
+  const r = Simulation.deserialize(JSON.parse(json));
+  if (!r.ok) throw new Error(r.reason);
+  r.sim.sites = new WorldSites(r.sim.world, r.sim.rng, { seed: r.sim.seed });
+  r.sim.sites.deserialize(JSON.parse(json).sites);
+  const again = JSON.stringify({ ...r.sim.serialize(), sites: r.sim.sites.serialize() });
+  if (again !== json) throw new Error('сейв ядра вместе с модулем не круговой');
+  console.log(`   день ${s.day}: разведано ${(explored * 100).toFixed(1)}%, найдено точек `
+    + `${s.sites.knownSites().length}/${s.sites.sites.length}, сейв ${(json.length / 1024).toFixed(1)} КБ`);
 });
 
 console.log(`\n=== ${pass} OK / ${fail} FAIL ===`);

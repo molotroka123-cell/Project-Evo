@@ -11,7 +11,7 @@ import {
   BIOME, BIOMES, biomeAt, biomeName, yieldMult, gatherMult, biomeHappy,
   irrigation, riverAt, isRiver, needsBridge, moveMult, riverPath,
   sameLandmass, landmassAt, createWorldgenState, bridgeCost, buildBridge, hasBridge,
-  serialize, deserialize, describeTile, temperature, moisture,
+  serialize, deserialize, describeTile, temperature, moisture, protectStart,
   LAND_TARGET, CONTINENT_MIN, MIN_RIVER_LEN, RIVER_BRIDGE_FLOW, RIVER_FORD_SLOW,
 } from '../src/core/systems/worldgen2.js';
 
@@ -322,6 +322,22 @@ t('enrichWorld не меняет тайлы старой карты', () => {
     ', реки ' + st.rivers + ' (Σ' + st.riverTiles + ' клеток), суша ' + pct(st.landPct) + ', ' + w.enrichMs.toFixed(1) + ' мс');
   ok(st.rivers >= 3, 'рек на старой карте ' + st.rivers);
   ok(st.continents >= 1, 'нет материка');
+});
+
+t('стартовая долина пригодна для жизни на всех 10 сидах', () => {
+  const bad = [BIOME.DESERT, BIOME.TUNDRA];
+  for (const { w } of rows) {
+    const b = biomeAt(w, w.startX, w.startY);
+    ok(!bad.includes(b), 'сид ' + w.seed + ': старт в биоме ' + BIOMES[b].ru);
+    ok(yieldMult(w, w.startX, w.startY, 'food') >= 1, 'сид ' + w.seed + ': поля на старте ×' + yieldMult(w, w.startX, w.startY, 'food'));
+  }
+  // На старой карте старт жёстко в центре — там климат мог оказаться каким угодно.
+  const rng = createRng(42); rng.noise = makeNoise2D(createRng(42 ^ 0x9e3779b9));
+  const old = enrichWorld(generateWorld(42, rng), 42);
+  ok(!bad.includes(biomeAt(old, old.startX, old.startY)), 'старая карта: старт в ' + biomeName(old, old.startX, old.startY));
+  const raw = enrichWorld(generateWorld(42, (() => { const r = createRng(42); r.noise = makeNoise2D(createRng(42 ^ 0x9e3779b9)); return r; })()), 42, { protectStart: false });
+  console.log('  старт на старой карте: без защиты «' + biomeName(raw, raw.startX, raw.startY) +
+    '», с защитой «' + biomeName(old, old.startX, old.startY) + '»');
 });
 
 t('enrichWorld детерминирован', () => {
