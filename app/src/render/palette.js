@@ -137,8 +137,15 @@ export const WEATHER_TINT = {
   heat:  { mul: 1.05, tint: [255, 208, 138, 0.14], desat: 0.00 },
 };
 
-// Утилита: '#rrggbb' → [r,g,b]
+// Утилита: '#rrggbb' → [r,g,b].
+// Принимает и 'rgb(r,g,b)': shade() возвращает именно такую строку, и её же
+// нередко передают обратно в shade/mixHex. Раньше на этом получался NaN, а
+// вместе с ним чёрные трубы, башни замка, АЭС и казна — фон вместо материала.
 export function hex2rgb(h) {
+  if (h[0] !== '#') {
+    const m = h.match(/-?\d+/g);
+    return m ? [+m[0], +m[1], +m[2]] : [0, 0, 0];
+  }
   const v = parseInt(h.slice(1), 16);
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
@@ -162,4 +169,22 @@ export function hash2(x, y) {
   let h = (x * 374761393 + y * 668265263) | 0;
   h = (h ^ (h >>> 13)) * 1274126177 | 0;
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// Гладкий шум: решётка hash2 со сглаженной билинейной интерполяцией.
+// Нужен там, где поклеточная пестрота читается как шахматка, а хочется
+// природных пятен — выгоревшая трава, проплешины, разнотон породы.
+export function noise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = hash2(xi, yi), b = hash2(xi + 1, yi);
+  const c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
+  const top = a + (b - a) * sx, bot = c + (d - c) * sx;
+  return top + (bot - top) * sy;
+}
+
+// Две октавы — крупные пятна плюс мелкая фактура.
+export function fbm2(x, y) {
+  return noise2(x * 0.13, y * 0.13) * 0.64 + noise2(x * 0.42, y * 0.42) * 0.36;
 }

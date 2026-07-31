@@ -5,7 +5,7 @@ import { TILE, ERAS, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, SEASONS, WEATHER
 import { tileAt } from '../core/world.js';
 import { Terrain } from './terrain.js';
 import { SpriteCache } from './sprites.js';
-import { PeopleSprites, professionOf, lookOf } from './people.js';
+import { PeopleSprites, AnimalSprites, professionOf, lookOf } from './people.js';
 import { ArtPack } from './artpack.js';
 import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } from './quality.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
@@ -33,6 +33,7 @@ export class Renderer {
     this.terrain = new Terrain(this.quality);
     this.sprites = new SpriteCache(this.quality);
     this.people = new PeopleSprites(this.quality);
+    this.beasts = new AnimalSprites(this.quality);
     // Состояние анимации жителей живёт СНАРУЖИ симуляции: рендер читает
     // положение и сам считает направление и фазу шага.
     this.vstate = new WeakMap();
@@ -56,6 +57,7 @@ export class Renderer {
     this.terrain.setQuality(this.quality);
     this.sprites.setQuality(this.quality);
     this.people.setQuality(this.quality);
+    this.beasts.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
   }
@@ -201,6 +203,7 @@ export class Renderer {
       this.terrain.setQuality(this.quality);
       this.sprites.setQuality(this.quality);
       this.people.setQuality(this.quality);
+      this.beasts.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
@@ -279,14 +282,18 @@ export class Renderer {
   }
 
   drawAnimal(ctx, sx, sy, z, a) {
-    ctx.fillStyle = a.kind === 'mammoth' ? '#6b4f35' : '#a9825a';
-    const r = (a.kind === 'mammoth' ? 0.32 : 0.2) * z;
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    ctx.beginPath(); ctx.ellipse(sx + r * 0.3, sy + r * 0.75, r * 0.9, r * 0.28, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = a.kind === 'mammoth' ? '#6b4f35' : '#a9825a';
-    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath(); ctx.arc(sx + r * 0.5, sy - r * 0.4, r * 0.3, 0, 7); ctx.fill();
+    // Звери используют тот же механизм, что и жители: печёный лист и фаза
+    // шага от пройденного пути.
+    const st = this.villagerState(a);
+    const sh = this.beasts.sheet(a.kind);
+    const h = Math.max(10, z * (a.kind === 'mammoth' ? 1.05 : 0.68));
+    const w = h * (sh.fw / sh.fh);
+    const frame = st.still > 2 ? 0 : ((st.walk / 0.7 * 2) | 0) % 2;
+    const dir = st.dir === 1 ? 1 : 0;   // спрайт двусторонний: влево / вправо
+    ctx.drawImage(
+      sh.cv, frame * sh.fw, dir * sh.fh, sh.fw, sh.fh,
+      Math.round(sx - w / 2), Math.round(sy - h * 0.93), Math.round(w), Math.round(h),
+    );
   }
 
   drawFactionSettlement(ctx, sx, sy, z, f, s, sim) {
@@ -380,8 +387,10 @@ export class Renderer {
     }
 
     const spr = this.sprites.building(b.id, def, e, b.size || 1);
-    const dw = size, dh = size * spr.hFact;
-    const dx = sx, dy = sy + size - dh;
+    // Чуть шире клетки: постройка ровно в тайл смотрится игрушечной рядом с
+    // жителем, а свесы крыш и трубы всё равно выходят за пятно застройки.
+    const dw = size * 1.16, dh = dw * spr.hFact;
+    const dx = sx - size * 0.08, dy = sy + size - dh;
 
     // Тень падает по солнцу: утром и вечером длинная, в полдень короткая.
     if (this.quality.shadows) {
@@ -672,9 +681,16 @@ export class Renderer {
 
   drawVillager(ctx, sx, sy, z, v, era) {
     const st = this.villagerState(v);
-    const sh = this.people.sheet(era, professionOf(v), lookOf(v));
-    // Житель ростом чуть меньше тайла: крупнее — «великаны» на фоне хижин.
-    const h = Math.max(10, z * 0.80);
+    // Лист кэшируем на самом жителе: сборка ключа и поиск по Map на каждого
+    // из сотни жителей каждый кадр — лишний мусор в горячем цикле.
+    const prof = professionOf(v);
+    if (st.sheet === undefined || st.prof !== prof || st.era !== era || st.gen !== this.people.gen) {
+      st.prof = prof; st.era = era; st.gen = this.people.gen;
+      st.sheet = this.people.sheet(era, prof, lookOf(v));
+    }
+    const sh = st.sheet;
+    // Житель заметно ниже тайла: вровень с хижиной он смотрится великаном.
+    const h = Math.max(9, z * 0.60);
     const w = h * (sh.fw / sh.fh);
     // цикл шага — 0.62 тайла на два шага
     const frame = st.still > 2 ? 0 : ((st.walk / 0.62 * 4) | 0) % 4;

@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Просмотр спрайтов построек</title>
+<style>
+  body { margin: 0; background: #5d8a48; color: #fff; font: 11px sans-serif; }
+  .grid { display: flex; flex-wrap: wrap; }
+  .cell { width: 150px; text-align: center; padding: 2px; }
+  .cell div { opacity: .95; }
+  h2 { margin: 8px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="out"></div>
+<script type="module">
+import { SpriteCache } from '../../app/src/render/sprites.js';
+import { QUALITY } from '../../app/src/render/quality.js';
+import { BUILDINGS, BUILDING_ERA_IDX } from '../../app/src/core/data.js';
+
+const sc = new SpriteCache(QUALITY.ultra);
+const out = document.getElementById('out');
+// показываем каждое здание в его собственную эпоху и в поздней
+for (const [era, title] of [[-1, 'В СВОЮ ЭПОХУ'], [8, 'В ЦИФРОВУЮ ЭПОХУ']]) {
+  const h = document.createElement('h2');
+  h.textContent = title;
+  out.appendChild(h);
+  const grid = document.createElement('div');
+  grid.className = 'grid';
+  for (const id of Object.keys(BUILDINGS)) {
+    const own = BUILDING_ERA_IDX[id] || 0;
+    const e = era < 0 ? own : Math.max(own, Math.min(9, Math.min(era, own + 3)));
+    const s = sc.building(id, BUILDINGS[id], e, BUILDINGS[id].size || 1);
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    const cv = document.createElement('canvas');
+    const k = 140 / s.cv.width;
+    cv.width = 140; cv.height = Math.round(s.cv.height * k);
+    const c = cv.getContext('2d');
+    c.drawImage(s.cv, 0, 0, cv.width, cv.height);
+    cell.appendChild(cv);
+    const lbl = document.createElement('div');
+    lbl.textContent = `${id} · э${e}`;
+    cell.appendChild(lbl);
+    grid.appendChild(cell);
+  }
+  out.appendChild(grid);
+}
+</script>
+</body>
+</html>

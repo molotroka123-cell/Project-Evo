@@ -100,6 +100,10 @@ const SHOTS = {
   town:       { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, build: 'noon' },
   town_night: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, build: 'night' },
   town_phone: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 390, height: 844 }, mobile: true, build: 'noon' },
+  // Чистая карта в полдень: кадр для приёмки местности. Время суток фиксируем,
+  // иначе снимки отличаются тоном заката и сравнивать их бесполезно.
+  map:        { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, noon: true, zoom: 1.1 },
+  map_far:    { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, noon: true, zoom: 0.6 },
   // Крупный план жителей — главный кадр для приёмки человечков.
   people:     { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, people: 0 },
   people_mid: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, people: 4 },
@@ -146,7 +150,6 @@ for (const name of names) {
   // откатывается на процедурные спрайты. Такие 404 считаем отдельно — иначе
   // они топят в шуме настоящие ошибки, ради которых эта проверка и заведена.
   let artMiss = 0;
-  page.on('requestfailed', () => { /* сеть в оффлайне не используется */ });
   page.on('response', r => { if (r.status() === 404 && /assets\/sprites\/buildings_/.test(r.url())) artMiss++; });
   page.on('console', m => { if (m.type() === 'error') { log.push(m.text()); } });
   page.on('pageerror', e => { log.push('PAGEERROR ' + e.message); errors++; });
@@ -160,6 +163,18 @@ for (const name of names) {
   if (cfg.people !== undefined) {
     await page.evaluate(BUILD_PEOPLE, cfg.people);
     await page.waitForTimeout(2500);   // дать жителям разойтись по работам
+    // День успевает утечь в ночь — возвращаем полдень уже перед самым кадром.
+    await page.evaluate(() => { window.__frontier.sim.dayTime = 0.5; });
+    await page.waitForTimeout(120);
+  }
+  if (cfg.noon) {
+    await page.evaluate((z) => {
+      const F = window.__frontier;
+      F.sim.dayTime = 0.5;
+      F.sim.paused = true;
+      if (z) F.renderer.cam.zoom = z;
+    }, cfg.zoom);
+    await page.waitForTimeout(500);
   }
   const file = join(OUTDIR, `${name}.png`);
   await page.screenshot({ path: file });

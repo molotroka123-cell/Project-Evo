@@ -13,17 +13,20 @@ import { ERA_PALETTE, shade, mixHex, hash2 } from './palette.js';
 // иначе все 55 построек сводятся к шести одинаковым «категориям».
 const ARCH = {
   campfire: 'campfire', hut: 'hut', forager: 'lean', lumber: 'shed', quarry: 'quarry',
-  story_fire: 'lean', hunter_lodge: 'tent', pasture: 'field', farm: 'field', granary: 'silo',
+  story_fire: 'storyfire', hunter_lodge: 'tent', pasture: 'field', farm: 'field', granary: 'silo',
   mine: 'mineshaft', smithy: 'forge', market: 'stalls', stone_house: 'house', palisade: 'wall',
   barracks: 'barracks', armory: 'forge', treasury: 'vault', port: 'dock', aqueduct: 'arches',
   temple: 'columned', clinic: 'house', amphitheater: 'amphi', academy: 'columned', castle: 'keep',
   university: 'columned', mill: 'mill', guild_hall: 'shed', bank: 'columned', stone_walls: 'wall',
-  press: 'shed', observatory: 'dome', shipyard: 'dock', foundry: 'factory', workshop: 'shed',
-  train_station: 'shed', factory: 'factory', sewers: 'flat', stock_exchange: 'columned',
-  power_plant: 'factory', lab: 'house', apartment: 'highrise', media_tower: 'tower',
-  hospital: 'house', airport: 'flat', npp: 'reactor', datacenter: 'flat', solar: 'solar',
-  robo_factory: 'factory', biolab: 'dome', skyscraper: 'highrise', ai_core: 'dome',
+  press: 'shed', observatory: 'dome', shipyard: 'shipyard', foundry: 'factory', workshop: 'shed',
+  train_station: 'shed', factory: 'factory', sewers: 'sewers', stock_exchange: 'columned',
+  power_plant: 'factory', lab: 'lab', apartment: 'highrise', media_tower: 'tower',
+  hospital: 'house', airport: 'airport', npp: 'reactor', datacenter: 'flat', solar: 'solar',
+  robo_factory: 'factory', biolab: 'dome', skyscraper: 'highrise', ai_core: 'aicore',
   fusion_reactor: 'reactor', spaceport: 'pad', spire: 'spire',
+  // Склады раньше не имели своего архетипа и рисовались обычным домом:
+  // три разных здания выглядели одной хижиной.
+  woodshed: 'woodpile', stoneyard: 'stonepile', depot: 'warehouse',
 };
 
 export class SpriteCache {
@@ -62,10 +65,26 @@ function bake(id, def, era, sizeTiles, detail) {
   const arch = ARCH[id] || 'house';
   // «пол» спрайта: низ тайла. Всё, что выше, — объём здания.
   const groundY = H - W * 0.16;
-  const ctx = { c, gc, W, H, groundY, pal, era, id, detail, seed: hash2(id.length * 7 + era, W) };
 
-  plate(ctx);
+  // Само здание рисуется в отдельный холст: по нему печётся тёмный контур.
+  // Без контура постройка сливается с травой и крышами соседей, а с ним даже
+  // мелкий спрайт читается силуэтом — это главное, что отличает нарисованный
+  // арт от «квадратиков».
+  const body = document.createElement('canvas');
+  body.width = W; body.height = H;
+  const bc = body.getContext('2d');
+  // Мягкий слой: зарево огня, дым, ореолы. Обводить их нельзя — полупрозрачный
+  // градиент превращается в чёрный ком, — поэтому они кладутся ПОСЛЕ обводки.
+  const soft = document.createElement('canvas');
+  soft.width = W; soft.height = H;
+  const fc = soft.getContext('2d');
+  const ctx = { c: bc, gc, soft: fc, W, H, groundY, pal, era, id, detail, seed: hash2(id.length * 7 + era, W) };
+
+  plate({ c, W, groundY });
   (DRAW[arch] || DRAW.house)(ctx);
+  strokeOutline(c, body, Math.max(1, Math.round(W / 100)));
+  c.drawImage(body, 0, 0);
+  c.drawImage(soft, 0, 0);
 
   // Чёрный силуэт для тени печётся здесь же. Считать его в кадре через
   // ctx.filter='brightness(0)' нельзя: фильтры Canvas2D чудовищно медленные
@@ -84,6 +103,66 @@ function bake(id, def, era, sizeTiles, detail) {
 // ---------------------------------------------------------------------------
 // Примитивы
 // ---------------------------------------------------------------------------
+
+// Тёмная обводка силуэта: тот же приём, что у спрайтов жителей.
+function strokeOutline(c, body, k) {
+  const sil = document.createElement('canvas');
+  sil.width = body.width; sil.height = body.height;
+  const sc = sil.getContext('2d');
+  sc.drawImage(body, 0, 0);
+  sc.globalCompositeOperation = 'source-in';
+  sc.fillStyle = 'rgba(26,20,16,0.8)';
+  sc.fillRect(0, 0, sil.width, sil.height);
+  for (const [dx, dy] of [[-k, 0], [k, 0], [0, -k], [0, k], [-k, -k], [k, -k], [-k, k], [k, k]]) {
+    c.drawImage(sil, dx, dy);
+  }
+}
+
+// Фактура стены по эпохе: брёвна → камень → кирпич → панели.
+// Плоская заливка — главный признак «программистской» графики, а несколько
+// линий поверх коробки уже читаются как материал.
+function wallTex(c, x, y, w, h, era, col) {
+  const dark = shade(col, -0.18), light = shade(col, 0.14);
+  c.save();
+  c.beginPath(); c.rect(x, y, w, h); c.clip();
+  if (era <= 1) {
+    // горизонтальные брёвна
+    c.strokeStyle = dark; c.lineWidth = Math.max(1, h * 0.035);
+    for (let i = 1; i < 5; i++) {
+      c.beginPath(); c.moveTo(x, y + h * i / 5); c.lineTo(x + w, y + h * i / 5); c.stroke();
+    }
+    c.strokeStyle = light; c.lineWidth = Math.max(1, h * 0.02);
+    for (let i = 1; i < 5; i++) {
+      c.beginPath(); c.moveTo(x, y + h * i / 5 + h * 0.03); c.lineTo(x + w, y + h * i / 5 + h * 0.03); c.stroke();
+    }
+  } else if (era <= 5) {
+    // каменная/кирпичная кладка вразбежку
+    const rows = 5, rh = h / rows;
+    c.strokeStyle = dark; c.lineWidth = Math.max(1, h * 0.018);
+    for (let r = 1; r < rows; r++) {
+      c.beginPath(); c.moveTo(x, y + r * rh); c.lineTo(x + w, y + r * rh); c.stroke();
+    }
+    for (let r = 0; r < rows; r++) {
+      const off = (r % 2) * w * 0.13;
+      for (let i = 0; i < 4; i++) {
+        const bx = x + off + w * (0.26 * i);
+        if (bx <= x || bx >= x + w) continue;
+        c.beginPath(); c.moveTo(bx, y + r * rh); c.lineTo(bx, y + (r + 1) * rh); c.stroke();
+      }
+    }
+  } else {
+    // панельные швы
+    c.strokeStyle = 'rgba(255,255,255,0.12)'; c.lineWidth = Math.max(1, h * 0.018);
+    for (let i = 1; i < 4; i++) {
+      c.beginPath(); c.moveTo(x + w * i / 4, y); c.lineTo(x + w * i / 4, y + h); c.stroke();
+    }
+    c.strokeStyle = 'rgba(0,0,0,0.16)';
+    for (let i = 1; i < 3; i++) {
+      c.beginPath(); c.moveTo(x, y + h * i / 3); c.lineTo(x + w, y + h * i / 3); c.stroke();
+    }
+  }
+  c.restore();
+}
 
 // Утоптанная площадка под зданием — «сажает» его на землю.
 function plate({ c, W, groundY }) {
@@ -135,9 +214,28 @@ function gable(c, x, y, w, d, rise, col) {
   c.moveTo(x, y); c.lineTo(x + w, y);
   c.lineTo(x + w / 2 + d, y - d * 0.55 - rise); c.lineTo(x + w / 2, y - rise * 0.55);
   c.closePath(); c.fill();
+  // черепица: ряды вдоль ската. Голая заливка крыши — самая заметная примета
+  // «нарисовано кодом», и лечится она четырьмя линиями.
+  c.save();
+  c.beginPath();
+  c.moveTo(x, y); c.lineTo(x + w, y);
+  c.lineTo(x + w / 2 + d, y - d * 0.55 - rise); c.lineTo(x + w / 2, y - rise * 0.55);
+  c.closePath(); c.clip();
+  c.strokeStyle = shade(col, -0.28); c.lineWidth = Math.max(1, w * 0.014);
+  for (let i = 1; i < 4; i++) {
+    const k = i / 4;
+    c.beginPath();
+    c.moveTo(x + (w / 2) * k, y - rise * 0.55 * k);
+    c.lineTo(x + w - (w / 2 - d) * k, y - (d * 0.55 + rise) * k);
+    c.stroke();
+  }
+  c.restore();
   // конёк
-  c.strokeStyle = shade(col, -0.35); c.lineWidth = Math.max(1, w * 0.02);
+  c.strokeStyle = shade(col, -0.35); c.lineWidth = Math.max(1, w * 0.025);
   c.beginPath(); c.moveTo(x + w / 2, y - rise * 0.55); c.lineTo(x + w / 2 + d, y - d * 0.55 - rise); c.stroke();
+  // свес крыши — постройка перестаёт быть голой коробкой
+  c.fillStyle = shade(col, -0.12);
+  c.fillRect(x - w * 0.04, y - w * 0.012, w * 1.08, w * 0.028);
 }
 
 // Окно + запись в карту свечения (ночью подсвечивается).
@@ -206,6 +304,7 @@ const DRAW = {
     const h = W * (era >= 6 ? 0.52 : 0.38);
     const y = groundY - h;
     box(c, x, y, w, h, d, pal.wall);
+    if (detail >= 1) wallTex(c, x, y, w, h, era, pal.wall);
     if (era >= 8) {
       // плоская кровля со светящейся кромкой
       c.fillStyle = pal.trim;
@@ -269,9 +368,10 @@ const DRAW = {
   },
 
   shed(ctx) {
-    const { c, gc, W, groundY, pal, detail } = ctx;
+    const { c, gc, W, groundY, pal, era, detail } = ctx;
     const w = W * 0.74, x = (W - w) / 2, d = W * 0.15, h = W * 0.34, y = groundY - h;
     box(c, x, y, w, h, d, pal.wall);
+    if (detail >= 1) wallTex(c, x, y, w, h, era, pal.wall);
     // односкатная крыша
     c.fillStyle = shade(pal.roof, 0.12);
     c.beginPath();
@@ -297,11 +397,11 @@ const DRAW = {
     // горн: светится и днём
     c.fillStyle = '#2a1a12';
     c.fillRect(x + w * 0.16, groundY - h * 0.5, w * 0.3, h * 0.5);
-    const g = c.createRadialGradient(x + w * 0.31, groundY - h * 0.24, 0, x + w * 0.31, groundY - h * 0.24, w * 0.2);
+    const g = ctx.soft.createRadialGradient(x + w * 0.31, groundY - h * 0.24, 0, x + w * 0.31, groundY - h * 0.24, w * 0.2);
     g.addColorStop(0, 'rgba(255,190,90,0.95)');
     g.addColorStop(1, 'rgba(255,90,20,0)');
-    c.fillStyle = g;
-    c.fillRect(x + w * 0.1, groundY - h * 0.6, w * 0.45, h * 0.6);
+    ctx.soft.fillStyle = g;
+    ctx.soft.fillRect(x + w * 0.1, groundY - h * 0.6, w * 0.45, h * 0.6);
     gc.fillStyle = '#ff9b3c';
     gc.fillRect(x + w * 0.18, groundY - h * 0.45, w * 0.26, h * 0.42);
     if (detail >= 1) {
@@ -464,9 +564,10 @@ const DRAW = {
   },
 
   barracks(ctx) {
-    const { c, gc, W, groundY, pal, detail } = ctx;
+    const { c, gc, W, groundY, pal, era, detail } = ctx;
     const w = W * 0.8, x = (W - w) / 2, d = W * 0.16, h = W * 0.36, y = groundY - h;
     box(c, x, y, w, h, d, pal.wall);
+    if (detail >= 1) wallTex(c, x, y, w, h, era, pal.wall);
     gable(c, x, y, w, d, W * 0.2, pal.roof);
     door(c, x + w * 0.42, groundY - h * 0.5, w * 0.17, h * 0.5, pal);
     win(c, gc, x + w * 0.12, y + h * 0.24, w * 0.13, h * 0.22, pal);
@@ -697,24 +798,47 @@ const DRAW = {
   },
 
   highrise(ctx) {
-    const { c, gc, W, groundY, pal, id } = ctx;
+    const { c, gc, W, groundY, pal, id, era, detail } = ctx;
     const tall = id === 'skyscraper';
     const w = W * (tall ? 0.44 : 0.56), x = (W - w) / 2, d = W * 0.14;
     const h = W * (tall ? 1.0 : 0.66), y = groundY - h;
     box(c, x, y, w, h, d, pal.wall);
+    if (detail >= 1 && era < 7) wallTex(c, x, y, w, h, era, pal.wall);
+    // Межэтажные пояса: без них башня — просто таблица окон.
+    c.fillStyle = shade(pal.wall, -0.14);
     const rows = tall ? 9 : 6, cols = 3;
+    for (let r = 0; r < rows; r++) {
+      c.fillRect(x, y + h * (0.02 + r * (0.9 / rows)), w, h * 0.012);
+    }
     for (let r = 0; r < rows; r++) {
       for (let i = 0; i < cols; i++) {
         // часть окон тёмная — дом выглядит жилым, а не таблицей
-        const lit = hash2(r * 13 + i, id.length) > 0.35;
-        win(c, gc, x + w * (0.12 + i * 0.28), y + h * (0.06 + r * (0.9 / rows)), w * 0.18, h * (0.55 / rows), pal, lit);
+        const k = hash2(r * 13 + i, id.length);
+        const lit = k > 0.35;
+        const wx = x + w * (0.12 + i * 0.28), wy = y + h * (0.06 + r * (0.9 / rows));
+        const ww = w * 0.18, wh = h * (0.55 / rows);
+        win(c, gc, wx, wy, ww, wh, pal, lit);
+        // разнотон стекла: одинаковые квадраты выдают процедурность мгновенно
+        c.fillStyle = `rgba(${lit ? '255,236,190' : '20,26,36'},${0.10 + k * 0.22})`;
+        c.fillRect(wx, wy, ww, wh);
+        if (detail >= 2 && k > 0.8) {
+          // редкие занавески/жалюзи
+          c.fillStyle = 'rgba(230,226,210,0.5)';
+          c.fillRect(wx, wy, ww, wh * 0.34);
+        }
       }
     }
     c.fillStyle = shade(pal.roof, -0.1);
     c.fillRect(x - w * 0.04, y - W * 0.03, w + w * 0.08 + d * 0.7, W * 0.035);
     if (tall) {
+      // технический этаж и мачта
+      box(c, x + w * 0.24, y - W * 0.12, w * 0.5, W * 0.1, d * 0.5, shade(pal.wall, -0.08));
       c.strokeStyle = pal.trim; c.lineWidth = Math.max(1, W * 0.012);
-      c.beginPath(); c.moveTo(x + w / 2, y - W * 0.03); c.lineTo(x + w / 2, y - W * 0.16); c.stroke();
+      c.beginPath(); c.moveTo(x + w / 2, y - W * 0.12); c.lineTo(x + w / 2, y - W * 0.26); c.stroke();
+      c.fillStyle = '#ff5a4a';
+      c.beginPath(); c.arc(x + w / 2, y - W * 0.27, W * 0.02, 0, 7); c.fill();
+      gc.fillStyle = '#ff5a4a';
+      gc.beginPath(); gc.arc(x + w / 2, y - W * 0.27, W * 0.04, 0, 7); gc.fill();
     }
   },
 
@@ -815,7 +939,7 @@ const DRAW = {
   },
 
   campfire(ctx) {
-    const { c, gc, W, groundY } = ctx;
+    const { c, gc, soft, W, groundY } = ctx;
     // кольцо камней
     for (let i = 0; i < 8; i++) {
       const a = i / 8 * Math.PI * 2;
@@ -832,15 +956,416 @@ const DRAW = {
       c.lineTo(W / 2 + Math.cos(a) * W * 0.13, groundY - W * 0.05 + Math.sin(a) * W * 0.03);
       c.stroke();
     }
-    // пламя (статичная база; мерцание добавляет рендер поверх)
-    const fg = c.createRadialGradient(W / 2, groundY - W * 0.12, 0, W / 2, groundY - W * 0.12, W * 0.2);
-    fg.addColorStop(0, 'rgba(255,236,150,0.95)');
-    fg.addColorStop(0.45, 'rgba(240,130,40,0.8)');
+    // пламя (статичная база; мерцание добавляет рендер поверх).
+    // Идёт в мягкий слой: обводка вокруг зарева делала из костра чёрный ком.
+    const fx = W / 2, fy = groundY - W * 0.14;
+    const fg = soft.createRadialGradient(fx, fy, 0, fx, fy, W * 0.26);
+    fg.addColorStop(0, 'rgba(255,246,190,0.95)');
+    fg.addColorStop(0.3, 'rgba(250,170,60,0.75)');
+    fg.addColorStop(0.7, 'rgba(226,96,28,0.32)');
     fg.addColorStop(1, 'rgba(200,60,20,0)');
-    c.fillStyle = fg;
-    c.beginPath(); c.ellipse(W / 2, groundY - W * 0.13, W * 0.16, W * 0.22, 0, 0, 7); c.fill();
+    soft.fillStyle = fg;
+    soft.beginPath(); soft.ellipse(fx, fy, W * 0.22, W * 0.26, 0, 0, 7); soft.fill();
+    // язык пламени поверх зарева — у огня должен быть силуэт
+    soft.fillStyle = 'rgba(255,214,110,0.92)';
+    soft.beginPath();
+    soft.moveTo(fx - W * 0.07, groundY - W * 0.04);
+    soft.quadraticCurveTo(fx - W * 0.04, fy, fx, groundY - W * 0.32);
+    soft.quadraticCurveTo(fx + W * 0.05, fy, fx + W * 0.07, groundY - W * 0.04);
+    soft.closePath(); soft.fill();
+    soft.fillStyle = 'rgba(255,252,226,0.9)';
+    soft.beginPath();
+    soft.moveTo(fx - W * 0.032, groundY - W * 0.05);
+    soft.quadraticCurveTo(fx, fy, fx, groundY - W * 0.21);
+    soft.quadraticCurveTo(fx + W * 0.02, fy, fx + W * 0.032, groundY - W * 0.05);
+    soft.closePath(); soft.fill();
     gc.fillStyle = '#ff9430';
-    gc.beginPath(); gc.ellipse(W / 2, groundY - W * 0.13, W * 0.14, W * 0.18, 0, 0, 7); gc.fill();
+    gc.beginPath(); gc.ellipse(fx, fy, W * 0.14, W * 0.18, 0, 0, 7); gc.fill();
+  },
+
+  // --- склады -------------------------------------------------------------
+  // Дровяник: штабеля брёвен торцами наружу под односкатным навесом.
+  woodpile(ctx) {
+    const { c, W, groundY, pal, detail } = ctx;
+    const w = W * 0.78, x = (W - w) / 2, d = W * 0.14;
+    const postH = W * 0.34, y = groundY - postH;
+    // штабель
+    const rows = 3, cols = 4;
+    const lw = w * 0.19, lh = W * 0.085;
+    for (let r = 0; r < rows; r++) {
+      for (let i = 0; i < cols; i++) {
+        const bx = x + w * 0.05 + i * lw * 1.02 + (r % 2) * lw * 0.12;
+        const by = groundY - (r + 1) * lh;
+        const tone = 0.5 + hash2(r * 7 + i, i * 3 + r) * 0.5;
+        // торец бревна: круг с годовыми кольцами
+        c.fillStyle = shade('#8a6a44', -0.12 + tone * 0.2);
+        c.beginPath(); c.ellipse(bx + lw / 2, by + lh / 2, lw * 0.48, lh * 0.46, 0, 0, 7); c.fill();
+        c.strokeStyle = 'rgba(60,40,22,0.5)'; c.lineWidth = Math.max(1, W * 0.008);
+        c.beginPath(); c.ellipse(bx + lw / 2, by + lh / 2, lw * 0.26, lh * 0.24, 0, 0, 7); c.stroke();
+      }
+    }
+    // столбы и навес
+    for (const k of [0, 1]) {
+      c.fillStyle = shade(pal.trim, -0.25);
+      c.fillRect(x + k * (w - w * 0.06), y - W * 0.02, w * 0.06, postH + W * 0.02);
+    }
+    c.fillStyle = shade(pal.roof, 0.06);
+    c.beginPath();
+    c.moveTo(x - w * 0.07, y); c.lineTo(x + w + w * 0.07, y - W * 0.05);
+    c.lineTo(x + w + w * 0.07 + d, y - W * 0.05 - d * 0.55);
+    c.lineTo(x - w * 0.07 + d, y - d * 0.55);
+    c.closePath(); c.fill();
+    if (detail >= 1) {
+      c.strokeStyle = 'rgba(255,246,220,0.18)'; c.lineWidth = Math.max(1, W * 0.012);
+      c.beginPath(); c.moveTo(x - w * 0.07, y); c.lineTo(x + w + w * 0.07, y - W * 0.05); c.stroke();
+      // топор в колоде
+      c.fillStyle = '#6b4f35';
+      c.fillRect(x + w * 0.86, groundY - W * 0.1, w * 0.14, W * 0.1);
+      c.strokeStyle = '#5a4433'; c.lineWidth = Math.max(1, W * 0.018);
+      c.beginPath(); c.moveTo(x + w * 0.93, groundY - W * 0.1); c.lineTo(x + w * 0.99, groundY - W * 0.26); c.stroke();
+      c.fillStyle = '#c3cad2';
+      c.beginPath();
+      c.moveTo(x + w * 0.97, groundY - W * 0.24); c.lineTo(x + w * 1.06, groundY - W * 0.3);
+      c.lineTo(x + w * 1.0, groundY - W * 0.18); c.closePath(); c.fill();
+    }
+  },
+
+  // Каменный склад: пирамида тёсаных блоков и подъёмная стрела.
+  stonepile(ctx) {
+    const { c, W, groundY, pal, detail } = ctx;
+    const bw = W * 0.19, bh = W * 0.1;
+    for (let r = 0; r < 3; r++) {
+      const n = 3 - r;
+      for (let i = 0; i < n; i++) {
+        const bx = W * 0.16 + (r * bw * 0.5) + i * bw * 1.04;
+        const by = groundY - (r + 1) * bh * 1.05;
+        const tone = hash2(r * 11 + i, i * 5 + r);
+        box(c, bx, by, bw, bh, W * 0.06, shade('#9a9690', -0.08 + tone * 0.16));
+        if (detail >= 1) {
+          c.strokeStyle = 'rgba(60,58,54,0.35)'; c.lineWidth = Math.max(1, W * 0.008);
+          c.strokeRect(bx, by, bw, bh);
+        }
+      }
+    }
+    // деревянная стрела крана
+    c.strokeStyle = shade(pal.trim, -0.2); c.lineWidth = Math.max(2, W * 0.028);
+    c.beginPath(); c.moveTo(W * 0.82, groundY); c.lineTo(W * 0.8, groundY - W * 0.52); c.stroke();
+    c.lineWidth = Math.max(1, W * 0.022);
+    c.beginPath(); c.moveTo(W * 0.8, groundY - W * 0.52); c.lineTo(W * 0.52, groundY - W * 0.6); c.stroke();
+    if (detail >= 1) {
+      c.strokeStyle = 'rgba(40,34,28,0.7)'; c.lineWidth = Math.max(1, W * 0.01);
+      c.beginPath(); c.moveTo(W * 0.55, groundY - W * 0.59); c.lineTo(W * 0.55, groundY - W * 0.44); c.stroke();
+      box(c, W * 0.48, groundY - W * 0.44, W * 0.14, W * 0.08, W * 0.05, '#9a9690');
+    }
+  },
+
+  // Депо: длинный ангар с воротами, рампой и ящиками у стены.
+  warehouse(ctx) {
+    const { c, gc, W, groundY, pal, era, detail } = ctx;
+    const w = W * 0.88, x = (W - w) / 2, d = W * 0.15, h = W * 0.38, y = groundY - h;
+    box(c, x, y, w, h, d, pal.wall);
+    if (detail >= 1) wallTex(c, x, y, w, h, era, pal.wall);
+    // полукруглая кровля-ангар
+    c.fillStyle = shade(pal.roof, 0.08);
+    c.beginPath();
+    c.moveTo(x, y); c.quadraticCurveTo(x + w / 2, y - W * 0.24, x + w, y);
+    c.lineTo(x + w + d, y - d * 0.55);
+    c.quadraticCurveTo(x + w / 2 + d, y - W * 0.24 - d * 0.55, x + d, y - d * 0.55);
+    c.closePath(); c.fill();
+    c.fillStyle = 'rgba(255,248,225,0.16)';
+    c.beginPath();
+    c.moveTo(x, y); c.quadraticCurveTo(x + w / 2, y - W * 0.24, x + w * 0.52, y - W * 0.19);
+    c.lineTo(x + w * 0.3, y); c.closePath(); c.fill();
+    // ворота
+    c.fillStyle = shade(pal.trim, -0.3);
+    c.fillRect(x + w * 0.34, groundY - h * 0.72, w * 0.32, h * 0.72);
+    c.strokeStyle = shade(pal.trim, 0.1); c.lineWidth = Math.max(1, W * 0.012);
+    for (let i = 1; i < 4; i++) {
+      c.beginPath();
+      c.moveTo(x + w * (0.34 + 0.08 * i), groundY - h * 0.72);
+      c.lineTo(x + w * (0.34 + 0.08 * i), groundY); c.stroke();
+    }
+    win(c, gc, x + w * 0.08, y + h * 0.22, w * 0.14, h * 0.2, pal);
+    win(c, gc, x + w * 0.78, y + h * 0.22, w * 0.14, h * 0.2, pal);
+    if (detail >= 1) {
+      // ящики у стены
+      for (let i = 0; i < 3; i++) {
+        box(c, x + w * (0.02 + i * 0.09), groundY - W * (0.09 + (i % 2) * 0.07), w * 0.085, W * 0.09, W * 0.04, '#9a7040');
+      }
+    }
+  },
+
+  // Костёр историй: круг из брёвен-сидений вокруг огня, шкура-навес и тотем.
+  storyfire(ctx) {
+    const { c, gc, W, groundY, pal, detail } = ctx;
+    // сиденья по дуге
+    c.fillStyle = shade(pal.trim, -0.15);
+    for (let i = 0; i < 5; i++) {
+      const a = Math.PI * (0.15 + i * 0.175);
+      const sx = W / 2 + Math.cos(a) * W * 0.34, sy = groundY - W * 0.02 + Math.sin(a) * W * 0.14;
+      c.beginPath(); c.ellipse(sx, sy, W * 0.07, W * 0.035, 0, 0, 7); c.fill();
+    }
+    DRAW.campfire(ctx);
+    // тотем с черепом
+    c.strokeStyle = shade(pal.trim, -0.3); c.lineWidth = Math.max(2, W * 0.035);
+    c.beginPath(); c.moveTo(W * 0.8, groundY - W * 0.04); c.lineTo(W * 0.78, groundY - W * 0.46); c.stroke();
+    c.fillStyle = '#ddd6c4';
+    c.beginPath(); c.ellipse(W * 0.78, groundY - W * 0.5, W * 0.055, W * 0.045, 0, 0, 7); c.fill();
+    c.fillStyle = 'rgba(40,32,26,0.8)';
+    c.beginPath(); c.arc(W * 0.762, groundY - W * 0.505, W * 0.013, 0, 7); c.fill();
+    c.beginPath(); c.arc(W * 0.8, groundY - W * 0.505, W * 0.013, 0, 7); c.fill();
+    if (detail >= 1) {
+      // натянутая шкура на жердях
+      c.fillStyle = shade(pal.wall, -0.05);
+      c.beginPath();
+      c.moveTo(W * 0.1, groundY - W * 0.12); c.lineTo(W * 0.14, groundY - W * 0.42);
+      c.lineTo(W * 0.34, groundY - W * 0.38); c.lineTo(W * 0.3, groundY - W * 0.1);
+      c.closePath(); c.fill();
+      c.strokeStyle = shade(pal.trim, -0.3); c.lineWidth = Math.max(1, W * 0.018);
+      c.beginPath(); c.moveTo(W * 0.12, groundY); c.lineTo(W * 0.14, groundY - W * 0.44); c.stroke();
+      c.beginPath(); c.moveTo(W * 0.32, groundY); c.lineTo(W * 0.34, groundY - W * 0.4); c.stroke();
+    }
+  },
+
+  // Верфь: стапель с недостроенным корпусом судна и краном.
+  shipyard(ctx) {
+    const { c, gc, W, groundY, pal, detail } = ctx;
+    // стапель уходит в воду
+    c.fillStyle = shade(pal.trim, -0.1);
+    c.beginPath();
+    c.moveTo(W * 0.06, groundY); c.lineTo(W * 0.94, groundY);
+    c.lineTo(W * 0.84, groundY - W * 0.13); c.lineTo(W * 0.16, groundY - W * 0.13);
+    c.closePath(); c.fill();
+    c.strokeStyle = 'rgba(0,0,0,0.25)'; c.lineWidth = Math.max(1, W * 0.012);
+    for (let i = 1; i < 7; i++) {
+      const t = i / 7;
+      c.beginPath();
+      c.moveTo(W * (0.06 + 0.1 * t), groundY - W * 0.13 * t);
+      c.lineTo(W * (0.94 - 0.1 * t), groundY - W * 0.13 * t); c.stroke();
+    }
+    // корпус корабля на стапеле
+    const hullY = groundY - W * 0.16;
+    c.fillStyle = shade('#7a5433', 0.05);
+    c.beginPath();
+    c.moveTo(W * 0.18, hullY);
+    c.quadraticCurveTo(W * 0.5, hullY + W * 0.14, W * 0.82, hullY);
+    c.lineTo(W * 0.78, hullY - W * 0.2);
+    c.quadraticCurveTo(W * 0.5, hullY - W * 0.1, W * 0.22, hullY - W * 0.2);
+    c.closePath(); c.fill();
+    c.strokeStyle = 'rgba(40,28,16,0.5)'; c.lineWidth = Math.max(1, W * 0.014);
+    c.beginPath();
+    c.moveTo(W * 0.2, hullY - W * 0.1);
+    c.quadraticCurveTo(W * 0.5, hullY, W * 0.8, hullY - W * 0.1); c.stroke();
+    // рёбра шпангоутов: растут изнутри корпуса, а не стоят рядом столбами
+    c.strokeStyle = shade('#7a5433', -0.25); c.lineWidth = Math.max(1, W * 0.022);
+    for (let i = 0; i < 4; i++) {
+      const t = i / 3;
+      const px = W * (0.28 + i * 0.15);
+      const top = hullY - W * (0.3 + Math.sin(t * Math.PI) * 0.12);
+      c.beginPath();
+      c.moveTo(px, hullY - W * 0.08);
+      c.quadraticCurveTo(px - W * 0.02, hullY - W * 0.2, px, top);
+      c.stroke();
+    }
+    // верхняя связь по бортам
+    c.lineWidth = Math.max(1, W * 0.016);
+    c.beginPath();
+    c.moveTo(W * 0.26, hullY - W * 0.3);
+    c.quadraticCurveTo(W * 0.5, hullY - W * 0.44, W * 0.75, hullY - W * 0.3);
+    c.stroke();
+    // кран-укосина
+    c.strokeStyle = shade(pal.trim, -0.2); c.lineWidth = Math.max(2, W * 0.03);
+    c.beginPath(); c.moveTo(W * 0.12, groundY - W * 0.14); c.lineTo(W * 0.16, groundY - W * 0.66); c.stroke();
+    c.lineWidth = Math.max(1, W * 0.022);
+    c.beginPath(); c.moveTo(W * 0.16, groundY - W * 0.66); c.lineTo(W * 0.48, groundY - W * 0.6); c.stroke();
+    if (detail >= 1) {
+      c.strokeStyle = 'rgba(30,26,20,0.7)'; c.lineWidth = Math.max(1, W * 0.01);
+      c.beginPath(); c.moveTo(W * 0.44, groundY - W * 0.61); c.lineTo(W * 0.44, groundY - W * 0.5); c.stroke();
+      gc.fillStyle = pal.glow;
+      gc.fillRect(W * 0.6, hullY - W * 0.34, W * 0.05, W * 0.05); // сварка
+    }
+  },
+
+  // Коллектор: люки, трубы и отстойник — здание почти целиком под землёй.
+  sewers(ctx) {
+    const { c, gc, W, groundY, pal, detail } = ctx;
+    // бетонная плита
+    c.fillStyle = shade('#8a8880', -0.05);
+    c.beginPath(); c.ellipse(W / 2, groundY - W * 0.06, W * 0.44, W * 0.19, 0, 0, 7); c.fill();
+    c.fillStyle = shade('#8a8880', 0.12);
+    c.beginPath(); c.ellipse(W / 2, groundY - W * 0.08, W * 0.44, W * 0.19, 0, 0, 7); c.fill();
+    // отстойник
+    c.fillStyle = '#2f3a34';
+    c.beginPath(); c.ellipse(W * 0.4, groundY - W * 0.12, W * 0.19, W * 0.09, 0, 0, 7); c.fill();
+    c.fillStyle = 'rgba(96,132,110,0.55)';
+    c.beginPath(); c.ellipse(W * 0.4, groundY - W * 0.13, W * 0.16, W * 0.07, 0, 0, 7); c.fill();
+    // люк
+    c.fillStyle = shade(pal.trim, -0.15);
+    c.beginPath(); c.ellipse(W * 0.68, groundY - W * 0.1, W * 0.1, W * 0.05, 0, 0, 7); c.fill();
+    c.strokeStyle = 'rgba(0,0,0,0.4)'; c.lineWidth = Math.max(1, W * 0.01);
+    c.beginPath(); c.ellipse(W * 0.68, groundY - W * 0.1, W * 0.06, W * 0.03, 0, 0, 7); c.stroke();
+    // выпускная труба со сливом
+    box(c, W * 0.66, groundY - W * 0.34, W * 0.22, W * 0.16, W * 0.08, shade('#8a8880', -0.1));
+    c.fillStyle = '#20282a';
+    c.beginPath(); c.ellipse(W * 0.66, groundY - W * 0.26, W * 0.045, W * 0.06, 0, 0, 7); c.fill();
+    if (detail >= 1) {
+      c.strokeStyle = 'rgba(150,190,170,0.5)'; c.lineWidth = Math.max(1, W * 0.02);
+      c.beginPath();
+      c.moveTo(W * 0.62, groundY - W * 0.25);
+      c.quadraticCurveTo(W * 0.54, groundY - W * 0.2, W * 0.5, groundY - W * 0.14);
+      c.stroke();
+      // вентиляционные трубы
+      for (const k of [0.2, 0.3]) {
+        c.fillStyle = shade(pal.trim, -0.2);
+        c.fillRect(W * k, groundY - W * 0.3, W * 0.045, W * 0.24);
+        c.fillStyle = shade(pal.trim, 0.1);
+        c.beginPath(); c.ellipse(W * k + W * 0.022, groundY - W * 0.3, W * 0.03, W * 0.014, 0, 0, 7); c.fill();
+      }
+    }
+  },
+
+  // Лаборатория: стеклянный корпус, вытяжка и светящиеся колбы.
+  lab(ctx) {
+    const { c, gc, W, groundY, pal, detail } = ctx;
+    const w = W * 0.72, x = (W - w) / 2, d = W * 0.15, h = W * 0.44, y = groundY - h;
+    box(c, x, y, w, h, d, pal.wall);
+    // сплошная лента остекления
+    c.fillStyle = pal.glass;
+    c.fillRect(x + w * 0.08, y + h * 0.16, w * 0.84, h * 0.26);
+    gc.fillStyle = pal.glow;
+    gc.fillRect(x + w * 0.08, y + h * 0.16, w * 0.84, h * 0.26);
+    c.strokeStyle = pal.trim; c.lineWidth = Math.max(1, W * 0.014);
+    for (let i = 1; i < 4; i++) {
+      c.beginPath();
+      c.moveTo(x + w * (0.08 + 0.21 * i), y + h * 0.16);
+      c.lineTo(x + w * (0.08 + 0.21 * i), y + h * 0.42); c.stroke();
+    }
+    // плоская кровля с парапетом и вытяжкой
+    c.fillStyle = shade(pal.roof, 0.05);
+    c.fillRect(x - w * 0.03, y - W * 0.035, w * 1.06 + d * 0.7, W * 0.04);
+    box(c, x + w * 0.62, y - W * 0.22, w * 0.2, W * 0.2, W * 0.07, shade(pal.wall, -0.12));
+    c.fillStyle = shade(pal.trim, -0.1);
+    c.fillRect(x + w * 0.66, y - W * 0.3, w * 0.05, W * 0.1);
+    // колба у входа
+    if (detail >= 1) {
+      c.fillStyle = 'rgba(180,240,220,0.85)';
+      c.beginPath();
+      c.moveTo(x + w * 0.16, groundY - W * 0.2);
+      c.lineTo(x + w * 0.24, groundY - W * 0.2);
+      c.lineTo(x + w * 0.28, groundY - W * 0.04);
+      c.lineTo(x + w * 0.12, groundY - W * 0.04);
+      c.closePath(); c.fill();
+      gc.fillStyle = '#7de3c8';
+      gc.beginPath();
+      gc.moveTo(x + w * 0.14, groundY - W * 0.12);
+      gc.lineTo(x + w * 0.26, groundY - W * 0.12);
+      gc.lineTo(x + w * 0.28, groundY - W * 0.04);
+      gc.lineTo(x + w * 0.12, groundY - W * 0.04);
+      gc.closePath(); gc.fill();
+    }
+    door(c, x + w * 0.44, groundY - h * 0.34, w * 0.16, h * 0.34, pal);
+  },
+
+  // Аэропорт: терминал, диспетчерская вышка и самолёт на полосе.
+  airport(ctx) {
+    const { c, gc, W, groundY, pal, detail } = ctx;
+    // рулёжка
+    c.fillStyle = 'rgba(60,62,66,0.55)';
+    c.beginPath();
+    c.moveTo(W * 0.02, groundY); c.lineTo(W * 0.98, groundY);
+    c.lineTo(W * 0.88, groundY - W * 0.12); c.lineTo(W * 0.12, groundY - W * 0.12);
+    c.closePath(); c.fill();
+    c.strokeStyle = 'rgba(240,236,200,0.55)'; c.lineWidth = Math.max(1, W * 0.014);
+    c.setLineDash([W * 0.06, W * 0.05]);
+    c.beginPath(); c.moveTo(W * 0.08, groundY - W * 0.06); c.lineTo(W * 0.92, groundY - W * 0.06); c.stroke();
+    c.setLineDash([]);
+    // терминал
+    const w = W * 0.62, x = W * 0.04, h = W * 0.24, y = groundY - W * 0.12 - h;
+    box(c, x, y, w, h, W * 0.12, pal.wall);
+    c.fillStyle = pal.glass;
+    c.fillRect(x + w * 0.06, y + h * 0.28, w * 0.88, h * 0.4);
+    gc.fillStyle = pal.glow;
+    gc.fillRect(x + w * 0.06, y + h * 0.28, w * 0.88, h * 0.4);
+    c.fillStyle = shade(pal.roof, 0.05);
+    c.fillRect(x - w * 0.03, y - W * 0.028, w * 1.06 + W * 0.08, W * 0.032);
+    // вышка
+    const tx = W * 0.72, tw = W * 0.12, th = W * 0.62;
+    box(c, tx, groundY - W * 0.12 - th, tw, th, W * 0.06, shade(pal.wall, -0.06));
+    c.fillStyle = pal.glass;
+    c.fillRect(tx - tw * 0.16, groundY - W * 0.12 - th - W * 0.02, tw * 1.32, W * 0.1);
+    gc.fillStyle = pal.glow;
+    gc.fillRect(tx - tw * 0.16, groundY - W * 0.12 - th - W * 0.02, tw * 1.32, W * 0.1);
+    c.fillStyle = shade(pal.roof, -0.1);
+    c.fillRect(tx - tw * 0.2, groundY - W * 0.12 - th - W * 0.055, tw * 1.4, W * 0.04);
+    c.fillStyle = '#ff5a4a';
+    c.beginPath(); c.arc(tx + tw / 2, groundY - W * 0.12 - th - W * 0.09, W * 0.022, 0, 7); c.fill();
+    gc.fillStyle = '#ff5a4a';
+    gc.beginPath(); gc.arc(tx + tw / 2, groundY - W * 0.12 - th - W * 0.09, W * 0.045, 0, 7); gc.fill();
+    if (detail >= 1) {
+      // самолётик на перроне
+      const ax = W * 0.36, ay = groundY - W * 0.05;
+      c.fillStyle = '#e8eef4';
+      c.beginPath(); c.ellipse(ax, ay, W * 0.16, W * 0.035, 0, 0, 7); c.fill();
+      c.beginPath();
+      c.moveTo(ax - W * 0.02, ay); c.lineTo(ax + W * 0.06, ay - W * 0.11);
+      c.lineTo(ax + W * 0.1, ay - W * 0.11); c.lineTo(ax + W * 0.05, ay);
+      c.closePath(); c.fill();
+      c.fillStyle = '#b8c2cc';
+      c.beginPath();
+      c.moveTo(ax - W * 0.13, ay); c.lineTo(ax - W * 0.16, ay - W * 0.07);
+      c.lineTo(ax - W * 0.11, ay - W * 0.07); c.closePath(); c.fill();
+      c.fillStyle = pal.accent;
+      c.fillRect(ax - W * 0.14, ay - W * 0.01, W * 0.28, W * 0.012);
+    }
+  },
+
+  // Ядро ИИ: чёрный монолит с парящим светящимся кольцом.
+  aicore(ctx) {
+    const { c, gc, W, groundY, pal, detail } = ctx;
+    // основание-платформа
+    c.fillStyle = shade(pal.wall, -0.2);
+    c.beginPath(); c.ellipse(W / 2, groundY - W * 0.04, W * 0.4, W * 0.16, 0, 0, 7); c.fill();
+    c.fillStyle = shade(pal.wall, 0.05);
+    c.beginPath(); c.ellipse(W / 2, groundY - W * 0.07, W * 0.4, W * 0.16, 0, 0, 7); c.fill();
+    c.strokeStyle = pal.trim; c.lineWidth = Math.max(1, W * 0.012);
+    c.beginPath(); c.ellipse(W / 2, groundY - W * 0.07, W * 0.28, W * 0.11, 0, 0, 7); c.stroke();
+    gc.strokeStyle = pal.glow; gc.lineWidth = Math.max(1, W * 0.02);
+    gc.beginPath(); gc.ellipse(W / 2, groundY - W * 0.07, W * 0.28, W * 0.11, 0, 0, 7); gc.stroke();
+    // монолит
+    const mw = W * 0.26, mx = (W - mw) / 2, mh = W * 0.62, my = groundY - W * 0.1 - mh;
+    const g = c.createLinearGradient(mx, 0, mx + mw, 0);
+    g.addColorStop(0, '#1b2230');
+    g.addColorStop(0.4, '#2f3c50');
+    g.addColorStop(1, '#141a24');
+    c.fillStyle = g;
+    c.beginPath();
+    c.moveTo(mx + mw * 0.1, my); c.lineTo(mx + mw * 0.9, my);
+    c.lineTo(mx + mw, groundY - W * 0.1); c.lineTo(mx, groundY - W * 0.1);
+    c.closePath(); c.fill();
+    // светящиеся дорожки данных
+    c.strokeStyle = pal.trim; c.lineWidth = Math.max(1, W * 0.014);
+    gc.strokeStyle = pal.glow; gc.lineWidth = Math.max(1, W * 0.022);
+    for (let i = 0; i < 3; i++) {
+      const yy = my + mh * (0.2 + i * 0.26);
+      for (const t of [c, gc]) {
+        t.beginPath();
+        t.moveTo(mx + mw * 0.16, yy);
+        t.lineTo(mx + mw * 0.5, yy - mh * 0.06);
+        t.lineTo(mx + mw * 0.84, yy);
+        t.stroke();
+      }
+    }
+    // парящее кольцо
+    c.strokeStyle = pal.accent; c.lineWidth = Math.max(2, W * 0.026);
+    c.beginPath(); c.ellipse(W / 2, my - W * 0.05, W * 0.24, W * 0.08, 0, 0, 7); c.stroke();
+    gc.strokeStyle = pal.glow; gc.lineWidth = Math.max(2, W * 0.045);
+    gc.beginPath(); gc.ellipse(W / 2, my - W * 0.05, W * 0.24, W * 0.08, 0, 0, 7); gc.stroke();
+    if (detail >= 1) {
+      c.fillStyle = 'rgba(220,245,255,0.9)';
+      c.beginPath(); c.arc(W / 2, my - W * 0.05, W * 0.045, 0, 7); c.fill();
+      gc.fillStyle = pal.glow;
+      gc.beginPath(); gc.arc(W / 2, my - W * 0.05, W * 0.08, 0, 7); gc.fill();
+    }
   },
 
   spire() { /* Шпиль рисуется отдельно: он анимирован по стадиям постройки */ },

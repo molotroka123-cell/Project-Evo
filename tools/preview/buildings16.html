@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>16 процедурных построек крупно</title>
+<style>
+  body { margin: 0; background: #5d8a48; color: #fff; font: 13px sans-serif; }
+  .grid { display: flex; flex-wrap: wrap; }
+  .cell { width: 260px; text-align: center; padding: 4px; }
+</style>
+</head>
+<body>
+<div class="grid" id="out"></div>
+<script type="module">
+import { SpriteCache } from '../../app/src/render/sprites.js';
+import { QUALITY } from '../../app/src/render/quality.js';
+import { BUILDINGS, BUILDING_ERA_IDX } from '../../app/src/core/data.js';
+
+const IDS = ['campfire', 'quarry', 'story_fire', 'woodshed', 'stoneyard', 'depot',
+  'shipyard', 'sewers', 'lab', 'apartment', 'airport', 'npp', 'robo_factory',
+  'biolab', 'skyscraper', 'ai_core', 'hut', 'stone_house', 'temple', 'castle'];
+const sc = new SpriteCache(QUALITY.ultra);
+const out = document.getElementById('out');
+for (const id of IDS) {
+  const own = BUILDING_ERA_IDX[id] || 0;
+  const s = sc.building(id, BUILDINGS[id], own, BUILDINGS[id].size || 1);
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  const cv = document.createElement('canvas');
+  const k = 250 / s.cv.width;
+  cv.width = 250; cv.height = Math.round(s.cv.height * k);
+  cv.getContext('2d').drawImage(s.cv, 0, 0, cv.width, cv.height);
+  cell.appendChild(cv);
+  const l = document.createElement('div');
+  l.textContent = `${id} · эпоха ${own}`;
+  cell.appendChild(l);
+  out.appendChild(cell);
+}
+</script>
+</body>
+</html>

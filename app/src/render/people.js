@@ -52,8 +52,10 @@ const LOOK = [
 ];
 
 export class PeopleSprites {
-  constructor(quality) { this.q = quality; this.map = new Map(); }
-  setQuality(q) { this.q = q; this.map.clear(); }
+  // gen растёт при смене пресета: рендер держит ссылку на лист прямо у жителя
+  // и по этому счётчику понимает, что кэш пора перечитать.
+  constructor(quality) { this.q = quality; this.map = new Map(); this.gen = 0; }
+  setQuality(q) { this.q = q; this.map.clear(); this.gen++; }
 
   // Возвращает лист { cv, fw, fh } для набора. Печётся лениво: в партии обычно
   // живы 3-5 профессий одной эпохи — это 3-5 листов, а не все 270 сочетаний.
@@ -105,6 +107,137 @@ export function lookOf(v) {
     LOOK_CACHE.set(v, l);
   }
   return l;
+}
+
+// ---------------------------------------------------------------------------
+// Звери. Тот же принцип: два кадра шага × два направления, печётся один раз.
+// Кружок с кружком-головой рядом с нормальными человечками выглядел бы дико.
+// ---------------------------------------------------------------------------
+export class AnimalSprites {
+  constructor(quality) { this.q = quality; this.map = new Map(); this.gen = 0; }
+  setQuality(q) { this.q = q; this.map.clear(); this.gen++; }
+  sheet(kind) {
+    const d = Math.max(0, Math.min(2, this.q.detail));
+    const key = `${kind}|${d}`;
+    let s = this.map.get(key);
+    if (s) return s;
+    s = bakeAnimal(kind, [34, 54, 78][d], d);
+    this.map.set(key, s);
+    return s;
+  }
+}
+
+function bakeAnimal(kind, FH, detail) {
+  const mammoth = kind === 'mammoth';
+  const FW = Math.round(FH * (mammoth ? 1.7 : 1.35));
+  const cv = document.createElement('canvas');
+  cv.width = FW * 2; cv.height = FH * 2;      // 2 кадра × 2 направления
+  const c = cv.getContext('2d');
+  const tmp = document.createElement('canvas');
+  tmp.width = FW; tmp.height = FH;
+  const tc = tmp.getContext('2d');
+  for (let d = 0; d < 2; d++) {
+    for (let f = 0; f < 2; f++) {
+      tc.clearRect(0, 0, FW, FH);
+      tc.save();
+      if (d === 1) { tc.translate(FW, 0); tc.scale(-1, 1); }
+      drawBeast(tc, FW, FH, mammoth, f, detail);
+      tc.restore();
+      const ox = f * FW, oy = d * FH;
+      const g = c.createRadialGradient(ox + FW / 2, oy + FH * 0.94, 0, ox + FW / 2, oy + FH * 0.94, FH * 0.3);
+      g.addColorStop(0, 'rgba(20,16,12,0.4)');
+      g.addColorStop(1, 'rgba(20,16,12,0)');
+      c.fillStyle = g;
+      c.beginPath(); c.ellipse(ox + FW / 2, oy + FH * 0.94, FH * 0.34, FH * 0.09, 0, 0, 7); c.fill();
+      outline(c, tmp, ox, oy, Math.max(1, Math.round(FH / 40)));
+      c.drawImage(tmp, ox, oy);
+    }
+  }
+  return { cv, fw: FW, fh: FH };
+}
+
+function drawBeast(c, W, H, mammoth, frame, detail) {
+  const body = mammoth ? '#6b4f35' : '#a9825a';
+  const dark = mix(body, '#000000', 0.3);
+  const light = mix(body, '#ffffff', 0.18);
+  const ground = H * 0.93;
+  const swing = frame ? 0.34 : -0.34;
+  const bodyY = mammoth ? H * 0.44 : H * 0.5;
+  const bodyW = W * (mammoth ? 0.56 : 0.58), bodyH = H * (mammoth ? 0.38 : 0.3);
+  // Мамонта сдвигаем влево: хобот и бивни выносят силуэт далеко вперёд и
+  // при центровке по телу обрезались краем кадра.
+  const cx = W * (mammoth ? 0.38 : 0.46);
+  // ноги
+  const legW = H * (mammoth ? 0.11 : 0.07);
+  for (const [k, s] of [[-1, swing], [1, -swing], [-1, -swing * 0.7], [1, swing * 0.7]]) {
+    const hx = cx + k * bodyW * 0.34;
+    c.strokeStyle = k > 0 ? dark : body;
+    c.lineWidth = legW; c.lineCap = 'round';
+    c.beginPath();
+    c.moveTo(hx, bodyY + bodyH * 0.3);
+    c.lineTo(hx + Math.sin(s) * H * 0.16, ground);
+    c.stroke();
+  }
+  // туловище
+  const g = c.createLinearGradient(0, bodyY - bodyH / 2, 0, bodyY + bodyH / 2);
+  g.addColorStop(0, light); g.addColorStop(1, dark);
+  c.fillStyle = g;
+  c.beginPath(); c.ellipse(cx, bodyY, bodyW / 2, bodyH / 2, 0, 0, 7); c.fill();
+  // шея и голова
+  const hx = cx + bodyW * (mammoth ? 0.46 : 0.5), hy = bodyY - bodyH * (mammoth ? 0.35 : 0.6);
+  c.strokeStyle = body; c.lineWidth = H * (mammoth ? 0.2 : 0.11); c.lineCap = 'round';
+  c.beginPath(); c.moveTo(cx + bodyW * 0.24, bodyY - bodyH * 0.12); c.lineTo(hx, hy); c.stroke();
+  c.fillStyle = light;
+  c.beginPath(); c.ellipse(hx + W * 0.03, hy, W * (mammoth ? 0.11 : 0.09), H * (mammoth ? 0.13 : 0.09), 0.2, 0, 7); c.fill();
+  if (mammoth) {
+    // хобот и бивни
+    c.strokeStyle = body; c.lineWidth = H * 0.07;
+    c.beginPath();
+    c.moveTo(hx + W * 0.09, hy + H * 0.06);
+    c.quadraticCurveTo(hx + W * 0.2, hy + H * 0.2, hx + W * 0.14, ground - H * 0.06);
+    c.stroke();
+    c.strokeStyle = '#e6ddc6'; c.lineWidth = H * 0.045;
+    for (const k of [0, 1]) {
+      c.beginPath();
+      c.moveTo(hx + W * (0.08 - k * 0.02), hy + H * 0.08);
+      c.quadraticCurveTo(hx + W * 0.22, hy + H * 0.22, hx + W * (0.26 - k * 0.03), hy + H * 0.06);
+      c.stroke();
+    }
+    // шерсть по спине
+    if (detail >= 1) {
+      c.strokeStyle = dark; c.lineWidth = H * 0.02;
+      for (let i = 0; i < 6; i++) {
+        const px = cx - bodyW * 0.36 + i * bodyW * 0.14;
+        c.beginPath(); c.moveTo(px, bodyY + bodyH * 0.34); c.lineTo(px - W * 0.01, bodyY + bodyH * 0.5); c.stroke();
+      }
+    }
+  } else {
+    // рога и хвост оленя
+    c.strokeStyle = '#7a5a34'; c.lineWidth = H * 0.028; c.lineCap = 'round';
+    for (const k of [-1, 1]) {
+      const rx = hx + W * 0.02 + k * W * 0.02;
+      c.beginPath();
+      c.moveTo(rx, hy - H * 0.06);
+      c.lineTo(rx + k * W * 0.04, hy - H * 0.2);
+      c.moveTo(rx + k * W * 0.02, hy - H * 0.13);
+      c.lineTo(rx + k * W * 0.07, hy - H * 0.17);
+      c.stroke();
+    }
+    c.fillStyle = '#efe6d6';
+    c.beginPath(); c.ellipse(cx - bodyW * 0.5, bodyY - bodyH * 0.16, W * 0.035, H * 0.045, 0, 0, 7); c.fill();
+    if (detail >= 1) {
+      // белые пятна на спине
+      c.fillStyle = 'rgba(240,232,214,0.55)';
+      for (let i = 0; i < 3; i++) {
+        c.beginPath();
+        c.arc(cx - bodyW * 0.1 + i * bodyW * 0.16, bodyY - bodyH * 0.16, W * 0.022, 0, 7);
+        c.fill();
+      }
+    }
+  }
+  // глаз
+  c.fillStyle = 'rgba(28,20,16,0.9)';
+  c.beginPath(); c.arc(hx + W * 0.06, hy - H * 0.01, H * 0.018, 0, 7); c.fill();
 }
 
 // ---------------------------------------------------------------------------

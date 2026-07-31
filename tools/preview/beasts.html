@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Звери</title>
+<style>body{margin:0;background:#5d8a48;color:#fff;font:13px sans-serif}.row{display:flex;gap:12px;padding:8px}</style>
+</head>
+<body>
+<div id="out"></div>
+<script type="module">
+import { AnimalSprites } from '../../app/src/render/people.js';
+import { QUALITY } from '../../app/src/render/quality.js';
+const a = new AnimalSprites(QUALITY.ultra);
+const out = document.getElementById('out');
+for (const kind of ['deer', 'mammoth']) {
+  const s = a.sheet(kind);
+  const row = document.createElement('div');
+  row.className = 'row';
+  for (let d = 0; d < 2; d++) for (let f = 0; f < 2; f++) {
+    const K = 3;
+    const cv = document.createElement('canvas');
+    cv.width = s.fw * K; cv.height = s.fh * K;
+    const c = cv.getContext('2d');
+    c.imageSmoothingEnabled = false;
+    c.drawImage(s.cv, f * s.fw, d * s.fh, s.fw, s.fh, 0, 0, s.fw * K, s.fh * K);
+    row.appendChild(cv);
+  }
+  out.appendChild(row);
+}
+</script>
+</body>
+</html>
