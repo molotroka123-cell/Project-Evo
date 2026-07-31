@@ -127,6 +127,10 @@ export const JOINT_WAR_REL = DIPLO_FACTORS.jointWar.dR; // +15 за общую �
 // черт — «вечная война» невозможна конструктивно, а не по везению.
 export const WAR_MAX_DAYS = 360;
 export const TRUCE_DAYS = 60;             // перемирие после мира
+// Запас терпения конкретной войны разыгрывается при её первом тике: короткая
+// пограничная свара и затяжная кампания должны выглядеть по-разному.
+export const WEARY_MIN = 45;
+export const WEARY_MAX = 170;
 
 // U28. Технологиями меняются только с теми, кому доверяют.
 export const TECH_TRADE_MIN_REL = 30;
@@ -134,9 +138,10 @@ export const TECH_TRADE_COOLDOWN = 30;
 
 // Трение границ: чем ближе чужие поселения, тем хуже отношения — и тем скорее
 // появится повод к войне. Дистанция считается по видимым поселениям.
-export const FRICTION_RANGE = 18;
-export const FRICTION_PER_TILE = 2.2;
-export const CLAIM_RANGE = 9;             // ближе этого экспансионист заявляет права
+export const FRICTION_RANGE = 22;
+export const FRICTION_PER_TILE = 1.8;
+export const CLAIM_RANGE = 24;            // дальность, на которой сосед вообще интересен
+export const RIVAL_RATIO = 1.4;           // во столько раз сильнее — и объявляет соперником
 
 const DECISION_PERIOD = 5;                // ИИ думает раз в 5 дней
 // Смещение фаз: ядро крутит свой utilityAI на day % 5 === 0, и совпадать с ним
@@ -315,6 +320,7 @@ export const CB_RU = {
   trespass: 'нарушение рубежей',
   border: 'давление на границе',
   claim: 'притязания на земли',
+  rivalry: 'объявленное соперничество',
   raid: 'разорение земель',
   ally: 'долг союзника',
   broken: 'разрыв союза',
@@ -740,11 +746,17 @@ function _drift(state, live) {
 // и есть гарантия, что вечных войн не бывает ни при какой комбинации черт.
 function _wars(state, ctx, out, day, live) {
   for (const w of state.wars.slice()) {
+    // Свой запас терпения у каждой войны. Общий порог на все войны сразу
+    // означал бы, что они кончаются день в день на одной и той же отметке.
+    if (w.limit === undefined) w.limit = ctx.rng ? ctx.rng.range(WEARY_MIN, WEARY_MAX) : 100;
     w.weary += (_wearGrowth(ctx, w.a) + _wearGrowth(ctx, w.b)) / 2;
-    if (w.weary < 100 && day - w.start < WAR_MAX_DAYS) continue;
+    // Ранний мир по переговорам: силы ещё есть, смысла уже нет.
+    const early = w.weary >= w.limit * 0.4 && ctx.rng && ctx.rng.chance(0.012);
+    if (w.weary < w.limit && !early && day - w.start < WAR_MAX_DAYS) continue;
+    const why = early ? 'переговоры' : (w.weary >= w.limit ? 'истощение' : 'предел');
     // Свою запись модуль закрывает сам, а ядру отдаёт событие: у него свой WS
     // и свои условия мира, и дублировать их здесь нельзя.
-    const rec = closeWar(state, w.a, w.b, day, w.weary >= 100 ? 'истощение' : 'предел');
+    const rec = closeWar(state, w.a, w.b, day, why);
     out.warsEnded.push({ a: w.a, b: w.b, days: rec.days, reason: rec.reason });
     out.logs.push(`Война ${sideName(w.a)} и ${sideName(w.b)} окончена (${rec.reason}), ${rec.days} дн.`);
     if (w.a !== 'player' && w.b !== 'player') adjustAiRel(state, w.a, w.b, 20);
@@ -801,22 +813,25 @@ function _aiWarDecisions(state, ctx, out, day, live) {
       if (inTruce(state, a.id, b.id, day)) continue;
       const tr = traitsOf(a);
       if (!tr) continue;
-      // Притязания на землю: сосед-экспансионист сам создаёт себе повод, а
-      // прижатая сторона получает свой — «давление на границе».
+      const mine = Math.max(1, a.armyPts || 1);
+      const theirs = Math.max(1, (b.armyPts || 1) * (1 + rng.range(-noise, noise)));
+      // Поводы, которые сторона наживает сама. Экспансионист у чужой межи
+      // заявляет притязания, прижатый сосед получает своё «давление на
+      // границе», а сильный задира просто объявляет соперничество — всё это
+      // публичные вещи, никакого заглядывания в чужие карманы.
       const d = state.prox[pairKey(a.id, b.id)];
       if (d !== undefined && d < CLAIM_RANGE) {
         if (tr.expansion >= 7) addCasusBelli(state, a.id, b.id, 'claim', day);
-        else addCasusBelli(state, a.id, b.id, 'border', day);
+        else if (d < CLAIM_RANGE / 2) addCasusBelli(state, a.id, b.id, 'border', day);
       }
+      if (tr.aggression >= 7 && mine > theirs * RIVAL_RATIO) addCasusBelli(state, a.id, b.id, 'rivalry', day);
       const R = aiRel(state, a.id, b.id);
       const cb = hasCasusBelli(state, a.id, b.id, day);
       // Без повода и без вражды войну не начинают: в этом весь смысл CB.
       if (!cb && R > -35) continue;
-      const mine = Math.max(1, a.armyPts || 1);
-      const theirs = Math.max(1, (b.armyPts || 1) * (1 + rng.range(-noise, noise)));
       let u = 0.5 * (tr.aggression / 10) - R / 100 - 0.7 * (theirs / mine) + (cb ? 0.35 : 0);
       u -= 0.15 * warEnemies(state, a.id).length; // на два фронта не лезут
-      if (u < 0.25 || !rng.chance(Math.min(0.6, u))) continue;
+      if (u < 0.2 || !rng.chance(Math.min(0.6, u))) continue;
       if (cb) consumeCasusBelli(state, a.id, b.id, day);
       openWar(state, a.id, b.id, day, cb ? 'cb' : 'вражда');
       adjustAiRel(state, a.id, b.id, DIPLO_FACTORS.declaredWar.dR);

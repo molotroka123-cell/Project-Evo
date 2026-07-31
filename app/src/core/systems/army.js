@@ -59,15 +59,20 @@
 //    (чтобы гарнизоны считались по уже обновлённым armyPts) и ДО tickRaids():
 //      const ev = Army.tickArmy(this.armyState, {
 //        world: this.world,
-//        day: this.day,
 //        dt: 1,                              // в игровых днях
 //        factions: this.factions,
 //        atWar: (a, b) => a === 'player' || b === 'player'
 //          ? this.wars.some(w => w.fid === (a === 'player' ? b : a))
 //          : this.aiWars.some(w => (w.a === a && w.b === b) || (w.a === b && w.b === a)),
-//        homeFort: Army.fortFromBuildings(this.doneBuildings()), // оборона игрока
 //      }, this.rng);
 //      for (const e of ev) { this.addLog(e.text, e.type); if (e.chronicle) this.addChronicle(e.text); }
+//    Читаемые ctx-поля ровно эти: world, dt, factions, atWar и необязательные
+//    garrisonFor(f, s) / fortFor(f, s) — подменить гарнизон и укрепление своими.
+//
+// 3a) Оборона самого поселения игрока осталась за ядром (tickRaids/resolveRaid):
+//     модуль НЕ водит вражеские отряды на кострище. Готовое укрепление игрока
+//     для будущей осады отдаёт Army.fortFromBuildings(this.doneBuildings()) —
+//     стены и ворота считаются по полям wall/defense из BUILDINGS.
 //
 // 4) Формирование отряда из резерва (кнопка «Собрать отряд» в HUD):
 //      const n = Math.min(k, this.army.soldiers);
