@@ -29,6 +29,36 @@ const ARCH = {
   woodshed: 'woodpile', stoneyard: 'stonepile', depot: 'warehouse',
 };
 
+// Высота постройки в долях ширины тайла. Раньше здесь стояла одна константа
+// 1.55 на всё — и небоскрёб, и хижина выходили одного роста, отчего город
+// читался как набор одинаковых коробок, а житель рядом с четырёхэтажкой
+// выглядел великаном.
+//
+// Числа взяты от реального роста: масштаб карты 1 тайл ≈ 8 м (docs/art-direction.md §7),
+// значит землянка в 3 м — это 0.38 тайла, а башня в 90 м упирается в потолок,
+// который мы себе позволяем. Потолок нужен: настоящий небоскрёб в масштабе
+// закрыл бы полэкрана и спрятал под собой карту.
+const ARCH_H = {
+  // земля и ямы — почти без вертикали
+  field: 0.30, quarry: 0.42, mineshaft: 0.70, sewers: 0.34, pad: 0.40, solar: 0.34,
+  // очаги и навесы
+  campfire: 0.45, storyfire: 0.85, lean: 0.60, tent: 0.75, woodpile: 0.62, stonepile: 0.70,
+  // жильё и мастерские каменного и бронзового века
+  hut: 0.90, house: 1.15, shed: 0.95, stalls: 0.80, forge: 1.10, dock: 0.95,
+  // общественные постройки античности
+  columned: 1.70, amphi: 1.15, arches: 1.25, silo: 1.35, mill: 1.65, dome: 1.55,
+  // укрепления
+  wall: 1.00, barracks: 1.20, keep: 2.10, vault: 1.30,
+  // промышленность
+  factory: 1.70, warehouse: 1.10, shipyard: 1.25, lab: 1.40, reactor: 1.90, flat: 0.90,
+  airport: 1.30,
+  // современность и будущее — единственное, чему положено возвышаться
+  highrise: 3.20, tower: 3.60, aicore: 2.40, spire: 4.20,
+};
+const ARCH_H_DEFAULT = 1.15;
+
+export function archHeight(arch) { return ARCH_H[arch] ?? ARCH_H_DEFAULT; }
+
 export class SpriteCache {
   constructor(quality) {
     this.q = quality;
@@ -52,7 +82,9 @@ const BASE = [56, 96, 132];
 
 function bake(id, def, era, sizeTiles, detail) {
   const W = BASE[detail] * sizeTiles;
-  const HFACT = 1.55;                 // запас вверх под крыши, башни и трубы
+  // Высота своя у каждого архетипа (см. ARCH_H). Небольшой запас сверху нужен
+  // под конёк, трубу и мачту — иначе они срезаются рамкой холста.
+  const HFACT = archHeight(ARCH[id] || 'house') * 1.12;
   const H = Math.round(W * HFACT);
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
