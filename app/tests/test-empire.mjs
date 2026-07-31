@@ -140,7 +140,7 @@ t('U12 специализация: аграрный +еда, но −золот�
   const run = (spec) => {
     const st = createEmpire();
     const ctx = baseCtx();
-    const city = makeCity(st, ctx, 40, 32, createRng(1), spec);
+    const city = makeCity(st, ctx, 44, 32, createRng(1), spec);
     const rep = tickEmpire(st, { ...ctx, day: 1 }, neverRng);
     return { city, rep };
   };
@@ -153,7 +153,7 @@ t('U12 специализация: аграрный +еда, но −золот�
   ok(sci.rep.shared.knowledge > plain.rep.shared.knowledge, 'научный не дал прибавки знаний');
   // смена специализации игроком
   const st = createEmpire();
-  const city = makeCity(st, baseCtx(), 40, 32, createRng(1));
+  const city = makeCity(st, baseCtx(), 44, 32, createRng(1));
   ok(setSpecialization(st, city.id, 'trade').ok && city.spec === 'trade', 'смена специализации не сработала');
   ok(!setSpecialization(st, city.id, 'x').ok, 'мусорная специализация принята');
 });
@@ -162,7 +162,7 @@ t('U12 специализация: аграрный +еда, но −золот�
 t('U12 правило общего/местного: золото и знания — в казну, еда и дерево — на складе', () => {
   const st = createEmpire();
   const ctx = baseCtx();
-  const city = makeCity(st, ctx, 40, 32, createRng(1));
+  const city = makeCity(st, ctx, 44, 32, createRng(1));
   const food0 = city.local.food;
   const rep = tickEmpire(st, { ...ctx, day: 1 }, neverRng);
   ok(rep.shared.gold > 0 && rep.shared.knowledge > 0, 'город не отправил дань в казну');
@@ -206,15 +206,16 @@ t('U12 шанс ограбления: расстояние, война, арми
 t('U12 ограбление: при плохом броске груз пропадает', () => {
   const st = createEmpire();
   const ctx = baseCtx();
-  const city = makeCity(st, ctx, 40, 32, createRng(1)); // d=8 → 2 дня пути
+  const city = makeCity(st, ctx, 44, 32, createRng(1)); // d=12 → 3 дня пути
   const r = sendCaravan(st, { ...ctx, day: 1 }, city.id, 0, { food: 25 });
   ok(r.ok && r.caravan.rob > 0, 'караван не создан или риск нулевой');
+  ok(r.caravan.days === 3, `время в пути ${r.caravan.days}, ждали 3`);
   ok(city.local.food === 5, `склад не списан: ${city.local.food}`);
-  const reps = runDays(st, ctx, alwaysRng, 3, 1);
+  const reps = runDays(st, ctx, alwaysRng, 4, 1);
   const robbedDay = reps.findIndex(rep => rep.robbed.length > 0);
-  ok(robbedDay === 2, `ограбление не в день прибытия: индекс ${robbedDay}`);
+  ok(robbedDay === 3, `ограбление не в день прибытия: индекс ${robbedDay}`);
   ok(reps.every(rep => rep.toCapital.food === 0), 'ограбленный груз доехал до столицы');
-  ok(reps[2].events.some(e => e.text.includes('ограблен')), 'нет события об ограблении');
+  ok(reps[3].events.some(e => e.text.includes('ограблен')), 'нет события об ограблении');
   // валидации
   ok(!sendCaravan(st, ctx, city.id, 0, { food: 9999 }).ok, 'караван увёз больше, чем на складе');
   ok(!sendCaravan(st, ctx, 777, 0, { food: 5 }).ok, 'несуществующий отправитель прошёл');
@@ -224,7 +225,7 @@ t('U12 ограбление: при плохом броске груз проп�
 t('U12 зима без запасов: голод, убыль населения, падение счастья', () => {
   const st = createEmpire();
   const ctx = baseCtx({ seasonIdx: 3 }); // зимой поля не родят
-  const city = makeCity(st, ctx, 40, 32, createRng(1));
+  const city = makeCity(st, ctx, 44, 32, createRng(1));
   city.local.food = 0;
   const rep = tickEmpire(st, { ...ctx, day: 1 }, neverRng);
   ok(city.pop === START_POP - 1, `голод не убил: население ${city.pop}`);
@@ -232,7 +233,7 @@ t('U12 зима без запасов: голод, убыль населения
   ok(city.happy < 35, `счастье не упало: ${city.happy}`);
   // летом тот же город с едой живёт нормально
   const st2 = createEmpire();
-  const c2 = makeCity(st2, baseCtx(), 40, 32, createRng(1));
+  const c2 = makeCity(st2, baseCtx(), 44, 32, createRng(1));
   tickEmpire(st2, { ...baseCtx(), day: 1 }, neverRng);
   ok(c2.pop === START_POP && c2.happy >= 50, `сытый город несчастен: pop ${c2.pop}, happy ${c2.happy}`);
 });
@@ -262,7 +263,7 @@ t('U12 восстание: дальний голодный город отдел
 t('U12 постройки: дерево со склада, золото из казны, эффект работает', () => {
   const st = createEmpire();
   const ctx = baseCtx();
-  const city = makeCity(st, ctx, 40, 32, createRng(1));
+  const city = makeCity(st, ctx, 44, 32, createRng(1));
   city.local.wood = 100;
   const r = buildInCity(st, city.id, 'market', 50);
   ok(r.ok && r.goldSpent === 25, 'рынок не построился или золото не то');

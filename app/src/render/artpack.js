@@ -9,8 +9,19 @@
 // есть, задаётся в MANIFEST — грузить наугад нельзя, иначе в консоли посыплются
 // 404, а это нарушает приёмку «ноль красных ошибок».
 
-// Заполняется сборщиком атласа; пустой список = works полностью процедурно.
-export const MANIFEST = [];
+// 42 здания, для которых заказчик сгенерировал арт (см. tools/art/raw_map.tsv).
+// Остальные 16 (campfire, quarry, story_fire, склады, shipyard, sewers, lab,
+// apartment, airport, npp, robo_factory, biolab, skyscraper, ai_core) рисуются
+// процедурно, пока не появится их арт — тогда просто дописать id сюда.
+export const MANIFEST = [
+  'academy', 'amphitheater', 'aqueduct', 'armory', 'bank', 'barracks', 'castle',
+  'clinic', 'datacenter', 'factory', 'farm', 'forager', 'foundry', 'fusion_reactor',
+  'granary', 'guild_hall', 'hospital', 'hunter_lodge', 'hut', 'lumber', 'market',
+  'media_tower', 'mill', 'mine', 'observatory', 'palisade', 'pasture', 'port',
+  'power_plant', 'press', 'smithy', 'solar', 'spaceport', 'spire', 'stock_exchange',
+  'stone_house', 'stone_walls', 'temple', 'train_station', 'treasury', 'university',
+  'workshop',
+];
 
 const BASE = 'assets/sprites/';
 
