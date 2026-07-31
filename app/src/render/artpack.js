@@ -5,9 +5,12 @@
 // если нет — рисуем процедурно, как и раньше. Поэтому арт можно подвозить
 // по частям: наполовину нарисованный город работает и выглядит нормально.
 //
-// Файлы лежат в app/assets/sprites/buildings_<id>.png. Список того, что реально
-// есть, задаётся в MANIFEST — грузить наугад нельзя, иначе в консоли посыплются
-// 404, а это нарушает приёмку «ноль красных ошибок».
+// Файлы лежат в app/assets/sprites/buildings_<id>.png. MANIFEST ниже — это
+// список ОЖИДАЕМОГО арта, а грузим мы только то, что реально лежит на диске:
+// перечень собирается сборщиком в artpack_list.js. Грузить наугад нельзя —
+// на каждый недостающий файл браузер печатает красную 404, а приёмка требует
+// нулевого числа ошибок в консоли.
+import { AVAILABLE } from './artpack_list.js';
 
 // 42 здания, для которых заказчик сгенерировал арт (см. tools/art/raw_map.tsv).
 // Остальные 16 (campfire, quarry, story_fire, склады, shipyard, sewers, lab,
@@ -32,15 +35,15 @@ export class ArtPack {
     this.enabled = true;
   }
 
-  // Пытается начать загрузку всего, что заявлено в манифесте.
+  // Пытается начать загрузку всего, что реально есть в папке спрайтов.
   preload() {
     if (!this.enabled) return;
-    for (const id of MANIFEST) this.request(id);
+    for (const id of AVAILABLE) this.request(id);
   }
 
   request(id) {
     if (!this.enabled || this.img.has(id) || this.pending.has(id)) return;
-    if (!MANIFEST.includes(id)) return;
+    if (!AVAILABLE.includes(id)) return;
     this.pending.add(id);
     const im = new Image();
     im.onload = () => { this.img.set(id, im); this.pending.delete(id); };
@@ -58,5 +61,5 @@ export class ArtPack {
   }
 
   get ready() { return this.img.size; }
-  get total() { return MANIFEST.length; }
+  get total() { return AVAILABLE.length; }
 }

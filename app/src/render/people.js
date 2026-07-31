@@ -34,7 +34,7 @@ const WEAR = [
 // --- профессии: цвет и инструмент -----------------------------------------
 export const PROF = {
   lumber:    { col: '#4f7a3a', tool: 'axe' },      // лесоруб
-  miner:     { col: '#5f5a55', tool: 'pick' },     // шахтёр
+  miner:     { col: '#56606e', tool: 'pick' },     // шахтёр
   farmer:    { col: '#c9a33f', tool: 'sickle' },   // фермер
   builder:   { col: '#d8813a', tool: 'hammer' },   // строитель
   soldier:   { col: '#a8352c', tool: 'spear' },    // солдат
@@ -481,7 +481,10 @@ function tool(c, kind, hand, backHand, H, side, back, era) {
     c.fillStyle = steel;
     c.fillRect(tipX - u * 0.06, tipY - u * 0.03, u * 0.13, u * 0.02);
   } else if (kind === 'spear') {
-    const bx = hx + u * 0.04, by = hy + u * 0.1, tx = hx - u * 0.02, ty = hy - u * 0.42;
+    // В анфас копьё отводим наружу: иначе наконечник торчит ровно над головой
+    // и читается как рог на шлеме.
+    const off = side ? 0 : u * 0.06;
+    const bx = hx + u * 0.04 + off, by = hy + u * 0.1, tx = hx - u * 0.02 + off, ty = hy - u * 0.42;
     capsule(c, bx, by, tx, ty, u * 0.022, wood);
     c.fillStyle = steel;
     c.beginPath();

@@ -1687,7 +1687,7 @@
     depth.fill(0);
     if (!state._queue || state._queue.length !== N) state._queue = new Int32Array(N);
     const q = state._queue;
-    let head = 0, tail = 0;
+    let head2 = 0, tail = 0;
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = y * W + x, o = owners[i];
@@ -1699,8 +1699,8 @@
         }
       }
     }
-    while (head < tail) {
-      const i = q[head++], o = owners[i], d = depth[i];
+    while (head2 < tail) {
+      const i = q[head2++], o = owners[i], d = depth[i];
       const x = i % W, y = i / W | 0;
       const nd = d < 255 ? d + 1 : 255;
       if (x > 0) {
@@ -4594,10 +4594,10 @@ ${s}`, "console");
         for (let x = 0; x < W; x++) {
           const t = sim2.world.tiles[y * W + x];
           const p = pal[t];
-          const rgb = hex2rgb(p.base);
+          const rgb2 = hex2rgb(p.base);
           let m = this.q.relief ? this.shade[y * W + x] : 1;
           m *= 0.97 + hash2(x, y) * 0.06;
-          const r = Math.min(255, rgb[0] * m) | 0, g = Math.min(255, rgb[1] * m) | 0, b = Math.min(255, rgb[2] * m) | 0;
+          const r = Math.min(255, rgb2[0] * m) | 0, g = Math.min(255, rgb2[1] * m) | 0, b = Math.min(255, rgb2[2] * m) | 0;
           for (let sy = 0; sy < S; sy++) {
             for (let sx = 0; sx < S; sx++) {
               const o = ((y * S + sy) * W * S + (x * S + sx)) * 4;
@@ -6001,51 +6001,603 @@ ${s}`, "console");
     }
   };
 
-  // app/src/render/artpack.js
-  var MANIFEST = [
-    "academy",
-    "amphitheater",
-    "aqueduct",
-    "armory",
-    "bank",
-    "barracks",
-    "castle",
-    "clinic",
-    "datacenter",
-    "factory",
-    "farm",
-    "forager",
-    "foundry",
-    "fusion_reactor",
-    "granary",
-    "guild_hall",
-    "hospital",
-    "hunter_lodge",
-    "hut",
-    "lumber",
-    "market",
-    "media_tower",
-    "mill",
-    "mine",
-    "observatory",
-    "palisade",
-    "pasture",
-    "port",
-    "power_plant",
-    "press",
-    "smithy",
-    "solar",
-    "spaceport",
-    "spire",
-    "stock_exchange",
-    "stone_house",
-    "stone_walls",
-    "temple",
-    "train_station",
-    "treasury",
-    "university",
-    "workshop"
+  // app/src/render/people.js
+  var DIR_W = 1;
+  var DIR_E = 2;
+  var DIR_N = 3;
+  var FRAMES = 4;
+  var DIRS = 4;
+  var FRAME_H = [40, 64, 96];
+  var WEAR = [
+    { kind: "fur", base: "#7d6046", trim: "#54402c", head: "none", skinArms: true },
+    // 0 шкуры
+    { kind: "tunic", base: "#c9a86e", trim: "#8a6d42", head: "band", skinArms: true },
+    // 1 бронза: туника
+    { kind: "tunic", base: "#9a9083", trim: "#5c5751", head: "cap" },
+    // 2 железо: туника с кожей
+    { kind: "toga", base: "#e8e2cc", trim: "#bfae86", head: "none", skinArms: true },
+    // 3 античность
+    { kind: "mail", base: "#98a0a8", trim: "#6d3b30", head: "helm" },
+    // 4 кольчуга
+    { kind: "coat", base: "#6a4a62", trim: "#d8c070", head: "hat" },
+    // 5 камзол
+    { kind: "robe", base: "#6b5a48", trim: "#3a3028", head: "cap" },
+    // 6 рабочая роба
+    { kind: "overall", base: "#3f6f96", trim: "#e0d8c4", head: "hard" },
+    // 7 комбинезон
+    { kind: "overall", base: "#4a5a80", trim: "#8fd0ff", head: "none" },
+    // 8 цифровая
+    { kind: "suit", base: "#e4eef4", trim: "#7de3ff", head: "dome" }
+    // 9 скафандр
   ];
+  var PROF = {
+    lumber: { col: "#4f7a3a", tool: "axe" },
+    // лесоруб
+    miner: { col: "#56606e", tool: "pick" },
+    // шахтёр
+    farmer: { col: "#c9a33f", tool: "sickle" },
+    // фермер
+    builder: { col: "#d8813a", tool: "hammer" },
+    // строитель
+    soldier: { col: "#a8352c", tool: "spear" },
+    // солдат
+    scientist: { col: "#dfeaf2", tool: "tablet" },
+    // учёный
+    hunter: { col: "#7d5a34", tool: "bow" },
+    // охотник
+    trader: { col: "#8a5aa0", tool: "crate" },
+    // торговец/рабочий на складе
+    worker: { col: "#96826a", tool: null }
+    // без профессии
+  };
+  var LOOK = [
+    { skin: "#e3b98f", shade: "#c08f63", hair: "#4a3527" },
+    { skin: "#c99266", shade: "#a06f47", hair: "#241a13" },
+    { skin: "#f0d3ae", shade: "#cfa877", hair: "#8a6a3a" }
+  ];
+  var PeopleSprites = class {
+    constructor(quality) {
+      this.q = quality;
+      this.map = /* @__PURE__ */ new Map();
+    }
+    setQuality(q) {
+      this.q = q;
+      this.map.clear();
+    }
+    // Возвращает лист { cv, fw, fh } для набора. Печётся лениво: в партии обычно
+    // живы 3-5 профессий одной эпохи — это 3-5 листов, а не все 270 сочетаний.
+    sheet(era, prof, look) {
+      const d = Math.max(0, Math.min(2, this.q.detail));
+      const key = `${era}|${prof}|${look}|${d}`;
+      let s = this.map.get(key);
+      if (s) return s;
+      s = bakeSheet(era, prof, look, FRAME_H[d], d);
+      this.map.set(key, s);
+      return s;
+    }
+  };
+  var WORK_PROF = {
+    lumber: "lumber",
+    forager: "lumber",
+    woodshed: "lumber",
+    quarry: "miner",
+    mine: "miner",
+    stoneyard: "miner",
+    foundry: "miner",
+    farm: "farmer",
+    pasture: "farmer",
+    granary: "farmer",
+    mill: "farmer",
+    hunter_lodge: "hunter",
+    academy: "scientist",
+    university: "scientist",
+    observatory: "scientist",
+    lab: "scientist",
+    datacenter: "scientist",
+    biolab: "scientist",
+    ai_core: "scientist",
+    press: "scientist",
+    clinic: "scientist",
+    hospital: "scientist",
+    barracks: "soldier",
+    armory: "soldier",
+    castle: "soldier",
+    stone_walls: "soldier",
+    market: "trader",
+    depot: "trader",
+    bank: "trader",
+    treasury: "trader",
+    stock_exchange: "trader",
+    port: "trader",
+    guild_hall: "trader",
+    smithy: "builder",
+    workshop: "builder",
+    factory: "builder",
+    shipyard: "builder",
+    power_plant: "builder",
+    robo_factory: "builder",
+    npp: "builder"
+  };
+  function professionOf(v) {
+    if (v.job === "build") return "builder";
+    if (v.job === "hunt") return "hunter";
+    if (v.job === "forage" || v.job === "deadfall") return "lumber";
+    if (v.target && v.target.b) return WORK_PROF[v.target.b.id] || "worker";
+    return "worker";
+  }
+  var LOOK_CACHE = /* @__PURE__ */ new WeakMap();
+  function lookOf(v) {
+    let l = LOOK_CACHE.get(v);
+    if (l === void 0) {
+      let h = 0;
+      for (let i = 0; i < v.name.length; i++) h = h * 31 + v.name.charCodeAt(i) | 0;
+      l = Math.abs(h) % LOOK.length;
+      LOOK_CACHE.set(v, l);
+    }
+    return l;
+  }
+  function bakeSheet(era, prof, look, FH, detail) {
+    const FW = Math.round(FH * 0.78);
+    const cv = document.createElement("canvas");
+    cv.width = FW * FRAMES;
+    cv.height = FH * DIRS;
+    const c = cv.getContext("2d");
+    const wear = WEAR[Math.max(0, Math.min(9, era))];
+    const pr = PROF[prof] || PROF.worker;
+    const lk = LOOK[look % LOOK.length];
+    const tmp = document.createElement("canvas");
+    tmp.width = FW;
+    tmp.height = FH;
+    const tc = tmp.getContext("2d");
+    for (let d = 0; d < DIRS; d++) {
+      for (let f = 0; f < FRAMES; f++) {
+        tc.clearRect(0, 0, FW, FH);
+        drawPose(tc, FW, FH, { wear, pr, lk, dir: d, frame: f, detail });
+        const ox = f * FW, oy = d * FH;
+        const g = c.createRadialGradient(ox + FW / 2, oy + FH * 0.945, 0, ox + FW / 2, oy + FH * 0.945, FH * 0.17);
+        g.addColorStop(0, "rgba(20,16,12,0.42)");
+        g.addColorStop(1, "rgba(20,16,12,0)");
+        c.fillStyle = g;
+        c.beginPath();
+        c.ellipse(ox + FW / 2, oy + FH * 0.945, FH * 0.17, FH * 0.062, 0, 0, 7);
+        c.fill();
+        outline(c, tmp, ox, oy, Math.max(1, Math.round(FH / 44)));
+        c.drawImage(tmp, ox, oy);
+      }
+    }
+    return { cv, fw: FW, fh: FH };
+  }
+  function outline(c, tmp, ox, oy, k) {
+    const W = tmp.width, H = tmp.height;
+    const sil = document.createElement("canvas");
+    sil.width = W;
+    sil.height = H;
+    const sc = sil.getContext("2d");
+    sc.drawImage(tmp, 0, 0);
+    sc.globalCompositeOperation = "source-in";
+    sc.fillStyle = "rgba(24,18,14,0.85)";
+    sc.fillRect(0, 0, W, H);
+    for (const [dx, dy] of [[-k, 0], [k, 0], [0, -k], [0, k], [-k, -k], [k, -k], [-k, k], [k, k]]) {
+      c.drawImage(sil, ox + dx, oy + dy);
+    }
+  }
+  function drawPose(c, W, H, o) {
+    const { wear, pr, lk, dir, frame: frame2, detail } = o;
+    const side = dir === DIR_W || dir === DIR_E;
+    const back = dir === DIR_N;
+    const mirror = dir === DIR_W;
+    const t = frame2 * Math.PI / 2;
+    const fore = side ? 1 : 0.34;
+    c.save();
+    if (mirror) {
+      c.translate(W, 0);
+      c.scale(-1, 1);
+    }
+    const cx = W / 2;
+    const ground = H * 0.955;
+    const bob = -H * 0.014 * (0.5 + 0.5 * Math.cos(2 * t));
+    const hipY = H * 0.615 + bob;
+    const shoY = H * 0.345 + bob;
+    const headY = H * 0.2 + bob;
+    const headR = H * 0.125;
+    const thigh = H * 0.175, shin = H * 0.175;
+    const legSpread = side ? H * 0.012 : H * 0.05;
+    const armSpread = side ? H * 0.01 : H * 0.086;
+    const skin = lk.skin, skinDark = lk.shade;
+    const cloth = pr.col;
+    const clothDark = mix(cloth, "#000000", 0.32);
+    const era = wear;
+    const pants = wear.kind === "toga" ? mix(era.base, "#ffffff", 0.1) : mix(era.base, "#000000", 0.18);
+    const legW = H * 0.062, armW = H * 0.05;
+    const legPose = (ph) => {
+      const th = 0.44 * Math.sin(ph);
+      const kn = -0.85 * Math.max(0, -Math.sin(ph - 0.55));
+      return { th, kn };
+    };
+    const L = [
+      { ...legPose(t), off: -legSpread },
+      { ...legPose(t + Math.PI), off: legSpread }
+    ];
+    const drawLeg = (p, dark) => {
+      const hx = cx + p.off, hy = hipY;
+      const kx = hx + Math.sin(p.th) * thigh * fore, ky = hy + Math.cos(p.th) * thigh;
+      const a2 = p.th + p.kn;
+      const fx = kx + Math.sin(a2) * shin * fore, fy = ky + Math.cos(a2) * shin;
+      const col = dark ? mix(pants, "#000000", 0.3) : pants;
+      capsule(c, hx, hy, kx, ky, legW, col);
+      capsule(c, kx, ky, fx, fy, legW * 0.88, col);
+      c.fillStyle = dark ? mix(era.trim, "#000000", 0.35) : mix(era.trim, "#000000", 0.12);
+      c.beginPath();
+      c.ellipse(fx + (side ? legW * 0.35 : 0), Math.min(fy + legW * 0.1, ground), legW * (side ? 0.78 : 0.6), legW * 0.42, 0, 0, 7);
+      c.fill();
+    };
+    drawLeg(L[0], true);
+    drawLeg(L[1], false);
+    const armPose = (ph) => ({ up: -0.5 * Math.sin(ph), el: -0.45 });
+    const backArm = armPose(t + Math.PI), frontArm = armPose(t);
+    const drawArm = (p, off, dark, sleeve) => {
+      const hx = cx + off, hy = shoY + H * 0.02;
+      const ex = hx + Math.sin(p.up) * H * 0.15 * fore, ey = hy + Math.cos(p.up) * H * 0.15;
+      const a2 = p.up + p.el;
+      const wx = ex + Math.sin(a2) * H * 0.14 * fore, wy = ey + Math.cos(a2) * H * 0.14;
+      const sl = mix(sleeve, "#000000", dark ? 0.34 : 0.13);
+      capsule(c, hx, hy, ex, ey, armW, sl);
+      const bare = era.skinArms;
+      capsule(c, ex, ey, wx, wy, armW * 0.86, bare ? dark ? skinDark : skin : sl);
+      c.fillStyle = dark ? skinDark : skin;
+      c.beginPath();
+      c.arc(wx, wy, armW * 0.5, 0, 7);
+      c.fill();
+      return { x: wx, y: wy };
+    };
+    const sleeveCol = era.kind === "mail" ? era.base : cloth;
+    const backHand = drawArm(backArm, -armSpread, true, sleeveCol);
+    torso(c, cx, shoY, hipY, H, side, cloth, clothDark, era, detail);
+    const frontHand = drawArm(frontArm, armSpread, false, sleeveCol);
+    head(c, cx, headY, headR, H, side, back, skin, skinDark, lk.hair, era, detail);
+    if (pr.tool && detail >= 1) tool(c, pr.tool, frontHand, backHand, H, side, back, era);
+    c.restore();
+  }
+  function torso(c, cx, shoY, hipY, H, side, cloth, clothDark, era, detail) {
+    const w = H * (side ? 0.155 : 0.205);
+    const h = hipY - shoY;
+    const x = cx - w / 2;
+    const g = c.createLinearGradient(x, 0, x + w, 0);
+    g.addColorStop(0, mix(cloth, "#ffffff", 0.16));
+    g.addColorStop(0.55, cloth);
+    g.addColorStop(1, clothDark);
+    c.fillStyle = g;
+    roundRect(c, x, shoY, w, h * 1.06, w * 0.32);
+    c.fill();
+    if (era.kind === "fur") {
+      c.fillStyle = mix(era.base, "#000000", 0.12);
+      c.beginPath();
+      c.moveTo(x, hipY - h * 0.18);
+      for (let i = 0; i <= 4; i++) {
+        const px = x + w * (i / 4);
+        c.lineTo(px, hipY + h * (i % 2 ? 0.14 : 0.04));
+      }
+      c.lineTo(x + w, hipY - h * 0.18);
+      c.closePath();
+      c.fill();
+      c.fillStyle = mix(era.base, "#ffffff", 0.3);
+      c.beginPath();
+      c.ellipse(cx, shoY + h * 0.06, w * 0.6, h * 0.13, 0, 0, 7);
+      c.fill();
+    } else if (era.kind === "tunic") {
+      c.fillStyle = era.trim;
+      c.fillRect(x, shoY + h * 0.6, w, h * 0.13);
+      c.fillStyle = "rgba(255,255,255,0.16)";
+      c.fillRect(cx - w * 0.05, shoY + h * 0.08, w * 0.1, h * 0.5);
+    } else if (era.kind === "toga") {
+      c.fillStyle = mix(era.base, "#ffffff", 0.25);
+      c.beginPath();
+      c.moveTo(x, shoY + h * 0.08);
+      c.lineTo(x + w, shoY + h * 0.42);
+      c.lineTo(x + w, shoY + h * 0.62);
+      c.lineTo(x, shoY + h * 0.28);
+      c.closePath();
+      c.fill();
+    } else if (era.kind === "mail") {
+      c.fillStyle = era.base;
+      roundRect(c, x, shoY, w, h * 0.98, w * 0.3);
+      c.fill();
+      if (detail >= 1) {
+        c.fillStyle = "rgba(0,0,0,0.22)";
+        for (let yy = shoY + h * 0.12; yy < hipY; yy += H * 0.026) {
+          for (let xx = x + w * 0.14; xx < x + w * 0.9; xx += H * 0.026) c.fillRect(xx, yy, H * 0.012, H * 0.012);
+        }
+      }
+      c.fillStyle = cloth;
+      c.beginPath();
+      c.moveTo(cx - w * 0.26, shoY + h * 0.06);
+      c.lineTo(cx + w * 0.26, shoY + h * 0.06);
+      c.lineTo(cx + w * 0.2, hipY + h * 0.06);
+      c.lineTo(cx - w * 0.2, hipY + h * 0.06);
+      c.closePath();
+      c.fill();
+      c.fillStyle = era.trim;
+      c.fillRect(x, shoY + h * 0.62, w, h * 0.1);
+    } else if (era.kind === "coat") {
+      c.fillStyle = clothDark;
+      c.beginPath();
+      c.moveTo(x, shoY + h * 0.55);
+      c.lineTo(x + w, shoY + h * 0.55);
+      c.lineTo(x + w * 1.16, hipY + h * 0.3);
+      c.lineTo(x - w * 0.16, hipY + h * 0.3);
+      c.closePath();
+      c.fill();
+      c.fillStyle = era.trim;
+      c.fillRect(cx - w * 0.04, shoY + h * 0.1, w * 0.08, h * 0.5);
+      c.beginPath();
+      c.ellipse(cx, shoY + h * 0.05, w * 0.42, h * 0.1, 0, 0, 7);
+      c.fill();
+    } else if (era.kind === "robe") {
+      c.fillStyle = mix(era.base, "#ffffff", 0.08);
+      c.fillRect(cx - w * 0.34, shoY + h * 0.3, w * 0.68, h * 0.8);
+      c.fillStyle = era.trim;
+      c.fillRect(x, shoY + h * 0.58, w, h * 0.1);
+    } else if (era.kind === "overall") {
+      c.fillStyle = mix(era.base, "#000000", 0.05);
+      c.fillRect(x, shoY + h * 0.45, w, h * 0.61);
+      c.fillStyle = cloth;
+      c.fillRect(cx - w * 0.34, shoY + h * 0.05, w * 0.14, h * 0.45);
+      c.fillRect(cx + w * 0.2, shoY + h * 0.05, w * 0.14, h * 0.45);
+      c.fillStyle = era.trim;
+      c.fillRect(x, shoY + h * 0.42, w, H * 0.012);
+    } else if (era.kind === "suit") {
+      c.fillStyle = mix(era.base, "#ffffff", 0.2);
+      roundRect(c, x, shoY, w, h * 1.02, w * 0.36);
+      c.fill();
+      c.fillStyle = cloth;
+      c.fillRect(cx - w * 0.42, shoY + h * 0.24, w * 0.84, h * 0.16);
+      c.fillStyle = era.trim;
+      c.beginPath();
+      c.arc(cx + w * 0.2, shoY + h * 0.32, w * 0.1, 0, 7);
+      c.fill();
+      c.fillStyle = mix(era.base, "#000000", 0.25);
+      roundRect(c, cx - w * 0.62, shoY + h * 0.1, w * 0.24, h * 0.6, w * 0.1);
+      c.fill();
+    }
+    c.fillStyle = "rgba(0,0,0,0.14)";
+    c.fillRect(x, hipY - h * 0.06, w, h * 0.1);
+  }
+  function head(c, cx, cy, r, H, side, back, skin, skinDark, hair, era, detail) {
+    c.fillStyle = skinDark;
+    c.fillRect(cx - r * 0.28, cy + r * 0.5, r * 0.56, r * 0.6);
+    const g = c.createRadialGradient(cx - r * 0.3, cy - r * 0.35, r * 0.1, cx, cy, r * 1.15);
+    g.addColorStop(0, mix(skin, "#ffffff", 0.22));
+    g.addColorStop(1, skinDark);
+    c.fillStyle = g;
+    c.beginPath();
+    if (side) c.ellipse(cx + r * 0.06, cy, r * 0.92, r, 0, 0, 7);
+    else c.ellipse(cx, cy, r * 0.94, r, 0, 0, 7);
+    c.fill();
+    if (side) {
+      c.fillStyle = skin;
+      c.beginPath();
+      c.moveTo(cx + r * 0.85, cy - r * 0.1);
+      c.lineTo(cx + r * 1.12, cy + r * 0.08);
+      c.lineTo(cx + r * 0.82, cy + r * 0.18);
+      c.closePath();
+      c.fill();
+    }
+    c.fillStyle = hair;
+    c.beginPath();
+    if (back) c.ellipse(cx, cy + r * 0.05, r * 0.96, r * 0.95, 0, 0, 7);
+    else if (side) c.ellipse(cx - r * 0.16, cy - r * 0.18, r * 0.86, r * 0.78, 0, 0, 7);
+    else c.ellipse(cx, cy - r * 0.28, r * 0.95, r * 0.72, 0, 0, 7);
+    c.fill();
+    if (!back && !side && detail >= 1) {
+      c.fillStyle = "rgba(30,22,18,0.85)";
+      c.beginPath();
+      c.arc(cx - r * 0.34, cy + r * 0.16, r * 0.13, 0, 7);
+      c.fill();
+      c.beginPath();
+      c.arc(cx + r * 0.34, cy + r * 0.16, r * 0.13, 0, 7);
+      c.fill();
+    }
+    if (side && !back && detail >= 1) {
+      c.fillStyle = "rgba(30,22,18,0.85)";
+      c.beginPath();
+      c.arc(cx + r * 0.42, cy + r * 0.1, r * 0.12, 0, 7);
+      c.fill();
+    }
+    const hd = era.head;
+    if (hd === "band") {
+      c.fillStyle = era.trim;
+      c.fillRect(cx - r, cy - r * 0.5, r * 2, r * 0.28);
+    } else if (hd === "cap") {
+      c.fillStyle = mix(era.base, "#000000", 0.25);
+      c.beginPath();
+      c.ellipse(cx, cy - r * 0.35, r * 1.02, r * 0.72, 0, Math.PI, 0);
+      c.fill();
+      c.fillRect(cx - r * 1.02, cy - r * 0.4, r * 2.04, r * 0.2);
+    } else if (hd === "helm") {
+      c.fillStyle = mix(era.base, "#ffffff", 0.15);
+      c.beginPath();
+      c.ellipse(cx, cy - r * 0.2, r * 1.08, r * 0.98, 0, Math.PI, 0);
+      c.fill();
+      c.fillRect(cx - r * 1.08, cy - r * 0.24, r * 2.16, r * 0.24);
+      c.fillStyle = mix(era.base, "#000000", 0.3);
+      if (!side) c.fillRect(cx - r * 0.1, cy - r * 0.3, r * 0.2, r * 0.9);
+    } else if (hd === "hat") {
+      c.fillStyle = mix(era.base, "#000000", 0.35);
+      c.beginPath();
+      c.ellipse(cx, cy - r * 0.42, r * 1.5, r * 0.3, 0, 0, 7);
+      c.fill();
+      c.beginPath();
+      c.ellipse(cx, cy - r * 0.55, r * 0.8, r * 0.55, 0, Math.PI, 0);
+      c.fill();
+      c.fillStyle = era.trim;
+      c.fillRect(cx - r * 0.8, cy - r * 0.55, r * 1.6, r * 0.14);
+    } else if (hd === "hard") {
+      c.fillStyle = "#e8b52e";
+      c.beginPath();
+      c.ellipse(cx, cy - r * 0.22, r * 1.02, r * 0.92, 0, Math.PI, 0);
+      c.fill();
+      c.beginPath();
+      c.ellipse(cx + (side ? r * 0.5 : 0), cy - r * 0.2, r * (side ? 1.25 : 1.28), r * 0.22, 0, 0, 7);
+      c.fill();
+      c.fillStyle = "rgba(255,255,255,0.35)";
+      c.fillRect(cx - r * 0.12, cy - r * 1.05, r * 0.24, r * 0.8);
+    } else if (hd === "dome") {
+      const gy = cy - r * 0.05, gr = r * 1.2;
+      const gg = c.createRadialGradient(cx - gr * 0.35, gy - gr * 0.4, gr * 0.05, cx, gy, gr);
+      gg.addColorStop(0, "#cfeaf6");
+      gg.addColorStop(0.55, "#7fb6cc");
+      gg.addColorStop(1, "#3f6076");
+      c.fillStyle = gg;
+      c.beginPath();
+      c.arc(cx, gy, gr, 0, 7);
+      c.fill();
+      c.fillStyle = "rgba(40,48,58,0.32)";
+      c.beginPath();
+      c.ellipse(cx + (side ? r * 0.2 : 0), gy + r * 0.12, r * 0.5, r * 0.62, 0, 0, 7);
+      c.fill();
+      c.strokeStyle = era.trim;
+      c.lineWidth = r * 0.18;
+      c.beginPath();
+      c.arc(cx, gy, gr, 0, 7);
+      c.stroke();
+      c.fillStyle = "rgba(255,255,255,0.75)";
+      c.beginPath();
+      c.ellipse(cx - r * 0.52, gy - r * 0.62, r * 0.34, r * 0.16, -0.6, 0, 7);
+      c.fill();
+    }
+  }
+  function tool(c, kind, hand, backHand, H, side, back, era) {
+    const u = H;
+    const wood = "#7a5433", dark = "#4a3626", steel = "#c3cad2", steelDark = "#7d858e";
+    c.lineCap = "round";
+    const hx = hand.x, hy = hand.y;
+    if (kind === "axe") {
+      const tipX = hx + u * 0.02, tipY = hy - u * 0.27;
+      capsule(c, hx - u * 0.02, hy + u * 0.06, tipX, tipY, u * 0.026, wood);
+      c.fillStyle = steelDark;
+      c.fillRect(tipX - u * 0.035, tipY - u * 0.02, u * 0.05, u * 0.14);
+      c.fillStyle = steel;
+      c.beginPath();
+      c.moveTo(tipX + u * 0.01, tipY - u * 0.025);
+      c.quadraticCurveTo(tipX + u * 0.15, tipY + u * 0.05, tipX + u * 0.01, tipY + u * 0.125);
+      c.closePath();
+      c.fill();
+      c.fillStyle = "rgba(255,255,255,0.45)";
+      c.beginPath();
+      c.moveTo(tipX + u * 0.055, tipY + u * 5e-3);
+      c.quadraticCurveTo(tipX + u * 0.14, tipY + u * 0.05, tipX + u * 0.05, tipY + u * 0.1);
+      c.closePath();
+      c.fill();
+    } else if (kind === "pick") {
+      const tipX = hx, tipY = hy - u * 0.24;
+      capsule(c, hx, hy + u * 0.06, tipX, tipY, u * 0.024, wood);
+      c.strokeStyle = steel;
+      c.lineWidth = u * 0.026;
+      c.beginPath();
+      c.moveTo(tipX - u * 0.075, tipY + u * 0.04);
+      c.quadraticCurveTo(tipX, tipY - u * 0.035, tipX + u * 0.075, tipY + u * 0.04);
+      c.stroke();
+    } else if (kind === "sickle") {
+      capsule(c, hx, hy, hx + u * 0.05, hy - u * 0.09, u * 0.024, wood);
+      c.strokeStyle = steel;
+      c.lineWidth = u * 0.026;
+      c.beginPath();
+      c.arc(hx + u * 0.02, hy - u * 0.13, u * 0.09, 0.3, 3.2);
+      c.stroke();
+    } else if (kind === "hammer") {
+      const tipX = hx + u * 0.01, tipY = hy - u * 0.22;
+      capsule(c, hx, hy + u * 0.05, tipX, tipY, u * 0.024, wood);
+      c.fillStyle = steelDark;
+      roundRect(c, tipX - u * 0.06, tipY - u * 0.03, u * 0.13, u * 0.06, u * 0.012);
+      c.fill();
+      c.fillStyle = steel;
+      c.fillRect(tipX - u * 0.06, tipY - u * 0.03, u * 0.13, u * 0.02);
+    } else if (kind === "spear") {
+      const off = side ? 0 : u * 0.06;
+      const bx = hx + u * 0.04 + off, by = hy + u * 0.1, tx = hx - u * 0.02 + off, ty = hy - u * 0.42;
+      capsule(c, bx, by, tx, ty, u * 0.022, wood);
+      c.fillStyle = steel;
+      c.beginPath();
+      c.moveTo(tx, ty - u * 0.08);
+      c.lineTo(tx + u * 0.035, ty + u * 0.02);
+      c.lineTo(tx - u * 0.035, ty + u * 0.02);
+      c.closePath();
+      c.fill();
+      c.fillStyle = mix(era.trim, "#000000", 0.1);
+      c.beginPath();
+      c.ellipse(backHand.x, backHand.y - u * 0.04, u * 0.075, u * 0.1, 0, 0, 7);
+      c.fill();
+      c.strokeStyle = "rgba(240,232,210,0.7)";
+      c.lineWidth = u * 0.012;
+      c.beginPath();
+      c.ellipse(backHand.x, backHand.y - u * 0.04, u * 0.045, u * 0.06, 0, 0, 7);
+      c.stroke();
+    } else if (kind === "tablet") {
+      c.fillStyle = "#2c3a48";
+      roundRect(c, hx - u * 0.05, hy - u * 0.11, u * 0.11, u * 0.14, u * 0.014);
+      c.fill();
+      c.fillStyle = "rgba(140,220,255,0.9)";
+      c.fillRect(hx - u * 0.035, hy - u * 0.095, u * 0.08, u * 0.11);
+    } else if (kind === "bow") {
+      const bx = hx + u * 0.05, by = hy - u * 0.05, br = u * 0.115;
+      c.strokeStyle = wood;
+      c.lineWidth = u * 0.02;
+      c.beginPath();
+      c.arc(bx, by, br, -1.25, 1.25);
+      c.stroke();
+      c.strokeStyle = "rgba(240,232,210,0.75)";
+      c.lineWidth = u * 7e-3;
+      c.beginPath();
+      c.moveTo(bx + Math.cos(-1.25) * br, by + Math.sin(-1.25) * br);
+      c.lineTo(bx + Math.cos(1.25) * br, by + Math.sin(1.25) * br);
+      c.stroke();
+    } else if (kind === "crate") {
+      const bx = (hx + backHand.x) / 2, by = Math.min(hy, backHand.y) - u * 0.02;
+      c.fillStyle = "#9a7040";
+      roundRect(c, bx - u * 0.09, by - u * 0.09, u * 0.18, u * 0.15, u * 0.012);
+      c.fill();
+      c.fillStyle = "rgba(0,0,0,0.25)";
+      c.fillRect(bx - u * 0.09, by - u * 0.035, u * 0.18, u * 0.018);
+      c.fillStyle = "rgba(255,245,220,0.25)";
+      c.fillRect(bx - u * 0.09, by - u * 0.09, u * 0.18, u * 0.016);
+    }
+  }
+  function capsule(c, x1, y1, x2, y2, w, col) {
+    c.strokeStyle = col;
+    c.lineWidth = w;
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(x1, y1);
+    c.lineTo(x2, y2);
+    c.stroke();
+  }
+  function roundRect(c, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    c.beginPath();
+    c.moveTo(x + rr, y);
+    c.arcTo(x + w, y, x + w, y + h, rr);
+    c.arcTo(x + w, y + h, x, y + h, rr);
+    c.arcTo(x, y + h, x, y, rr);
+    c.arcTo(x, y, x + w, y, rr);
+    c.closePath();
+  }
+  function rgb(col) {
+    if (col[0] === "#") {
+      const v = parseInt(col.slice(1), 16);
+      return [v >> 16 & 255, v >> 8 & 255, v & 255];
+    }
+    const m = col.match(/-?\d+/g);
+    return [+m[0], +m[1], +m[2]];
+  }
+  function mix(c1, c2, k) {
+    const a = rgb(c1), b = rgb(c2);
+    return `rgb(${Math.round(a[0] * (1 - k) + b[0] * k)},${Math.round(a[1] * (1 - k) + b[1] * k)},${Math.round(a[2] * (1 - k) + b[2] * k)})`;
+  }
+
+  // app/src/render/artpack_list.js
+  var AVAILABLE = ["academy", "amphitheater", "aqueduct", "armory", "bank", "barracks", "castle", "clinic", "datacenter", "factory", "farm", "forager", "foundry", "fusion_reactor", "granary", "guild_hall", "hospital", "hunter_lodge", "hut", "lumber", "market", "media_tower", "mill", "mine", "observatory", "palisade", "pasture", "port", "power_plant", "press", "smithy", "solar", "spaceport", "spire", "stock_exchange", "stone_house", "stone_walls", "temple", "train_station", "treasury", "university", "workshop"];
+
+  // app/src/render/artpack.js
   var BASE2 = "assets/sprites/";
   var ArtPack = class {
     constructor() {
@@ -6053,14 +6605,14 @@ ${s}`, "console");
       this.pending = /* @__PURE__ */ new Set();
       this.enabled = true;
     }
-    // Пытается начать загрузку всего, что заявлено в манифесте.
+    // Пытается начать загрузку всего, что реально есть в папке спрайтов.
     preload() {
       if (!this.enabled) return;
-      for (const id of MANIFEST) this.request(id);
+      for (const id of AVAILABLE) this.request(id);
     }
     request(id) {
       if (!this.enabled || this.img.has(id) || this.pending.has(id)) return;
-      if (!MANIFEST.includes(id)) return;
+      if (!AVAILABLE.includes(id)) return;
       this.pending.add(id);
       const im = new Image();
       im.onload = () => {
@@ -6082,7 +6634,7 @@ ${s}`, "console");
       return this.img.size;
     }
     get total() {
-      return MANIFEST.length;
+      return AVAILABLE.length;
     }
   };
 
@@ -6266,6 +6818,8 @@ ${s}`, "console");
       this.autoTuner = this.qualityId === "auto" ? makeAutoTuner(this.quality.id) : null;
       this.terrain = new Terrain(this.quality);
       this.sprites = new SpriteCache(this.quality);
+      this.people = new PeopleSprites(this.quality);
+      this.vstate = /* @__PURE__ */ new WeakMap();
       this.art = new ArtPack();
       this.art.preload();
     }
@@ -6282,6 +6836,7 @@ ${s}`, "console");
       }
       this.terrain.setQuality(this.quality);
       this.sprites.setQuality(this.quality);
+      this.people.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
@@ -6393,6 +6948,8 @@ ${s}`, "console");
       if (next) {
         this.quality = QUALITY[next];
         this.terrain.setQuality(this.quality);
+        this.sprites.setQuality(this.quality);
+        this.people.setQuality(this.quality);
         this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
         this.resize();
       }
@@ -6835,19 +7392,44 @@ ${s}`, "console");
         ctx.fill();
       }
     }
+    // Направление взгляда и фаза шага. Фаза считается от ПРОЙДЕННОГО ПУТИ, а не
+    // от номера кадра: на паузе житель стоит, на ускорении шагает чаще — шаг
+    // всегда совпадает со скоростью в игровом времени.
+    villagerState(v) {
+      let s = this.vstate.get(v);
+      if (!s) {
+        s = { x: v.x, y: v.y, dir: 0, walk: 0, still: 0 };
+        this.vstate.set(v, s);
+      }
+      const dx = v.x - s.x, dy = v.y - s.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 1e-4) {
+        s.walk += d < 1.5 ? d : 0;
+        s.still = 0;
+        if (Math.abs(dx) > Math.abs(dy) * 1.2) s.dir = dx > 0 ? 2 : 1;
+        else s.dir = dy > 0 ? 0 : 3;
+        s.x = v.x;
+        s.y = v.y;
+      } else if (s.still < 100) s.still++;
+      return s;
+    }
     drawVillager(ctx, sx, sy, z, v, era) {
-      const cloth = ["#8a6d4f", "#c4a06a", "#6a6a72", "#e8e0c8", "#8a3d2d", "#d4af37", "#5a4a42", "#4aa3c7", "#7d9de8", "#e8f4f8"][era];
-      const r = Math.max(1.5, z * 0.09);
-      ctx.fillStyle = "rgba(0,0,0,0.22)";
-      ctx.beginPath();
-      ctx.ellipse(sx, sy + r * 0.9, r * 0.9, r * 0.3, 0, 0, 7);
-      ctx.fill();
-      ctx.fillStyle = "#d8b08a";
-      ctx.beginPath();
-      ctx.arc(sx, sy - r * 1.6, r * 0.8, 0, 7);
-      ctx.fill();
-      ctx.fillStyle = cloth;
-      ctx.fillRect(sx - r * 0.7, sy - r * 0.8, r * 1.4, r * 1.8);
+      const st = this.villagerState(v);
+      const sh = this.people.sheet(era, professionOf(v), lookOf(v));
+      const h = Math.max(10, z * 0.8);
+      const w = h * (sh.fw / sh.fh);
+      const frame2 = st.still > 2 ? 0 : (st.walk / 0.62 * 4 | 0) % 4;
+      ctx.drawImage(
+        sh.cv,
+        frame2 * sh.fw,
+        st.dir * sh.fh,
+        sh.fw,
+        sh.fh,
+        Math.round(sx - w / 2),
+        Math.round(sy - h * 0.955),
+        Math.round(w),
+        Math.round(h)
+      );
     }
     // ---------------------------------------------------------------------
     // Тени облаков — мировые координаты, детерминированы по сиду мира.
@@ -7339,20 +7921,20 @@ ${s}`, "console");
   }
   function _renderClosed(sim2, b) {
     const cost = _costStr(sim2, b.buildCost);
-    let head = "";
+    let head2 = "";
     if (b.kind === "tech") {
-      head = `<div class="card"><div class="ttl"><span>Рынок закрыт</span><span class="cost">📜${b.cost}</span></div>
+      head2 = `<div class="card"><div class="ttl"><span>Рынок закрыт</span><span class="cost">📜${b.cost}</span></div>
       <div class="desc">Обмен ресурсов открывает технология «${b.tech}» на вкладке «Наука».</div>
       <div class="reason">Сначала изучите «${b.tech}», затем постройте Рынок: ${cost}</div></div>`;
     } else if (b.kind === "building") {
-      head = `<div class="card"><div class="ttl"><span>Рынок строится</span><span class="cost">${b.progress}%</span></div>
+      head2 = `<div class="card"><div class="ttl"><span>Рынок строится</span><span class="cost">${b.progress}%</span></div>
       <div class="desc">Торги откроются, как только каменщики закончат. Приставьте больше рабочих на вкладке «Труд» — приоритет «Стройка».</div></div>`;
     } else {
-      head = `<div class="card"><div class="ttl"><span>Рынка нет</span><span class="cost">${cost}</span></div>
+      head2 = `<div class="card"><div class="ttl"><span>Рынка нет</span><span class="cost">${cost}</span></div>
       <div class="desc">Постройте Рынок на вкладке «Стройка»: особой клетки он не требует, ставится где угодно в поселении.</div>
       ${b.lack ? `<div class="reason">Не хватает: ${b.lack}</div>` : '<div class="desc">Ресурсов на постройку хватает.</div>'}</div>`;
     }
-    return head + `<div class="card"><div class="ttl"><span>Что даёт Рынок</span></div>
+    return head2 + `<div class="card"><div class="ttl"><span>Что даёт Рынок</span></div>
     <div class="kv"><span>Продажа</span><span>Излишки 🍞🪵🪨⚙️ в 🪙</span></div>
     <div class="kv"><span>Покупка</span><span>Нехватка за 🪙 (дороже на 25%)</span></div>
     <div class="kv"><span>Караваны</span><span>🪙 раз в ${CARAVAN_PERIOD} дней</span></div>

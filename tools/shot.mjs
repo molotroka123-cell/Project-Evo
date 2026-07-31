@@ -59,6 +59,34 @@ const BUILD_CITY = (noon) => {
   s.paused = true;                    // фиксируем кадр, чтобы снимок был стабильным
 };
 
+// Крупный план жителей: город строить не нужно, нужны люди в кадре и зум.
+// Без этого пресета человечков на скриншотах видно как две точки.
+const BUILD_PEOPLE = (era) => {
+  const F = window.__frontier;
+  const s = F.sim;
+  s.execCommand('godmode');
+  s.execCommand('unlockall');
+  s.execCommand('give wood 99999'); s.execCommand('give stone 99999');
+  s.execCommand('give gold 99999'); s.execCommand('give food 99999');
+  const cx = Math.round(s.world.startX), cy = Math.round(s.world.startY);
+  for (const id of ['campfire', 'hut', 'lumber', 'farm', 'mine', 'barracks', 'academy', 'market', 'smithy']) {
+    for (let r = 1; r < 10; r++) {
+      let done = false;
+      for (let dy = -r; dy <= r && !done; dy++) for (let dx = -r; dx <= r && !done; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (s.canPlace(id, cx + dx, cy + dy).ok && s.placeBuilding(id, cx + dx, cy + dy)) done = true;
+      }
+      if (done) break;
+    }
+  }
+  for (const b of s.buildings) { b.done = true; b.progress = b.buildDays; }
+  s.execCommand('spawn 24');
+  s.eraIndex = era;
+  s.dayTime = 0.5;
+  F.renderer.cam.x = cx; F.renderer.cam.y = cy;
+  F.renderer.cam.zoom = 3.0;
+};
+
 // имя → { hash, wait (мс после загрузки), viewport, actions }
 const SHOTS = {
   start:      { hash: '', wait: 900, vp: { width: 1600, height: 900 } },
@@ -72,6 +100,10 @@ const SHOTS = {
   town:       { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, build: 'noon' },
   town_night: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, build: 'night' },
   town_phone: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 390, height: 844 }, mobile: true, build: 'noon' },
+  // Крупный план жителей — главный кадр для приёмки человечков.
+  people:     { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, people: 0 },
+  people_mid: { hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, people: 4 },
+  people_late:{ hash: '#autostart-seed=4242', wait: 1800, vp: { width: 1600, height: 900 }, people: 8 },
 };
 
 const server = createServer(async (req, res) => {
@@ -109,7 +141,14 @@ for (const name of names) {
   });
   const page = await ctx.newPage();
   const log = [];
-  page.on('console', m => { if (m.type() === 'error') { log.push(m.text()); errors++; } });
+  // Нарисованный арт (23 МБ) лежит рядом с опубликованной страницей, а не в
+  // репозитории: локально эти 42 файла честно отдают 404, и рендер штатно
+  // откатывается на процедурные спрайты. Такие 404 считаем отдельно — иначе
+  // они топят в шуме настоящие ошибки, ради которых эта проверка и заведена.
+  let artMiss = 0;
+  page.on('requestfailed', () => { /* сеть в оффлайне не используется */ });
+  page.on('response', r => { if (r.status() === 404 && /assets\/sprites\/buildings_/.test(r.url())) artMiss++; });
+  page.on('console', m => { if (m.type() === 'error') { log.push(m.text()); } });
   page.on('pageerror', e => { log.push('PAGEERROR ' + e.message); errors++; });
 
   await page.goto(`http://127.0.0.1:${PORT}/app/index.html${cfg.hash}`, { waitUntil: 'load' });
@@ -117,6 +156,10 @@ for (const name of names) {
   if (cfg.build) {
     await page.evaluate(BUILD_CITY, cfg.build === 'noon');
     await page.waitForTimeout(900);
+  }
+  if (cfg.people !== undefined) {
+    await page.evaluate(BUILD_PEOPLE, cfg.people);
+    await page.waitForTimeout(2500);   // дать жителям разойтись по работам
   }
   const file = join(OUTDIR, `${name}.png`);
   await page.screenshot({ path: file });
@@ -127,8 +170,13 @@ for (const name of names) {
     requestAnimationFrame(step);
   })).catch(() => -1);
 
-  console.log(`${name.padEnd(12)} → shots/${name}.png   FPS≈${fps}   ошибок консоли: ${log.length}`);
-  for (const l of log.slice(0, 6)) console.log('    ! ' + l.slice(0, 200));
+  // «Failed to load resource» без адреса — это как раз ненайденные картинки
+  // арта, их уже посчитал artMiss. Остальное — настоящие ошибки.
+  const real = log.filter(l => !(artMiss > 0 && /Failed to load resource/.test(l)));
+  errors += real.length;
+  const art = artMiss ? `   нет файлов арта: ${artMiss} (норма вне публикации)` : '';
+  console.log(`${name.padEnd(12)} → shots/${name}.png   FPS≈${fps}   ошибок консоли: ${real.length}${art}`);
+  for (const l of real.slice(0, 6)) console.log('    ! ' + l.slice(0, 200));
   await ctx.close();
 }
 

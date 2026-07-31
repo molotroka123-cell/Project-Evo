@@ -5,6 +5,7 @@ import { TILE, ERAS, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, SEASONS, WEATHER
 import { tileAt } from '../core/world.js';
 import { Terrain } from './terrain.js';
 import { SpriteCache } from './sprites.js';
+import { PeopleSprites, professionOf, lookOf } from './people.js';
 import { ArtPack } from './artpack.js';
 import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } from './quality.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
@@ -31,6 +32,10 @@ export class Renderer {
     this.autoTuner = this.qualityId === 'auto' ? makeAutoTuner(this.quality.id) : null;
     this.terrain = new Terrain(this.quality);
     this.sprites = new SpriteCache(this.quality);
+    this.people = new PeopleSprites(this.quality);
+    // Состояние анимации жителей живёт СНАРУЖИ симуляции: рендер читает
+    // положение и сам считает направление и фазу шага.
+    this.vstate = new WeakMap();
     // Нарисованный арт, если он завезён. Отсутствие файлов — не ошибка:
     // здание просто останется процедурным.
     this.art = new ArtPack();
@@ -50,6 +55,7 @@ export class Renderer {
     }
     this.terrain.setQuality(this.quality);
     this.sprites.setQuality(this.quality);
+    this.people.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
   }
@@ -193,6 +199,8 @@ export class Renderer {
     if (next) {
       this.quality = QUALITY[next];
       this.terrain.setQuality(this.quality);
+      this.sprites.setQuality(this.quality);
+      this.people.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
@@ -643,15 +651,37 @@ export class Renderer {
     }
   }
 
+  // Направление взгляда и фаза шага. Фаза считается от ПРОЙДЕННОГО ПУТИ, а не
+  // от номера кадра: на паузе житель стоит, на ускорении шагает чаще — шаг
+  // всегда совпадает со скоростью в игровом времени.
+  villagerState(v) {
+    let s = this.vstate.get(v);
+    if (!s) { s = { x: v.x, y: v.y, dir: 0, walk: 0, still: 0 }; this.vstate.set(v, s); }
+    const dx = v.x - s.x, dy = v.y - s.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-4) {
+      // Телепорт (загрузка сейва, «в бой» через команду) не должен крутить ноги.
+      s.walk += d < 1.5 ? d : 0;
+      s.still = 0;
+      if (Math.abs(dx) > Math.abs(dy) * 1.2) s.dir = dx > 0 ? 2 : 1;
+      else s.dir = dy > 0 ? 0 : 3;
+      s.x = v.x; s.y = v.y;
+    } else if (s.still < 100) s.still++;
+    return s;
+  }
+
   drawVillager(ctx, sx, sy, z, v, era) {
-    const cloth = ['#8a6d4f', '#c4a06a', '#6a6a72', '#e8e0c8', '#8a3d2d', '#d4af37', '#5a4a42', '#4aa3c7', '#7d9de8', '#e8f4f8'][era];
-    const r = Math.max(1.5, z * 0.09);
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
-    ctx.beginPath(); ctx.ellipse(sx, sy + r * 0.9, r * 0.9, r * 0.3, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = '#d8b08a';
-    ctx.beginPath(); ctx.arc(sx, sy - r * 1.6, r * 0.8, 0, 7); ctx.fill();
-    ctx.fillStyle = cloth;
-    ctx.fillRect(sx - r * 0.7, sy - r * 0.8, r * 1.4, r * 1.8);
+    const st = this.villagerState(v);
+    const sh = this.people.sheet(era, professionOf(v), lookOf(v));
+    // Житель ростом чуть меньше тайла: крупнее — «великаны» на фоне хижин.
+    const h = Math.max(10, z * 0.80);
+    const w = h * (sh.fw / sh.fh);
+    // цикл шага — 0.62 тайла на два шага
+    const frame = st.still > 2 ? 0 : ((st.walk / 0.62 * 4) | 0) % 4;
+    ctx.drawImage(
+      sh.cv, frame * sh.fw, st.dir * sh.fh, sh.fw, sh.fh,
+      Math.round(sx - w / 2), Math.round(sy - h * 0.955), Math.round(w), Math.round(h),
+    );
   }
 
   // ---------------------------------------------------------------------
