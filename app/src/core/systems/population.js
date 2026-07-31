@@ -13,9 +13,13 @@
 //    и в самом конце конструктора (жители уже созданы):
 //      Pop.syncVillagers(this.pop, this.villagers, this.rng);
 //
-// 3) onNewDay(): блок «рождения» (happy>45 && ... spawnVillager) УДАЛИТЬ — рождения
-//    теперь считает модуль. Блок «старение и смерть» ОСТАВИТЬ как есть (он двигает
-//    v.age и служит страховкой на 110 лет). Сразу после него вставить:
+// 3) onNewDay(): блок «рождения» (happy>45 && ... spawnVillager) теперь означает не
+//    роды, а ПРИШЛЫХ: оставьте его, но снизьте шанс до 0.03 и смените текст лога на
+//    «К поселению прибились новые люди.». Рождения считает модуль, а шести стартовым
+//    жителям (ядро даёт им возраст 18–90 лет!) второго поколения часто просто не из
+//    кого сделать — приток извне это лечит, как в Banished и Against the Storm.
+//    Блок «старение и смерть» ОСТАВИТЬ как есть (он двигает v.age и служит
+//    страховкой на 110 лет). Сразу после него вставить:
 //      const rep = Pop.tickDay(this.pop, this.villagers, {
 //        day: this.day,
 //        housingCap: this.housingCap(),
@@ -70,12 +74,12 @@ const EXP_DECAY_IDLE = 0.2;            // забывание у бездельн
 
 // ---- Отрасли (совпадают с категориями труда ядра) ----
 export const PROFESSIONS = {
-  food:    { ru: 'земледелец', plural: 'земледельцы' },
-  wood:    { ru: 'лесоруб',    plural: 'лесорубы' },
-  stone:   { ru: 'рудокоп',    plural: 'рудокопы' },
-  science: { ru: 'книжник',    plural: 'книжники' },
-  gold:    { ru: 'торговец',   plural: 'торговцы' },
-  build:   { ru: 'строитель',  plural: 'строители' },
+  food:    { ru: 'земледелец', inst: 'земледельцем', plural: 'земледельцы' },
+  wood:    { ru: 'лесоруб',    inst: 'лесорубом',    plural: 'лесорубы' },
+  stone:   { ru: 'рудокоп',    inst: 'рудокопом',    plural: 'рудокопы' },
+  science: { ru: 'книжник',    inst: 'книжником',    plural: 'книжники' },
+  gold:    { ru: 'торговец',   inst: 'торговцем',    plural: 'торговцы' },
+  build:   { ru: 'строитель',  inst: 'строителем',   plural: 'строители' },
 };
 
 // ---- Черты характера (U10). work/fert/mort — множители, learn — скорость роста ранга ----
@@ -223,7 +227,7 @@ function _tickDeaths(state, alive, byPid, ctx, rng, report) {
     if (v.partner && byPid.has(v.partner)) {
       const p = byPid.get(v.partner);
       p.partner = null;
-      recordDeed(p, 'пережил(а) супруга');
+      recordDeed(p, g(p, 'пережил супругу', 'пережила супруга'));
     }
     state.stats.deaths++;
     report.died.push({ v, cause });
@@ -282,7 +286,7 @@ function _tickBirths(state, living, villagers, byPid, ctx, rng, report) {
     if (father.children === 5) recordDeed(father, 'глава большого рода');
     state.stats.births++;
     report.born.push(baby);
-    report.events.push({ text: `${baby.name} родился(ась) у ${shortName(w)} и ${shortName(father)}.`, type: 'good' });
+    report.events.push({ text: `У ${shortName(w)} и ${shortName(father)} ${g(baby, 'родился сын', 'родилась дочь')} — ${baby.name}.`, type: 'good' });
   }
 }
 
@@ -380,8 +384,8 @@ export function registerWork(state, v, industry, dt) {
   v.wprof = industry;
   const after = expToRank(v.exp[industry]);
   if (after > before) {
-    if (after === 2) recordDeed(v, `стал(а) опытным: ${PROFESSIONS[industry].ru}`);
-    if (after === 3) recordDeed(v, `мастер-${PROFESSIONS[industry].ru}`);
+    if (after === 2) recordDeed(v, `${g(v, 'стал', 'стала')} опытным ${PROFESSIONS[industry].inst}`);
+    if (after === 3) recordDeed(v, `${g(v, 'стал', 'стала')} мастером-${PROFESSIONS[industry].inst}`);
   }
 }
 
@@ -426,11 +430,13 @@ export function recordDeed(v, text) {
 
 export function ageYears(v) { return Math.floor((v.age || 0) / YEAR); }
 
+// Названия ремёсел — существительные мужского рода («лесоруб»), поэтому и
+// определение при них мужское независимо от пола: «она опытный лесоруб».
 export function profTitle(v) {
-  if (!v.prof) return v.sex === 'ж' ? 'без ремесла' : 'без ремесла';
+  if (!v.prof) return 'без ремесла';
   const ru = PROFESSIONS[v.prof].ru;
   if (v.rank >= 3) return `мастер-${ru}`;
-  if (v.rank === 2) return `${v.sex === 'ж' ? 'опытная' : 'опытный'} ${ru}`;
+  if (v.rank === 2) return `опытный ${ru}`;
   return ru;
 }
 
@@ -447,7 +453,7 @@ export function villagerCard(v) {
     `${years} ${plural(years, 'год', 'года', 'лет')}, ${v.sex === 'ж' ? 'женщина' : 'мужчина'}`,
     `Ремесло: ${profTitle(v)}${v.rank ? ` (ранг ${v.rank}, +${Math.round(v.rank * RANK_BONUS * 100)}% к добыче)` : ''}`,
     `Характер: ${traitTitle(v)} — ${TRAIT_BY_ID[v.trait]?.desc ?? ''}`,
-    v.partner ? 'В паре' : 'Один(одна)',
+    v.partner ? 'В паре' : g(v, 'Холост', 'Не замужем'),
     v.children ? `Детей: ${v.children}` : 'Детей нет',
   ];
   if (v.deeds && v.deeds.length) lines.push('Заслуги: ' + v.deeds.join('; '));
@@ -458,13 +464,14 @@ export function villagerCard(v) {
 export function obituary(v, cause = 'age') {
   const years = ageYears(v);
   const yr = `${years} ${plural(years, 'год', 'года', 'лет')}`;
-  const how = cause === 'age' ? 'умер(ла) от старости'
-    : cause === 'child' ? 'умер(ла) ребёнком'
-      : 'умер(ла) от болезни';
+  const died = g(v, 'умер', 'умерла');
+  const how = cause === 'age' ? `${died} от старости`
+    : cause === 'child' ? `${died} ${g(v, 'ребёнком', 'девочкой')}`
+      : `${died} от болезни`;
   const parts = [`☠ ${v.name}, ${yr}, ${how}.`];
   const who = [];
   if (v.prof && v.rank >= 1) who.push(profTitle(v));
-  if (v.children > 0) who.push(`вырастил(а) ${v.children} ${plural(v.children, 'ребёнка', 'детей', 'детей')}`);
+  if (v.children > 0) who.push(`${g(v, 'вырастил', 'вырастила')} ${v.children} ${plural(v.children, 'ребёнка', 'ребёнка', 'детей')}`);
   if (who.length) parts.push(capitalize(who.join(', ')) + '.');
   if (v.deeds && v.deeds.length) parts.push(capitalize(v.deeds[v.deeds.length - 1]) + '.');
   return parts.join(' ');
@@ -636,5 +643,8 @@ export function plural(n, one, few, many) {
   if (b === 1) return one;
   return many;
 }
+
+// Согласование по полу: половина строк журнала иначе звучит как протокол.
+function g(v, m, f) { return v && v.sex === 'ж' ? f : m; }
 
 function capitalize(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
