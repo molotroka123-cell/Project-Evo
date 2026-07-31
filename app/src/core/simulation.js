@@ -7,6 +7,8 @@ import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX,
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
+// Максимум строителей на одном объекте. buildDays задаёт срок именно при такой бригаде.
+const BUILDERS_PER_SITE = 3;
 const MOVE_SPEED = 7;
 
 const TECH_BY_ID = Object.fromEntries(TECHS.map(t => [t.id, t]));
@@ -331,6 +333,10 @@ export class Simulation {
     if (pop > housing + 5) h -= 10;
     if (this.hasGreat('prophet')) h += 10;
     h += WEATHER[this.weather].happy;
+    // Разовые эффекты событий («Праздник» +8, «Знамение» +5, уступки бунтующим
+    // за 30🪙 +15, авария на АЭС −15). Копились в _happyBonus, но happiness()
+    // их не читал — все эти события не меняли счастье ни на единицу.
+    h += this._happyBonus || 0;
     this._happy = Math.max(0, Math.min(100, Math.round(h)));
     return this._happy;
   }
@@ -553,7 +559,7 @@ export class Simulation {
       this._woodCrisisShown = false;
     }
     // 1. Стройка (до 3 строителей на объект)
-    const site = this.buildings.find(b => !b.done && !b.destroyed && b.workers.length < 3);
+    const site = this.buildings.find(b => !b.done && !b.destroyed && b.workers.length < BUILDERS_PER_SITE);
     if (site) { v.job = 'build'; v.target = { kind: 'build', b: site, x: site.x, y: site.y }; site.workers.push(v); return; }
     // 1.5 Продовольственный кризис: еда важнее всего
     const foodCrisis = this.res.food < this.villagers.length * EAT_PER_DAY * 5;
@@ -617,12 +623,15 @@ export class Simulation {
     const happy = this.happiness();
     const happyMult = happy < 35 ? 0.7 : 1;
     if (t.kind === 'build') {
-      // прогресс начисляется в tickConstruction
+      // Житель просто стоит на площадке; весь прогресс начисляется в
+      // tickConstruction по игровому времени. Раньше здесь было
+      // `t.b.progress += 0.35` на КАЖДОЕ прибытие, без привязки к dt: стройка
+      // шла со скоростью кадров, buildDays из карточки не значил ничего
+      // (университет с заявленными 2.9 днями строился за 0.25 дня при мелком
+      // шаге и за 1.5 при крупном), а на скорости 8× здания вырастали мгновенно.
       if (t.b.done || t.b.destroyed) { this.release(v); return; }
-      // стоим и строим: прогресс в onArrive маленькими порциями
-      t.b.progress += 0.35;
-      if (t.b.progress >= t.b.buildDays) this.finishBuilding(t.b);
-      else { v.busy = 0; return; } // продолжаем строить (target остаётся)
+      v.busy = 0;
+      return;
     }
     if (t.kind === 'work') {
       // занял рабочее место: смена 4 дня непрерывного производства
@@ -680,7 +689,9 @@ export class Simulation {
       if (b.done || b.destroyed) continue;
       const builders = b.workers.filter(v => v.hp > 0 && v.target && v.target.kind === 'build' && v.target.b === b);
       b.workers = builders;
-      if (builders.length) b.progress += dt * builders.length * 0.15;
+      // buildDays — срок при ПОЛНОЙ бригаде (3 строителя, максимум на объект).
+      // Меньше рук — дольше стройка, и это честно видно игроку.
+      if (builders.length) b.progress += dt * (builders.length / BUILDERS_PER_SITE);
       if (b.progress >= b.buildDays) this.finishBuilding(b);
     }
   }
@@ -850,6 +861,12 @@ export class Simulation {
         this.addLog(`${v.name} покинул поселение от безысходности.`, 'bad');
       }
     } else this.unhappyDays = 0;
+    // Разовые эффекты событий затухают к нулю по 1 в день: иначе «Праздник»
+    // остался бы вечным бонусом, а авария на АЭС — вечным штрафом.
+    if (this._happyBonus) {
+      this._happyBonus += this._happyBonus > 0 ? -1 : 1;
+      if (Math.abs(this._happyBonus) < 1) this._happyBonus = 0;
+    }
     // старение и смерть
     for (const v of this.villagers) {
       v.age++;
@@ -917,21 +934,40 @@ export class Simulation {
     const e = this.pendingEvent;
     if (!e) return;
     this.pendingEvent = null;
-    const opt = e.choice[choiceKey];
+    let opt = e.choice[choiceKey];
     if (!opt) return;
-    if (opt.cost) {
-      const lack = this.lackCost(opt.cost);
-      if (lack) { this.toast(`Не хватает: ${lack}`, 'warn'); return; }
-      this.payCost(opt.cost);
+    if (opt.cost && this.lackCost(opt.cost)) {
+      // Раньше событие просто испарялось: пожар не тушили, но и здание не
+      // горело — игрок нажимал кнопку и не происходило ничего. Теперь
+      // применяем второй вариант, то есть естественные последствия отказа.
+      const other = e.choice[choiceKey === 'a' ? 'b' : 'a'];
+      this.toast(`Не хватает: ${this.lackCost(opt.cost)} — событие пошло по другому пути.`, 'warn');
+      if (!other || (other.cost && this.lackCost(other.cost))) {
+        this.addLog(`Событие «${e.ru}» разрешилось само: платить было нечем.`, 'warn');
+        return;
+      }
+      opt = other;
     }
+    if (opt.cost) this.payCost(opt.cost);
     this.applyEffect(opt.effect || {});
     this.addLog(`Решение по событию «${e.ru}»: ${opt.ru}.`);
   }
 
   applyEffect(fx) {
     if (fx.happy) this._happyBonus = (this._happyBonus || 0) + fx.happy;
-    if (fx.pop) for (let i = 0; i < fx.pop; i++) {
-      if (fx.pop > 0 && this.villagers.length < this.housingCap()) this.spawnVillager(this.world.startX, this.world.startY);
+    if (fx.pop > 0) {
+      for (let i = 0; i < fx.pop; i++) {
+        if (this.villagers.length < this.housingCap()) this.spawnVillager(this.world.startX, this.world.startY);
+      }
+    } else if (fx.pop < 0) {
+      // Убыль населения не работала вовсе: цикл `for (i=0; i<fx.pop; i++)` при
+      // отрицательном значении не выполнялся ни разу, из-за чего вариант
+      // «Подавить» в событии «Бунт» был пустышкой.
+      const n = Math.min(this.villagers.length - 1, -fx.pop);
+      for (let i = 0; i < n; i++) {
+        const v = this.villagers.pop();
+        this.addLog(`☠ ${v.name} погиб при подавлении бунта.`, 'bad');
+      }
     }
     if (fx.knowledge) this.res.knowledge += fx.knowledge;
     if (fx.gold) this.res.gold = Math.max(0, this.res.gold + fx.gold);
@@ -1254,7 +1290,10 @@ export class Simulation {
       const amount = Math.min(arg || 50, Math.floor(this.res.gold));
       if (amount < 10) return { ok: false, reason: 'Нужно минимум 10🪙' };
       this.res.gold -= amount;
-      this.adjustRel(fid, Math.min(15, amount / 50), 'Подарок');
+      // Было `amount / 50` — штатная кнопка «Подарок 50🪙» давала +1 отношения
+      // вместо заявленных таблицей +15, а чтобы получить обещанное, требовалось
+      // 750 золота. Теперь 50🪙 — это полный эффект из DIPLO_FACTORS.
+      this.adjustRel(fid, Math.min(DIPLO_FACTORS.gift.dR, amount / 50 * DIPLO_FACTORS.gift.dR), 'Подарок');
       this.addLog(`Подарок ${amount}🪙 для ${f.def.name}.`);
       return { ok: true };
     }
@@ -1307,12 +1346,20 @@ export class Simulation {
       this.pendingEvent = null;
       return;
     }
+    // ВАЖНО: из resolveSpecial нельзя выходить, не сбросив pendingEvent.
+    // Интерфейс закрывает окно безусловно (hud.js), а генерация событий в
+    // onNewDay заперта проверкой !this.pendingEvent. Раньше нехватка золота на
+    // дань оставляла событие висеть навсегда: игрок больше НИ РАЗУ не видел ни
+    // урожая, ни пожара, ни чумы, ни предложений договора — половина контента
+    // молча выключалась. Поэтому «нечем платить» трактуется как отказ.
     if (e._tributeFid) {
+      let paid = false;
       if (choiceKey === 'a') {
-        const opt = e.choice.a;
-        const lack = this.lackCost(opt.cost);
-        if (lack) { this.toast(`Не хватает: ${lack}`, 'warn'); return; }
-        this.payCost(opt.cost);
+        const lack = this.lackCost(e.choice.a.cost);
+        if (lack) this.toast(`Нечем платить (${lack}) — вы отказали в дани.`, 'warn');
+        else { this.payCost(e.choice.a.cost); paid = true; }
+      }
+      if (paid) {
         this.adjustRel(e._tributeFid, 8, 'Дань выплачена');
       } else {
         this.adjustRel(e._tributeFid, -10, 'Отказ в дани');
@@ -1324,11 +1371,9 @@ export class Simulation {
     }
     if (e._tributeWar) {
       if (choiceKey === 'a') {
-        const opt = e.choice.a;
-        const lack = this.lackCost(opt.cost);
-        if (lack) { this.toast(`Не хватает: ${lack}`, 'warn'); return; }
-        this.payCost(opt.cost);
-        this.endWar(e._tributeWar, true);
+        const lack = this.lackCost(e.choice.a.cost);
+        if (lack) this.toast(`Нечем платить (${lack}) — война продолжается.`, 'warn');
+        else { this.payCost(e.choice.a.cost); this.endWar(e._tributeWar, true); }
       }
       this.pendingEvent = null;
       return;
@@ -1462,7 +1507,11 @@ export class Simulation {
           let requested = days;
           if (args[1] === 'years') { requested = days * 100; days = requested; }
           const capped = Math.min(days, 3650);
-          for (let i = 0; i < capped; i++) this.onNewDay();
+          // Было `for (...) this.onNewDay()` — календарь стоял на месте (день
+          // инкрементируется в tick, а не в onNewDay), производство и стройка
+          // не шли, зато жители исправно ели: `simulate 365` рапортовал
+          // «День 0, жителей 0» и стирал поселение. Крутим настоящий тик.
+          for (let i = 0; i < capped * 4; i++) this.tick(0.25);
           say(`Выполнено ${capped} дней из запрошенных ${requested} (кап 3650). День ${this.day}, жителей ${this.villagers.length}`);
           break;
         }

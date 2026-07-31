@@ -914,6 +914,7 @@
   // app/src/core/simulation.js
   var DAY_SECONDS = 6;
   var EAT_PER_DAY = 0.7;
+  var BUILDERS_PER_SITE = 3;
   var MOVE_SPEED = 7;
   var TECH_BY_ID = Object.fromEntries(TECHS.map((t) => [t.id, t]));
   var Simulation = class _Simulation {
@@ -1234,6 +1235,7 @@
       if (pop > housing + 5) h -= 10;
       if (this.hasGreat("prophet")) h += 10;
       h += WEATHER[this.weather].happy;
+      h += this._happyBonus || 0;
       this._happy = Math.max(0, Math.min(100, Math.round(h)));
       return this._happy;
     }
@@ -1474,7 +1476,7 @@
       } else if (!wc && this._woodCrisisShown && this.res.wood >= 20) {
         this._woodCrisisShown = false;
       }
-      const site = this.buildings.find((b) => !b.done && !b.destroyed && b.workers.length < 3);
+      const site = this.buildings.find((b) => !b.done && !b.destroyed && b.workers.length < BUILDERS_PER_SITE);
       if (site) {
         v.job = "build";
         v.target = { kind: "build", b: site, x: site.x, y: site.y };
@@ -1547,12 +1549,8 @@
           this.release(v);
           return;
         }
-        t.b.progress += 0.35;
-        if (t.b.progress >= t.b.buildDays) this.finishBuilding(t.b);
-        else {
-          v.busy = 0;
-          return;
-        }
+        v.busy = 0;
+        return;
       }
       if (t.kind === "work") {
         v.atWork = true;
@@ -1612,7 +1610,7 @@
         if (b.done || b.destroyed) continue;
         const builders = b.workers.filter((v) => v.hp > 0 && v.target && v.target.kind === "build" && v.target.b === b);
         b.workers = builders;
-        if (builders.length) b.progress += dt * builders.length * 0.15;
+        if (builders.length) b.progress += dt * (builders.length / BUILDERS_PER_SITE);
         if (b.progress >= b.buildDays) this.finishBuilding(b);
       }
     }
@@ -1784,6 +1782,10 @@
           this.addLog(`${v.name} покинул поселение от безысходности.`, "bad");
         }
       } else this.unhappyDays = 0;
+      if (this._happyBonus) {
+        this._happyBonus += this._happyBonus > 0 ? -1 : 1;
+        if (Math.abs(this._happyBonus) < 1) this._happyBonus = 0;
+      }
       for (const v of this.villagers) {
         v.age++;
         let life = 11e3;
@@ -1847,23 +1849,33 @@
       const e = this.pendingEvent;
       if (!e) return;
       this.pendingEvent = null;
-      const opt = e.choice[choiceKey];
+      let opt = e.choice[choiceKey];
       if (!opt) return;
-      if (opt.cost) {
-        const lack = this.lackCost(opt.cost);
-        if (lack) {
-          this.toast(`Не хватает: ${lack}`, "warn");
+      if (opt.cost && this.lackCost(opt.cost)) {
+        const other = e.choice[choiceKey === "a" ? "b" : "a"];
+        this.toast(`Не хватает: ${this.lackCost(opt.cost)} — событие пошло по другому пути.`, "warn");
+        if (!other || other.cost && this.lackCost(other.cost)) {
+          this.addLog(`Событие «${e.ru}» разрешилось само: платить было нечем.`, "warn");
           return;
         }
-        this.payCost(opt.cost);
+        opt = other;
       }
+      if (opt.cost) this.payCost(opt.cost);
       this.applyEffect(opt.effect || {});
       this.addLog(`Решение по событию «${e.ru}»: ${opt.ru}.`);
     }
     applyEffect(fx) {
       if (fx.happy) this._happyBonus = (this._happyBonus || 0) + fx.happy;
-      if (fx.pop) for (let i = 0; i < fx.pop; i++) {
-        if (fx.pop > 0 && this.villagers.length < this.housingCap()) this.spawnVillager(this.world.startX, this.world.startY);
+      if (fx.pop > 0) {
+        for (let i = 0; i < fx.pop; i++) {
+          if (this.villagers.length < this.housingCap()) this.spawnVillager(this.world.startX, this.world.startY);
+        }
+      } else if (fx.pop < 0) {
+        const n = Math.min(this.villagers.length - 1, -fx.pop);
+        for (let i = 0; i < n; i++) {
+          const v = this.villagers.pop();
+          this.addLog(`☠ ${v.name} погиб при подавлении бунта.`, "bad");
+        }
       }
       if (fx.knowledge) this.res.knowledge += fx.knowledge;
       if (fx.gold) this.res.gold = Math.max(0, this.res.gold + fx.gold);
@@ -2178,7 +2190,7 @@
         const amount = Math.min(arg || 50, Math.floor(this.res.gold));
         if (amount < 10) return { ok: false, reason: "Нужно минимум 10🪙" };
         this.res.gold -= amount;
-        this.adjustRel(fid, Math.min(15, amount / 50), "Подарок");
+        this.adjustRel(fid, Math.min(DIPLO_FACTORS.gift.dR, amount / 50 * DIPLO_FACTORS.gift.dR), "Подарок");
         this.addLog(`Подарок ${amount}🪙 для ${f.def.name}.`);
         return { ok: true };
       }
@@ -2231,14 +2243,16 @@
         return;
       }
       if (e._tributeFid) {
+        let paid = false;
         if (choiceKey === "a") {
-          const opt = e.choice.a;
-          const lack = this.lackCost(opt.cost);
-          if (lack) {
-            this.toast(`Не хватает: ${lack}`, "warn");
-            return;
+          const lack = this.lackCost(e.choice.a.cost);
+          if (lack) this.toast(`Нечем платить (${lack}) — вы отказали в дани.`, "warn");
+          else {
+            this.payCost(e.choice.a.cost);
+            paid = true;
           }
-          this.payCost(opt.cost);
+        }
+        if (paid) {
           this.adjustRel(e._tributeFid, 8, "Дань выплачена");
         } else {
           this.adjustRel(e._tributeFid, -10, "Отказ в дани");
@@ -2250,14 +2264,12 @@
       }
       if (e._tributeWar) {
         if (choiceKey === "a") {
-          const opt = e.choice.a;
-          const lack = this.lackCost(opt.cost);
-          if (lack) {
-            this.toast(`Не хватает: ${lack}`, "warn");
-            return;
+          const lack = this.lackCost(e.choice.a.cost);
+          if (lack) this.toast(`Нечем платить (${lack}) — война продолжается.`, "warn");
+          else {
+            this.payCost(e.choice.a.cost);
+            this.endWar(e._tributeWar, true);
           }
-          this.payCost(opt.cost);
-          this.endWar(e._tributeWar, true);
         }
         this.pendingEvent = null;
         return;
@@ -2414,7 +2426,7 @@ ${s}`, "console");
               days = requested;
             }
             const capped = Math.min(days, 3650);
-            for (let i = 0; i < capped; i++) this.onNewDay();
+            for (let i = 0; i < capped * 4; i++) this.tick(0.25);
             say(`Выполнено ${capped} дней из запрошенных ${requested} (кап 3650). День ${this.day}, жителей ${this.villagers.length}`);
             break;
           }
