@@ -123,7 +123,9 @@ export class Renderer {
     else if (this.quality.water) this.terrain.drawWater(ctx, sim, ox, oy, z, cw, ch, this.time);
     this.atmo.update(sim, dtReal, ox, oy, z, cw, ch);
     this.fx.update(sim, dtReal, ox, oy, z, cw, ch);
+    this.veg.update(sim, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
     this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
+    this.veg.draw(sim, ctx, ox, oy, z, cw, ch);
 
     // --- тени облаков (мировые координаты — не дрожат при панораме) ---
     if (this.quality.clouds) this.drawClouds(sim, ctx, ox, oy, z, cw, ch);

@@ -12870,7 +12870,9 @@ ${s}`, "console");
       else if (this.quality.water) this.terrain.drawWater(ctx, sim2, ox, oy, z, cw, ch, this.time);
       this.atmo.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.fx.update(sim2, dtReal, ox, oy, z, cw, ch);
+      this.veg.update(sim2, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
+      this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
       if (sim2.showTerritory) this.drawTerritory(sim2, ctx, ox, oy, z);
       for (const f of sim2.factions) {
