@@ -647,6 +647,25 @@
     snow: { ru: "Снег", gather: 0.7, farm: 0.4, happy: -5 }
   };
   var EVENT_DEFS = [
+    // --- добавлено: ранняя игра была почти пустой на события ---
+    // Замер до правки: за 300 дней выпадало 11 событий, из них 5 — требование
+    // дани, а в каменном веке из 22 определений подходили лишь 13. Ниже — 14
+    // событий, большинство без требований к эпохе и технологиям, чтобы первые
+    // часы игры перестали быть тишиной, разбавленной вымогательством.
+    { id: "berry_year", w: 9, ru: "Ягодный год", text: "Лес щедр как никогда: корзины полны ягод и грибов.", effect: { food: 45, happy: 3 } },
+    { id: "stone_fall", w: 7, ru: "Обвал в холмах", text: "Оползень обнажил пласт хорошего камня.", effect: { knowledge: 10, happy: 4 } },
+    { id: "windfall", w: 7, ru: "Бурелом", text: "Ночная буря повалила рощу — дрова сами пришли к порогу.", effect: { happy: 3, knowledge: 8 } },
+    { id: "lost_child", w: 6, ru: "Пропавший ребёнок", text: "Ребёнок заблудился в лесу. Снимать ли людей с работ на поиски?", choice: { a: { ru: "Искать всем поселением", effect: { happy: 12, foodPct: -0.04 } }, b: { ru: "Ждать до утра", effect: { happy: -8 } } } },
+    { id: "stranger_sick", w: 5, ru: "Больной путник", text: "У ворот лежит человек в лихорадке. Пустить его — риск для всех.", choice: { a: { ru: "Выходить его", effect: { pop: 1, happy: 5 } }, b: { ru: "Прогнать", effect: { happy: -6 } } } },
+    { id: "first_frost", w: 6, ru: "Ранние заморозки", text: "Иней лёг раньше срока — часть урожая прихвачена морозом.", effect: { foodPct: -0.07 }, season: 2 },
+    { id: "spring_flood", w: 5, ru: "Половодье", text: "Талая вода залила низины, зато принесла ил на поля.", effect: { food: -25, happy: 4 }, season: 0 },
+    { id: "boar_hunt", w: 6, ru: "Крупная добыча", text: "Охотники завалили матёрого кабана — мяса хватит надолго.", effect: { food: 55, happy: 4 } },
+    { id: "quarrel", w: 6, ru: "Ссора у костра", text: "Две семьи не поделили запасы. Слово за вами.", choice: { a: { ru: "Рассудить по совести", effect: { happy: 8 } }, b: { ru: "Не вмешиваться", effect: { happy: -5 } } } },
+    { id: "clay_find", w: 6, ru: "Залежь глины", text: "У излучины нашли отличную глину для обжига.", effect: { knowledge: 30 } },
+    { id: "old_master", w: 5, ru: "Старый мастер", text: "Пришлый ремесленник готов остаться и учить молодых.", cond: "housing", effect: { pop: 1, knowledge: 30 } },
+    { id: "salt_trade", w: 5, ru: "Соляной обоз", text: "Соляной обоз просит ночлега и платит за постой.", effect: { gold: 25, happy: 3 }, minEra: 1 },
+    { id: "well_dry", w: 4, ru: "Колодец пересох", text: "Вода ушла. Копать новый колодец или носить с реки?", choice: { a: { ru: "Копать новый (15🪨)", cost: { wood: 15 }, effect: { happy: 6 } }, b: { ru: "Носить с реки", effect: { happy: -10 } } } },
+    { id: "star_night", w: 5, ru: "Ночь без луны", text: "Небо чёрное и ясное — старики читают в звёздах судьбу народа.", effect: { knowledge: 18, happy: 4 }, visual: "meteor" },
     { id: "omen", w: 10, ru: "Знамение", text: "Шаманы видят добрый знак в звёздах.", effect: { happy: 5 } },
     { id: "wanderer", w: 10, ru: "Странник", text: "Странник просится в поселение.", effect: { pop: 1 }, cond: "housing" },
     { id: "insight", w: 8, ru: "Озарение", text: "Кому-то пришла в голову светлая мысль.", effect: { knowledge: 15 }, boost: "story_fire" },
@@ -2557,6 +2576,10 @@
   var DAY_SECONDS = 6;
   var EAT_PER_DAY = 0.7;
   var BUILDERS_PER_SITE = 3;
+  var TRIBUTE_MIN_DAY = 60;
+  var TRIBUTE_GAP = 45;
+  var TRIBUTE_GAP_FACTION = 120;
+  var TRIBUTE_POWER_RATIO = 1.5;
   var MOVE_SPEED = 7;
   var TECH_BY_ID3 = Object.fromEntries(TECHS.map((t) => [t.id, t]));
   var Simulation = class _Simulation {
@@ -3793,8 +3816,23 @@
         _treatyFid: f.id
       };
     }
+    // Может ли сосед вообще требовать дань. Раньше проверок не было никаких:
+    // utilityAI крутится раз в 5 дней, и требование прилетало с 5-го дня партии
+    // бесконечной чередой. Хуже того, оно занимало pendingEvent, а обычные
+    // события выпадают только когда тот пуст, — за 300 дней замер показал
+    // 60 требований дани и НОЛЬ остальных событий из 22 возможных.
+    canDemandTribute(f) {
+      if (this.day < TRIBUTE_MIN_DAY) return false;
+      if (this.day - (this.lastTributeDay || -999) < TRIBUTE_GAP) return false;
+      if (this.day - (f.lastTribute || -999) < TRIBUTE_GAP_FACTION) return false;
+      if (f.armyPts < this.armyPower() * TRIBUTE_POWER_RATIO) return false;
+      return this.res.gold >= 10;
+    }
     demandTribute(f) {
-      const amount = Math.round(f.armyPts * 2);
+      if (!this.canDemandTribute(f)) return;
+      this.lastTributeDay = this.day;
+      f.lastTribute = this.day;
+      const amount = Math.max(8, Math.round(f.armyPts * 2));
       this.pendingEvent = this.pendingEvent || {
         id: "tribute",
         ru: "Требование дани",

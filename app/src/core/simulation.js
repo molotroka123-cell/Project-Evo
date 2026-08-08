@@ -10,6 +10,11 @@ export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
 // Максимум строителей на одном объекте. buildDays задаёт срок именно при такой бригаде.
 const BUILDERS_PER_SITE = 3;
+// Требование дани: раньше без ограничений — прилетало каждые 5 дней с начала игры.
+const TRIBUTE_MIN_DAY = 60;        // первые два месяца игрока не трогают
+const TRIBUTE_GAP = 45;            // между любыми двумя требованиями
+const TRIBUTE_GAP_FACTION = 120;   // от одного и того же соседа
+const TRIBUTE_POWER_RATIO = 1.5;   // вымогатель должен быть в полтора раза сильнее
 const MOVE_SPEED = 7;
 
 const TECH_BY_ID = Object.fromEntries(TECHS.map(t => [t.id, t]));
@@ -1265,8 +1270,27 @@ export class Simulation {
     };
   }
 
+  // Может ли сосед вообще требовать дань. Раньше проверок не было никаких:
+  // utilityAI крутится раз в 5 дней, и требование прилетало с 5-го дня партии
+  // бесконечной чередой. Хуже того, оно занимало pendingEvent, а обычные
+  // события выпадают только когда тот пуст, — за 300 дней замер показал
+  // 60 требований дани и НОЛЬ остальных событий из 22 возможных.
+  canDemandTribute(f) {
+    if (this.day < TRIBUTE_MIN_DAY) return false;               // не в первые дни
+    if (this.day - (this.lastTributeDay || -999) < TRIBUTE_GAP) return false;
+    if (this.day - (f.lastTribute || -999) < TRIBUTE_GAP_FACTION) return false;
+    // Вымогать может только тот, кто заметно сильнее: требование от слабака
+    // читается как насмешка, а не как угроза.
+    if (f.armyPts < this.armyPower() * TRIBUTE_POWER_RATIO) return false;
+    // И только если есть чем платить — иначе выбор фиктивный.
+    return this.res.gold >= 10;
+  }
+
   demandTribute(f) {
-    const amount = Math.round(f.armyPts * 2);
+    if (!this.canDemandTribute(f)) return;
+    this.lastTributeDay = this.day;
+    f.lastTribute = this.day;
+    const amount = Math.max(8, Math.round(f.armyPts * 2));
     this.pendingEvent = this.pendingEvent || {
       id: 'tribute', ru: 'Требование дани',
       text: `${f.def.name} требует ${amount}🪙. ${f.def.leader}: «${f.def.lines.threat}»`,
