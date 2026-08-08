@@ -9,7 +9,7 @@
 // Карта режется на чанки 16×16 тайлов и печётся лениво — старт быстрый,
 // память не расходуется на невидимые куски.
 import { TILE } from '../core/data.js';
-import { TERRAIN, TILE_HEIGHT, hash2, fbm2, hex2rgb } from './palette.js';
+import { TERRAIN, TILE_HEIGHT, hash2, fbm2, hex2rgb, mixHex } from './palette.js';
 
 export const CHUNK = 16;
 
@@ -23,11 +23,13 @@ export class Terrain {
     this.shade = null;         // Float32Array множителей света 0.6…1.4
     this.low = null;           // мини-канвас всей карты
     this.w = 0; this.h = 0;
+    this.road = null;          // сеть дорог: рёбра, пятаки перекрёстков, индекс по чанкам
+    this.roadKey = null;       // подпись состава построек и эпохи
   }
 
   setQuality(q) { this.q = q; this.invalidate(); }
 
-  invalidate() { this.chunks.clear(); this.low = null; this.season = -1; }
+  invalidate() { this.chunks.clear(); this.low = null; this.season = -1; this.roadKey = null; }
 
   // --- поле высот и рельефное освещение (не зависит от сезона) ---
   buildHeight(world) {
@@ -108,6 +110,17 @@ export class Terrain {
     if (this.worldSeed !== sim.world.seed || !this.height) this.buildHeight(sim.world);
     if (this.season !== sim.seasonIdx) { this.chunks.clear(); this.low = null; this.season = sim.seasonIdx; }
     if (!this.low) this.buildLow(sim);
+    // Дороги живут внутри чанков. Пересобираем сеть только когда меняется
+    // состав достроенного или эпоха — то есть несколько раз за партию, а не в кадре.
+    const key = roadKeyOf(sim);
+    if (key !== this.roadKey) {
+      this.roadKey = key;
+      const old = this.road ? this.road.keys : null;
+      this.buildRoads(sim);
+      // перепекаем только чанки, где дороги были или появились
+      if (old) for (const k of old) this.chunks.delete(k);
+      if (this.road) for (const k of this.road.keys) this.chunks.delete(k);
+    }
   }
 
   chunk(sim, cx, cy) {
@@ -187,6 +200,11 @@ export class Terrain {
         this.detail(c, world, pal, x, y, (x - x0) * TP, (y - y0) * TP, TP, sim.seasonIdx);
       }
     }
+
+    // 3.5) дороги и тропы. Идут ПОСЛЕ травы и подстилки — иначе трава прорастала
+    // бы сквозь брусчатку, — но до береговой линии. Здания и жители рисуются в
+    // кадре поверх чанка, так что дорога всегда оказывается под ними.
+    this.drawRoads(c, x0, y0, TP);
 
     // 4) береговая линия и обрывы — поверх всего, чётко
     for (let y = y0; y < y0 + CHUNK; y++) {
@@ -284,6 +302,9 @@ export class Terrain {
     const p = pal[t];
     const D = this.q.detail;
     if (D < 0) return;
+    // На полотне дороги не растёт дерево и не лежит валун: дорога рисуется
+    // поверх мелочи, но высокое ей пришлось бы «протыкать» — его просто нет.
+    const onRoad = this.road ? this.road.tiles.has(y * world.w + x) : false;
     const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r3 = hash2(x * 3 + 7, y * 5 + 13);
 
     if (t === TILE.GRASS) {
@@ -343,6 +364,7 @@ export class Terrain {
           c.fillRect(px + lx * TP, py + ly * TP, TP * 0.06, TP * 0.04);
         }
       }
+      if (onRoad) return;   // просека под дорогу
       // Число деревьев гуляет по клеткам: одинаковая плотность на массиве в
       // сотни клеток читается как сетка, а не как лес.
       const cap = D >= 2 ? 4 : D === 1 ? 3 : 1;
@@ -410,7 +432,7 @@ export class Terrain {
       c.globalAlpha = 1;
       // Скальные выходы: угловатые камни со светлой и теневой гранью. Без них
       // массив между вершинами оставался ровным серым полем.
-      if (D >= 1 && r1 > 0.3) {
+      if (D >= 1 && r1 > 0.3 && !onRoad) {
         const ox = px + TP * (0.18 + r2 * 0.5), oy = py + TP * (0.42 + r3 * 0.4);
         const rw = TP * (0.16 + r1 * 0.2), rh = rw * (0.7 + r2 * 0.5);
         c.fillStyle = 'rgba(0,0,0,0.2)';
@@ -452,7 +474,7 @@ export class Terrain {
           if (hash2((x + dx) * 5 + 3, (y + dy) * 11 + 7) >= hp) { peakHere = false; break; }
         }
       }
-      if (!peakHere) return;
+      if (!peakHere || onRoad) return;
 
       const scale = 0.9 + r2 * 0.9;
       const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1.0 + r3 * 0.15);
@@ -668,6 +690,416 @@ export class Terrain {
     }
   }
 
+  // =========================================================================
+  // ДОРОГИ И ТРОПЫ
+  //
+  // Ровная решётка домов на однородной траве читается как таблица, а не как
+  // поселение. Тропы связывают дома в сеть, и глаз сразу видит центр и окраину.
+  //
+  // Как это устроено:
+  //   1) постройки — узлы графа, между ними строится минимальное остовное
+  //      дерево от очага (вода в стоимости ребра штрафуется, поэтому дороги
+  //      огибают озёра);
+  //   2) ширина складывается из двух вещей: сколько дворов ходит через ребро
+  //      (вес поддерева) и близость к очагу. Отсюда «чем ближе к центру, тем
+  //      шире»: у очага площадь, на выселках тропинка в одну ногу;
+  //   3) каждое ребро превращается в ленту переменной ширины со слабым изгибом
+  //      (прямая линия между домами выглядит чертёжной), у перекрёстков лента
+  //      расширяется, а сам узел закрывается пятаком;
+  //   4) все ленты и пятаки чанка кладутся в ОДИН путь и заливаются одной
+  //      заливкой: пересечения сливаются объединением, и повороты с
+  //      перекрёстками не показывают ни швов, ни обрубков.
+  // Всё это печётся в чанк — в кадре дороги стоят ноль.
+  // =========================================================================
+
+  buildRoads(sim) {
+    this.road = null;
+    const bs = sim.buildings || [];
+    const world = sim.world;
+    if (!world) return;
+    const nx = [], ny = [];
+    let root = 0;
+    for (const b of bs) {
+      if (!b.done || b.destroyed) continue;
+      const s = b.size || 1;
+      if (b.id === 'campfire') root = nx.length;   // очаг — сердце поселения
+      nx.push(b.x + s / 2); ny.push(b.y + s / 2);
+    }
+    const N = nx.length;
+    if (N < 2) return;
+
+    const W = world.w, H = world.h;
+    // Доля воды под прямой между узлами: по ней дорога либо обходит озеро,
+    // либо не рисуется вовсе — плыть по дну она не должна.
+    const wet = (i, j) => {
+      let n = 0;
+      for (let s = 1; s <= 5; s++) {
+        const t = s / 6;
+        const x = Math.round(nx[i] + (nx[j] - nx[i]) * t), y = Math.round(ny[i] + (ny[j] - ny[i]) * t);
+        const tt = (x < 0 || y < 0 || x >= W || y >= H) ? TILE.DEEP : world.tiles[y * W + x];
+        if (tt === TILE.WATER || tt === TILE.DEEP) n++;
+      }
+      return n / 5;
+    };
+    const dist = (i, j) => Math.hypot(nx[i] - nx[j], ny[i] - ny[j]);
+
+    // --- остовное дерево от очага (Прим, O(N²) — считается раз на постройку) ---
+    const inT = new Uint8Array(N), best = new Float64Array(N), par = new Int32Array(N);
+    const order = new Int32Array(N);
+    best.fill(Infinity); par.fill(-1); best[root] = 0;
+    let cnt = 0;
+    for (let k = 0; k < N; k++) {
+      let u = -1, bv = Infinity;
+      for (let i = 0; i < N; i++) if (!inT[i] && best[i] < bv) { bv = best[i]; u = i; }
+      if (u < 0) break;
+      inT[u] = 1; order[cnt++] = u;
+      for (let v = 0; v < N; v++) {
+        if (inT[v]) continue;
+        const cst = dist(u, v) * (1 + 7 * wet(u, v));
+        if (cst < best[v]) { best[v] = cst; par[v] = u; }
+      }
+    }
+    // размер поддерева = сколько дворов ходит через это ребро
+    const size = new Int32Array(N).fill(1);
+    for (let k = cnt - 1; k >= 1; k--) {
+      const u = order[k];
+      if (par[u] >= 0) size[par[u]] += size[u];
+    }
+
+    const raw = [], seen = new Set();
+    const pairKey = (a, b) => a < b ? a + ':' + b : b + ':' + a;
+    for (let k = 1; k < cnt; k++) {
+      const u = order[k], p = par[u];
+      if (p < 0) continue;
+      seen.add(pairKey(u, p));
+      if (dist(u, p) > 30 || wet(u, p) > 0.3) continue;   // не тянем через пол-карты и через воду
+      raw.push({ a: p, b: u, traffic: size[u] });
+    }
+    // Пара коротких перемычек сверх дерева: дерево не даёт колец, а без колец
+    // поселение выглядит расчёской. Перемычки и создают настоящие перекрёстки.
+    for (let i = 0; i < N; i++) {
+      let bj = -1, bd = Infinity;
+      for (let j = 0; j < N; j++) {
+        if (i === j || seen.has(pairKey(i, j))) continue;
+        const d = dist(i, j);
+        if (d < bd) { bd = d; bj = j; }
+      }
+      if (bj < 0 || bd > 7 || bd < 0.6) continue;
+      if (hash2(Math.round(nx[i] * 4) + 17, Math.round(ny[bj] * 4) + 5) < 0.55) continue;
+      if (wet(i, bj) > 0.2) continue;
+      seen.add(pairKey(i, bj));
+      raw.push({ a: i, b: bj, traffic: 2 });
+    }
+    if (!raw.length) return;
+
+    // --- ленты ---
+    // Второй источник ширины, кроме числа дворов: близость к сердцу поселения.
+    // На кольцевой застройке дерево само по себе центр не выделяет, а глаз
+    // ждёт, что у очага улица шире, чем на выселках.
+    let far = 1;
+    for (let i = 0; i < N; i++) far = Math.max(far, Math.hypot(nx[i] - nx[root], ny[i] - ny[root]));
+    far = Math.max(8, Math.min(40, far));
+    const boost = (x, y) => {
+      const k = 1 - Math.min(1, Math.hypot(x - nx[root], y - ny[root]) / far);
+      return 1 + 0.5 * k * k * Math.sqrt(k + 0.0001);
+    };
+
+    const nodeH = new Float64Array(N);
+    for (let i = 0; i < N; i++) nodeH[i] = roadHalf(size[i]);
+    const edges = [], maxH = new Float64Array(N);
+    for (const e of raw) {
+      const h = roadHalf(e.traffic);
+      const hA = Math.max(h, Math.min(nodeH[e.a], h * 2.2));
+      const hB = Math.max(h, Math.min(nodeH[e.b], h * 2.2));
+      const r = makeRibbon(nx[e.a], ny[e.a], nx[e.b], ny[e.b], h, hA, hB, boost);
+      if (!r) continue;
+      edges.push(r);
+      maxH[e.a] = Math.max(maxH[e.a], hA * boost(nx[e.a], ny[e.a]));
+      maxH[e.b] = Math.max(maxH[e.b], hB * boost(nx[e.b], ny[e.b]));
+    }
+    if (!edges.length) return;
+    const discs = [];
+    for (let i = 0; i < N; i++) if (maxH[i] > 0) discs.push({ x: nx[i], y: ny[i], r: maxH[i] * 1.16 });
+
+    // --- индекс по чанкам: чанк рисует только то, что его задевает ---
+    const byChunk = new Map(), keys = new Set();
+    const put = (x0, y0, x1, y1, kind, idx) => {
+      const c0x = Math.floor(x0 / CHUNK), c1x = Math.floor(x1 / CHUNK);
+      const c0y = Math.floor(y0 / CHUNK), c1y = Math.floor(y1 / CHUNK);
+      for (let cy = c0y; cy <= c1y; cy++) {
+        for (let cx = c0x; cx <= c1x; cx++) {
+          const k = cx + ',' + cy;
+          let cell = byChunk.get(k);
+          if (!cell) { cell = { e: [], d: [] }; byChunk.set(k, cell); keys.add(k); }
+          cell[kind].push(idx);
+        }
+      }
+    };
+    // Запас в клетках: мягкий край, фактура и просека, которую соседний чанк
+    // рисует своей каймой в одну клетку.
+    const PADT = 1.6;
+    edges.forEach((r, i) => put(r.x0 - PADT, r.y0 - PADT, r.x1 + PADT, r.y1 + PADT, 'e', i));
+    discs.forEach((d, i) => put(d.x - d.r - PADT, d.y - d.r - PADT, d.x + d.r + PADT, d.y + d.r + PADT, 'd', i));
+
+    // Клетки, которые дорога накрывает целиком. Нужны, чтобы на полотне не
+    // стояло дерево и не торчал валун: дорогу сквозь лес прорубают.
+    const tiles = new Set();
+    for (const r of edges) {
+      for (const q of r.p) {
+        const rad = q.h + 0.12;
+        const tx0 = Math.floor(q.x - rad), tx1 = Math.floor(q.x + rad);
+        const ty0 = Math.floor(q.y - rad), ty1 = Math.floor(q.y + rad);
+        for (let ty = ty0; ty <= ty1; ty++) {
+          for (let tx = tx0; tx <= tx1; tx++) {
+            if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+            if (Math.hypot(tx + 0.5 - q.x, ty + 0.5 - q.y) <= rad) tiles.add(ty * W + tx);
+          }
+        }
+      }
+    }
+    for (const d of discs) {
+      const tx0 = Math.floor(d.x - d.r), tx1 = Math.floor(d.x + d.r);
+      const ty0 = Math.floor(d.y - d.r), ty1 = Math.floor(d.y + d.r);
+      for (let ty = ty0; ty <= ty1; ty++) {
+        for (let tx = tx0; tx <= tx1; tx++) {
+          if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
+          if (Math.hypot(tx + 0.5 - d.x, ty + 0.5 - d.y) <= d.r) tiles.add(ty * W + tx);
+        }
+      }
+    }
+
+    const mi = roadMatIndex(sim.eraIndex);
+    this.road = { edges, discs, byChunk, keys, tiles, mat: seasonMat(ROAD_MAT[mi], sim.seasonIdx), mi };
+  }
+
+  // Контур ленты: левая сторона вперёд, правая назад. Обход всегда одной
+  // закрутки — иначе при заливке nonzero пересечения выбивали бы дыры.
+  ribbonPath(c, r, x0, y0, TP, k) {
+    const p = r.p, n = p.length;
+    for (let i = 0; i < n; i++) {
+      const q = p[i], hh = q.h * k;
+      const X = (q.x + q.nx * hh - x0) * TP, Y = (q.y + q.ny * hh - y0) * TP;
+      if (i === 0) c.moveTo(X, Y); else c.lineTo(X, Y);
+    }
+    for (let i = n - 1; i >= 0; i--) {
+      const q = p[i], hh = q.h * k;
+      c.lineTo((q.x - q.nx * hh - x0) * TP, (q.y - q.ny * hh - y0) * TP);
+    }
+    c.closePath();
+  }
+
+  // Пятак перекрёстка. Дуга рисуется ПРОТИВ часовой: у ленты закрутка
+  // отрицательная, и совпадение направлений — единственное, что не даёт
+  // объединению превратить перекрёсток в дырку.
+  discPath(c, d, x0, y0, TP, k) {
+    c.moveTo((d.x + d.r * k - x0) * TP, (d.y - y0) * TP);
+    c.arc((d.x - x0) * TP, (d.y - y0) * TP, d.r * k * TP, 0, Math.PI * 2, true);
+    c.closePath();
+  }
+
+  drawRoads(c, x0, y0, TP) {
+    const R = this.road;
+    if (!R) return;
+    const cell = R.byChunk.get((x0 / CHUNK) + ',' + (y0 / CHUNK));
+    if (!cell) return;
+    const M = R.mat, D = this.q.detail;
+    const path = (k) => {
+      c.beginPath();
+      for (const i of cell.e) this.ribbonPath(c, R.edges[i], x0, y0, TP, k);
+      for (const i of cell.d) this.discPath(c, R.discs[i], x0, y0, TP, k);
+    };
+
+    // 1) утоптанный ореол: три широких полупрозрачных слоя земляного тона
+    // вместо резкой границы. Дорога не врезана в траву, а вытоптана в ней.
+    c.fillStyle = M.halo;
+    path(2.10); c.globalAlpha = 0.11; c.fill();
+    path(1.62); c.globalAlpha = 0.20; c.fill();
+    path(1.26); c.globalAlpha = 0.34; c.fill();
+
+    // 2) рваная обочина: кляксы земли по краю — край не по линейке
+    if (D >= 1) {
+      c.beginPath();
+      for (const i of cell.e) {
+        const p = R.edges[i].p;
+        for (let j = 0; j < p.length; j++) {
+          const q = p[j];
+          if (q.x < x0 - 1.5 || q.y < y0 - 1.5 || q.x > x0 + CHUNK + 1.5 || q.y > y0 + CHUNK + 1.5) continue;
+          const hs = hash2(j * 37 + i * 11, j * 7 + 3);
+          if (hs < 0.40) continue;
+          const side = hs > 0.70 ? 1 : -1;
+          const off = q.h * (1.05 + hash2(j * 5, i * 13 + j) * 0.40) * side;
+          const rad = (0.07 + hash2(j * 3 + 1, i + j * 9) * 0.11) * TP;
+          c.moveTo((q.x + q.nx * off - x0) * TP + rad, (q.y + q.ny * off - y0) * TP);
+          c.arc((q.x + q.nx * off - x0) * TP, (q.y + q.ny * off - y0) * TP, rad, 0, Math.PI * 2, true);
+        }
+      }
+      c.globalAlpha = 0.42; c.fillStyle = M.halo; c.fill();
+    }
+
+    // 3) бордюр у мощения: кайма чуть шире полотна, поэтому шва внутри нет
+    if (M.rim) { path(1.09); c.globalAlpha = 1; c.fillStyle = M.rim; c.fill(); }
+
+    // 4) полотно
+    path(1); c.globalAlpha = 1; c.fillStyle = M.base; c.fill();
+
+    // 5) фактура материала — строго внутри полотна
+    if (D >= 1) {
+      c.save();
+      path(1); c.clip();
+      this.roadTexture(c, cell, x0, y0, TP, M, R.mi);
+      c.restore();
+    }
+    c.globalAlpha = 1;
+  }
+
+  // Фактура по эпохам: грунт → гравий → камень → брусчатка → асфальт.
+  roadTexture(c, cell, x0, y0, TP, M, mi) {
+    const R = this.road;
+    const near = (q) => !(q.x < x0 - 1.5 || q.y < y0 - 1.5 || q.x > x0 + CHUNK + 1.5 || q.y > y0 + CHUNK + 1.5);
+    c.lineCap = 'round'; c.lineJoin = 'round';
+
+    for (const ei of cell.e) {
+      const r = R.edges[ei], p = r.p, mid = p[p.length >> 1];
+
+      if (mi === 0) {
+        // грунт: светлая пыль по середине и две тёмные колеи от ног и телег
+        c.strokeStyle = M.lite; c.globalAlpha = 0.16;
+        c.lineWidth = Math.max(1, mid.h * 0.95 * TP);
+        c.beginPath();
+        for (let j = 0; j < p.length; j++) {
+          const q = p[j];
+          if (j === 0) c.moveTo((q.x - x0) * TP, (q.y - y0) * TP); else c.lineTo((q.x - x0) * TP, (q.y - y0) * TP);
+        }
+        c.stroke();
+        if (mid.h > 0.15) {
+          c.strokeStyle = M.dark; c.globalAlpha = 0.26; c.lineWidth = Math.max(1, TP * 0.06);
+          for (const s of [-0.46, 0.46]) {
+            c.beginPath();
+            for (let j = 0; j < p.length; j++) {
+              const q = p[j], o = q.h * s;
+              const X = (q.x + q.nx * o - x0) * TP, Y = (q.y + q.ny * o - y0) * TP;
+              if (j === 0) c.moveTo(X, Y); else c.lineTo(X, Y);
+            }
+            c.stroke();
+          }
+        }
+        for (let j = 0; j < p.length; j += 2) {
+          const q = p[j];
+          if (!near(q)) continue;
+          const o = (hash2(j * 19 + ei, j * 7) - 0.5) * 1.6 * q.h;
+          c.globalAlpha = 0.4; c.fillStyle = hash2(j * 7 + ei, j) > 0.5 ? M.lite : M.dark;
+          c.beginPath();
+          c.arc((q.x + q.nx * o - x0) * TP, (q.y + q.ny * o - y0) * TP, TP * 0.032, 0, 7);
+          c.fill();
+        }
+      } else if (mi === 1) {
+        // гравий: щебёнка двумя тонами, плотнее к середине
+        for (let j = 0; j < p.length; j++) {
+          const q = p[j];
+          if (!near(q)) continue;
+          for (let s = 0; s < 3; s++) {
+            const o = (hash2(j * 31 + s * 7 + ei, j * 11 + s) - 0.5) * 1.8 * q.h;
+            const al = (hash2(j * 5 + s, s * 13 + ei) - 0.5);
+            const along = (hash2(j * 3 + s * 5, j + s) - 0.5) * 0.4;
+            c.fillStyle = al > 0 ? M.lite : M.dark;
+            c.globalAlpha = 0.42;
+            c.beginPath();
+            c.arc((q.x + q.nx * o + q.tx * along - x0) * TP, (q.y + q.ny * o + q.ty * along - y0) * TP,
+              TP * (0.022 + Math.abs(al) * 0.05), 0, 7);
+            c.fill();
+          }
+        }
+      } else if (mi === 2) {
+        // камень: неровные плиты, по две в ряд, со швом между ними
+        c.lineWidth = Math.max(1, TP * 0.03);
+        for (let j = 0; j < p.length; j++) {
+          const q = p[j];
+          if (!near(q)) continue;
+          for (const side of [-1, 1]) {
+            const cx0 = q.x + q.nx * q.h * side * 0.5, cy0 = q.y + q.ny * q.h * side * 0.5;
+            const aw = q.h * (0.36 + hash2(j + ei, side + 3) * 0.14);  // поперёк
+            const al = 0.19 + hash2(j * 7 + side, ei) * 0.10;          // вдоль
+            c.beginPath();
+            for (let k = 0; k < 4; k++) {
+              const sx = (k === 0 || k === 3) ? -1 : 1, sy = (k < 2) ? -1 : 1;
+              const jt = 0.72 + hash2(j * 13 + k, ei * 3 + side) * 0.5;
+              const wx = cx0 + q.nx * aw * sy * jt + q.tx * al * sx;
+              const wy = cy0 + q.ny * aw * sy * jt + q.ty * al * sx;
+              const X = (wx - x0) * TP, Y = (wy - y0) * TP;
+              if (k === 0) c.moveTo(X, Y); else c.lineTo(X, Y);
+            }
+            c.closePath();
+            c.globalAlpha = 0.30;
+            c.fillStyle = hash2(j * 3 + side, ei + j) > 0.5 ? M.lite : M.dark;
+            c.fill();
+            c.globalAlpha = 0.26; c.strokeStyle = M.dark; c.stroke();
+          }
+        }
+      } else if (mi === 3) {
+        // Брусчатка: ряды поперёк дороги вразбежку. Ряды идут вдвое чаще узлов
+        // ленты — по узлам получались бы шпалы, а не камень.
+        c.lineWidth = Math.max(1, TP * 0.035);
+        const rows = (p.length - 1) * 2;
+        for (let j = 0; j <= rows; j++) {
+          const i0 = Math.min(p.length - 1, j >> 1), i1 = Math.min(p.length - 1, i0 + 1);
+          const f = (j & 1) ? 0.5 : 0;
+          const a = p[i0], b = p[i1];
+          const q = {
+            x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f,
+            nx: a.nx + (b.nx - a.nx) * f, ny: a.ny + (b.ny - a.ny) * f,
+            tx: a.tx, ty: a.ty, h: a.h + (b.h - a.h) * f,
+          };
+          if (!near(q)) continue;
+          const H = q.h * 1.02;
+          c.globalAlpha = 0.32; c.strokeStyle = M.dark;
+          c.beginPath();
+          c.moveTo((q.x - q.nx * H - x0) * TP, (q.y - q.ny * H - y0) * TP);
+          c.lineTo((q.x + q.nx * H - x0) * TP, (q.y + q.ny * H - y0) * TP);
+          c.stroke();
+          // блик по кромке ряда — камень получает объём
+          c.globalAlpha = 0.14; c.strokeStyle = M.lite;
+          c.beginPath();
+          c.moveTo((q.x - q.nx * H + q.tx * 0.05 - x0) * TP, (q.y - q.ny * H + q.ty * 0.05 - y0) * TP);
+          c.lineTo((q.x + q.nx * H + q.tx * 0.05 - x0) * TP, (q.y + q.ny * H + q.ty * 0.05 - y0) * TP);
+          c.stroke();
+          // продольные швы: через ряд сдвигаются — кладка вразбежку
+          c.globalAlpha = 0.26; c.strokeStyle = M.dark;
+          const offs = (j % 2) ? [-0.55, 0.55] : [0];
+          for (const o of offs) {
+            c.beginPath();
+            c.moveTo((q.x + q.nx * q.h * o - x0) * TP, (q.y + q.ny * q.h * o - y0) * TP);
+            c.lineTo((q.x + q.nx * q.h * o + q.tx * 0.23 - x0) * TP, (q.y + q.ny * q.h * o + q.ty * 0.23 - y0) * TP);
+            c.stroke();
+          }
+        }
+      } else {
+        // асфальт: мелкая крошка и осевая разметка на широких улицах
+        for (let j = 0; j < p.length; j++) {
+          const q = p[j];
+          if (!near(q)) continue;
+          const o = (hash2(j * 23 + ei, j * 5) - 0.5) * 1.8 * q.h;
+          c.globalAlpha = 0.13; c.fillStyle = M.lite;
+          c.beginPath();
+          c.arc((q.x + q.nx * o - x0) * TP, (q.y + q.ny * o - y0) * TP, TP * 0.024, 0, 7);
+          c.fill();
+        }
+        if (mid.h > 0.27 && M.mark) {
+          c.strokeStyle = M.mark; c.globalAlpha = 0.55; c.lineWidth = Math.max(1, TP * 0.05);
+          for (let j = 0; j + 1 < p.length; j++) {
+            if (j % 6 > 2) continue;
+            const q = p[j], nq = p[j + 1];
+            if (!near(q)) continue;
+            c.beginPath();
+            c.moveTo((q.x - x0) * TP, (q.y - y0) * TP);
+            c.lineTo((nq.x - x0) * TP, (nq.y - y0) * TP);
+            c.stroke();
+          }
+        }
+      }
+    }
+    c.globalAlpha = 1;
+  }
+
   // ---- отрисовка видимых чанков ----
   draw(ctx, sim, ox, oy, z, cw, ch) {
     this.ensure(sim);
@@ -729,6 +1161,100 @@ export class Terrain {
     }
     ctx.restore();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Материалы дорог по эпохам. rim — бордюр (только у мощения), mark — разметка.
+// ---------------------------------------------------------------------------
+// halo — обочина: у любой дороги край вытоптан до земли, и именно земляной
+// ореол мягко сводит полотно с травой. Без него мощение выглядит наклейкой.
+const ROAD_MAT = [
+  { base: '#96754a', dark: '#6f5533', lite: '#b7996a', halo: '#8a6a41', rim: null,      mark: null },      // грунт
+  { base: '#8a8170', dark: '#635c4c', lite: '#b8ae95', halo: '#836b4c', rim: null,      mark: null },      // гравий
+  { base: '#8a857d', dark: '#5f5a54', lite: '#ada79d', halo: '#7d6a50', rim: '#77726a', mark: null },      // камень
+  { base: '#7d7871', dark: '#55514d', lite: '#9c958c', halo: '#75654e', rim: '#68645f', mark: null },      // брусчатка
+  { base: '#4b4b4f', dark: '#38383c', lite: '#6e6e75', halo: '#5a5344', rim: '#5c5c62', mark: '#d9d2a8' }, // асфальт
+];
+
+function roadMatIndex(era) {
+  if (era <= 1) return 0;   // каменный, бронза — утоптанный грунт
+  if (era <= 3) return 1;   // железо, античность — гравий
+  if (era <= 5) return 2;   // средневековье, возрождение — камень
+  if (era === 6) return 3;  // индустрия — брусчатка
+  return 4;                 // современность и дальше — асфальт
+}
+
+// Зимой дорогу заметает, осенью она темнеет от сырости.
+function seasonMat(m, season) {
+  if (season === 3) {
+    return {
+      base: mixHex(m.base, '#e6edf2', 0.42), dark: mixHex(m.dark, '#cfd8de', 0.34),
+      lite: mixHex(m.lite, '#f4f8fa', 0.46), halo: mixHex(m.halo, '#e6edf2', 0.5),
+      rim: m.rim && mixHex(m.rim, '#e6edf2', 0.4), mark: m.mark,
+    };
+  }
+  if (season === 2) {
+    return {
+      base: mixHex(m.base, '#5a462c', 0.14), dark: mixHex(m.dark, '#4a3a24', 0.14),
+      lite: mixHex(m.lite, '#6b5636', 0.12), halo: mixHex(m.halo, '#4a3a24', 0.16),
+      rim: m.rim && mixHex(m.rim, '#4a3a24', 0.12), mark: m.mark,
+    };
+  }
+  return m;
+}
+
+// Полуширина полотна в клетках по числу дворов, которые через него ходят.
+// Корень, а не линейная зависимость: главная улица шире тропинки втрое, а не
+// в полсотни раз — иначе центр поселения превращается в площадь.
+function roadHalf(traffic) {
+  return Math.min(0.44, 0.082 + 0.052 * Math.sqrt(Math.max(1, traffic)));
+}
+
+// Подпись состава поселения: пока она та же, сеть дорог не пересобирается.
+function roadKeyOf(sim) {
+  let s = ((sim.eraIndex | 0) + 1) * 7919;
+  const bs = sim.buildings || [];
+  for (let i = 0; i < bs.length; i++) {
+    const b = bs[i];
+    if (!b.done || b.destroyed) continue;
+    s = (s * 31 + b.x * 73 + b.y * 151 + 7) | 0;
+  }
+  return s;
+}
+
+// Лента дороги: слабый изгиб (прямая между домами выглядит чертёжной) и
+// расширение у обоих концов — там, где тропа вливается в улицу.
+function makeRibbon(ax, ay, bx, by, h, hA, hB, boost) {
+  const dx = bx - ax, dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.4) return null;
+  const px = -dy / len, py = dx / len;
+  const s1 = hash2(Math.round(ax * 8) + Math.round(by * 3), Math.round(ay * 8) + Math.round(bx * 5));
+  const s2 = hash2(Math.round(bx * 8) + 7, Math.round(ay * 8) + 13);
+  const a1 = (s1 - 0.5) * Math.min(len * 0.16, 1.5);
+  const a2 = (s2 - 0.5) * Math.min(len * 0.09, 0.7);
+  const n = Math.max(3, Math.min(120, Math.round(len / 0.45)));
+  const p = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, hm = 0;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const off = a1 * Math.sin(Math.PI * t) + a2 * Math.sin(2 * Math.PI * t);
+    const x = ax + dx * t + px * off, y = ay + dy * t + py * off;
+    const fa = Math.max(0, 1 - t / 0.28), fb = Math.max(0, 1 - (1 - t) / 0.28);
+    const hh = Math.min(0.52, (h + (hA - h) * fa * fa + (hB - h) * fb * fb) * boost(x, y));
+    p.push({ x, y, h: hh, nx: 0, ny: 0, tx: 0, ty: 0 });
+    if (x < x0) x0 = x; if (y < y0) y0 = y;
+    if (x > x1) x1 = x; if (y > y1) y1 = y;
+    if (hh > hm) hm = hh;
+  }
+  for (let i = 0; i <= n; i++) {
+    const a = p[Math.max(0, i - 1)], b = p[Math.min(n, i + 1)];
+    const tx = b.x - a.x, ty = b.y - a.y;
+    const l = Math.hypot(tx, ty) || 1;
+    p[i].tx = tx / l; p[i].ty = ty / l;
+    p[i].nx = -ty / l; p[i].ny = tx / l;
+  }
+  return { p, x0: x0 - hm * 2, y0: y0 - hm * 2, x1: x1 + hm * 2, y1: y1 + hm * 2 };
 }
 
 // Умножение hex-цвета на коэффициент яркости.

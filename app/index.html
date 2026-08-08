@@ -34,8 +34,18 @@
     overflow-x: auto; scrollbar-width: none; white-space: nowrap;
   }
   #topbar::-webkit-scrollbar { display: none; }
-  .res { display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px; background: rgba(255,255,255,0.05); border-radius: 10px; font-size: 13px; flex-shrink: 0; }
+  .res { display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px; background: rgba(255,255,255,0.05); border-radius: 10px; font-size: 13px; flex-shrink: 0; border: 1px solid transparent; }
   .res small { color: var(--dim); font-size: 10px; }
+  /* Прирост за игровой день. Числу нужен собственный вес: игрок читает
+     сначала знак и цвет, и только потом само значение. */
+  .res .rate { font-style: normal; font-size: 10px; font-weight: 700; margin-left: 1px; letter-spacing: -0.2px; }
+  .res .rate.up { color: var(--good); }
+  .res .rate.dn { color: var(--bad); }
+  .res .rate.zero { color: var(--dim); }
+  .res.res-warn { border-color: rgba(227,195,125,0.55); background: rgba(227,195,125,0.12); }
+  .res.res-bad { border-color: rgba(227,125,125,0.7); background: rgba(227,125,125,0.16); animation: resPulse 1.8s ease-in-out infinite; }
+  @keyframes resPulse { 50% { background: rgba(227,125,125,0.32); } }
+  #topbar [data-tipk] { cursor: help; }
   #eraBadge {
     flex-shrink: 0; padding: 3px 10px; border-radius: 10px; font-weight: 600; font-size: 12px;
     background: linear-gradient(135deg, rgba(201,162,39,0.3), rgba(201,162,39,0.1));
@@ -55,6 +65,53 @@
   }
   #timeBox button.active { background: var(--accent); color: #14100a; font-weight: 700; }
   #btnMenu { width: 40px; }
+
+  /* ===== Строка причин (что именно не так прямо сейчас) ===== */
+  /* Красная цифра в шапке говорит «плохо», но не говорит «почему». Здесь —
+     короткая причина: зима, нет рук, склад полон. Не перехватывает клики:
+     это подпись к карте, а не панель. */
+  #alerts {
+    position: fixed; top: calc(46px + var(--safe-top)); left: 8px; z-index: 19;
+    display: flex; flex-direction: column; gap: 4px; pointer-events: none;
+    max-width: min(52vw, 460px);
+  }
+  #alerts.hide { display: none; }
+  .alert {
+    font-size: 11px; line-height: 1.35; padding: 4px 9px; border-radius: 8px;
+    background: rgba(12,17,27,0.9); border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--warn); color: var(--text);
+  }
+  .alert.bad { border-left-color: var(--bad); }
+  .alert.info { border-left-color: var(--accent); }
+  .alert b { color: var(--warn); font-weight: 600; }
+  .alert.bad b { color: var(--bad); }
+
+  /* ===== Всплывающая подсказка ===== */
+  #tip {
+    position: fixed; z-index: 80; display: none; width: max-content; max-width: 300px;
+    background: rgba(10,15,24,0.97); border: 1px solid var(--panel-border);
+    border-radius: 10px; padding: 9px 11px; font-size: 12px; line-height: 1.45;
+    box-shadow: 0 12px 34px rgba(0,0,0,0.6); pointer-events: none;
+  }
+  #tip.show { display: block; }
+  #tip h5 { color: var(--accent); font-size: 12px; margin-bottom: 5px; }
+  #tip .t-row { display: flex; justify-content: space-between; gap: 14px; color: var(--dim); }
+  #tip .t-row b { color: var(--text); font-weight: 600; }
+  #tip .t-sep { height: 1px; background: rgba(255,255,255,0.08); margin: 5px 0; }
+  #tip .t-bad { color: var(--bad); margin-top: 4px; }
+  #tip .t-good { color: var(--good); margin-top: 4px; }
+  #tip .t-note { color: var(--dim); margin-top: 4px; font-size: 11px; }
+
+  /* ===== Вкладки внутри модалки (меню) ===== */
+  .mtabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--panel-border); }
+  .mtabs button {
+    flex: 1; padding: 9px 6px; background: transparent; border: none; color: var(--dim);
+    font-size: 12px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent;
+  }
+  .mtabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .qopt { display: block; text-align: left; }
+  .qopt small { display: block; color: var(--dim); font-size: 11px; font-weight: 400; margin-top: 2px; }
+  .btn.primary .qopt small, .btn.primary small { color: rgba(20,16,10,0.75); }
 
   /* ===== Тосты ===== */
   #toasts { position: fixed; top: calc(88px + var(--safe-top)); left: 50%; transform: translateX(-50%); z-index: 40; display: flex; flex-direction: column; gap: 6px; pointer-events: none; width: min(92vw, 480px); }
@@ -195,6 +252,15 @@
     #timeBox { top: calc(44px + var(--safe-top)); }
     .res { font-size: 12px; padding: 3px 6px; }
     #consoleBox { bottom: calc(64px + var(--safe-bottom)); }
+    /* Сверху на телефоне место занято кнопками времени (246 px из 390),
+       поэтому причины уезжают вниз — над нижним листом, где пусто. */
+    /* 142 px справа — ширина мини-карты (120 + рамка и отступ): текст причин
+       не должен её закрывать. */
+    #alerts { top: auto; bottom: calc(62px + var(--safe-bottom)); left: 8px; right: 142px; max-width: none; }
+    #tip { display: none !important; }
+    /* Шапка на телефоне и без того не помещается — словесные пояснения
+       остаются только на большом экране, цифры видны всегда. */
+    .res .wide { display: none; }
   }
   @media (min-width: 821px) {
     #placeBar { bottom: 24px; }
@@ -205,17 +271,22 @@
 <canvas id="game"></canvas>
 
 <div id="topbar">
-  <span class="res" id="rFood">🍞 <b>0</b><small>/200</small></span>
-  <span class="res" id="rWood">🪵 <b>0</b></span>
-  <span class="res" id="rStone">🪨 <b>0</b></span>
-  <span class="res" id="rSteel">⚙️ <b>0</b></span>
-  <span class="res" id="rGold">🪙 <b>0</b></span>
-  <span class="res" id="rKnow">📜 <b>0</b></span>
-  <span class="res" id="rPop">👥 <b>0</b><small>/6</small></span>
-  <span class="res" id="rHappy">😊 <b>50%</b></span>
+  <span class="res" id="rFood" data-tipk="r:food">🍞 <b>0</b><small>/200</small></span>
+  <span class="res" id="rFoodDays" data-tipk="days:food">⏳ <b>—</b></span>
+  <span class="res" id="rWood" data-tipk="r:wood">🪵 <b>0</b></span>
+  <span class="res" id="rStone" data-tipk="r:stone">🪨 <b>0</b></span>
+  <span class="res" id="rSteel" data-tipk="r:steel">⚙️ <b>0</b></span>
+  <span class="res" id="rGold" data-tipk="r:gold">🪙 <b>0</b></span>
+  <span class="res" id="rKnow" data-tipk="r:knowledge">📜 <b>0</b></span>
+  <span class="res" id="rPop" data-tipk="pop:0">👥 <b>0</b><small>/6</small></span>
+  <span class="res" id="rIdle" data-tipk="idle:0">🧍 <b>0</b><small> без дела</small></span>
+  <span class="res" id="rHappy" data-tipk="happy:0">😊 <b>50%</b></span>
   <span id="eraBadge">Каменный век</span>
   <span id="dateBox">День 1</span>
 </div>
+
+<div id="alerts"></div>
+<div id="tip"></div>
 
 <div id="timeBox">
   <button id="btnPause" title="Пауза (Space)">⏸</button>

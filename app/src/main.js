@@ -3,6 +3,7 @@ import { Simulation, DAY_SECONDS } from './core/simulation.js';
 import { BUILDINGS, ERAS } from './core/data.js';
 import { Renderer } from './render/renderer.js';
 import { Hud } from './ui/hud.js';
+import { Coach } from './ui/coach.js';
 import { BrowserSave } from './save/saveSystem.js';
 import { AudioEngine } from './ui/audio.js';
 import { ASSET_COVER, ASSET_VICTORY, ASSET_MUSIC } from './ui/assets.js';
@@ -22,6 +23,7 @@ function seedFromHash() {
 let sim = new Simulation(seedFromHash(), { factions: 3 });
 const renderer = new Renderer(canvas);
 const hud = new Hud(sim, renderer, saveSys, audio);
+const coach = new Coach({ hud, renderer, audio });
 // сгенерированные ассеты: обложка старта, арт победы, музыкальная тема
 document.getElementById('overlayArt').style.backgroundImage = `url(${ASSET_COVER})`;
 document.getElementById('victoryArt').style.backgroundImage = `url(${ASSET_VICTORY})`;
@@ -31,7 +33,7 @@ renderer.cam.x = sim.world.startX;
 renderer.cam.y = sim.world.startY;
 
 // Отладочный доступ из консоли браузера и из тестов производительности.
-window.__frontier = { get sim() { return sim; }, renderer, hud, audio, saveSys };
+window.__frontier = { get sim() { return sim; }, renderer, hud, audio, saveSys, coach };
 
 // ---------- размещение зданий ----------
 function startPlacing(id) {
@@ -82,13 +84,13 @@ hud.bind({
     sim = newSimulation(Date.now() % 1000000, factions);
     document.getElementById('overlay').classList.add('hidden');
     hud.toast('Новый мир создан. Удачи!', 'good');
-    maybeOnboard();
+    coach.start();
   },
   continueGame() {
     document.getElementById('overlay').classList.add('hidden');
     const auto = saveSys.load('auto');
     if (auto) loadFromJson(auto, true);
-    maybeOnboard();
+    coach.start();
   },
 });
 

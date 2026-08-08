@@ -8,6 +8,8 @@ import { SpriteCache } from './sprites.js';
 import { PeopleSprites, AnimalSprites, professionOf, lookOf } from './people.js';
 import { ArtPack } from './artpack.js';
 import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } from './quality.js';
+import { Atmosphere } from './weather.js';
+import { FxLayer } from './fx.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 
 const TILE_PX = 32; // мировая единица «тайл→экран» при zoom=1 — НЕ зависит от пресета графики
@@ -41,6 +43,8 @@ export class Renderer {
     // здание просто останется процедурным.
     this.art = new ArtPack();
     this.art.preload();
+    this.atmo = new Atmosphere(this.quality);
+    this.fx = new FxLayer(this.quality);
   }
 
   // id ∈ QUALITY_ORDER или 'auto'
@@ -58,6 +62,8 @@ export class Renderer {
     this.sprites.setQuality(this.quality);
     this.people.setQuality(this.quality);
     this.beasts.setQuality(this.quality);
+    this.atmo.setQuality(this.quality);
+    this.fx.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
   }
@@ -103,6 +109,9 @@ export class Renderer {
     // --- местность (чанками, рельефное освещение, береговая линия) ---
     this.terrain.draw(ctx, sim, ox, oy, z, cw, ch);
     if (this.quality.water) this.terrain.drawWater(ctx, sim, ox, oy, z, cw, ch, this.time);
+    this.atmo.update(sim, dtReal, ox, oy, z, cw, ch);
+    this.fx.update(sim, dtReal, ox, oy, z, cw, ch);
+    this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
 
     // --- тени облаков (мировые координаты — не дрожат при панораме) ---
     if (this.quality.clouds) this.drawClouds(sim, ctx, ox, oy, z, cw, ch);
@@ -122,6 +131,7 @@ export class Renderer {
 
     // --- единый проход по глубине: здания + жители + животные, сортировка по Y ---
     this.drawSortedEntities(sim, ctx, ox, oy, z, cw, ch, L);
+    this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
 
     // --- призрак стройки ---
     if (sim.placing) {
@@ -159,7 +169,7 @@ export class Renderer {
     if (this.quality.birds) this.drawBirds(ctx, cw, ch, dtReal, L);
 
     // --- погода (дождь/снег/листья), плотность урезается пресетом ---
-    this.drawWeather(sim, ctx, cw, ch, dtReal);
+    this.atmo.drawOverlay(sim, ctx, ox, oy, z, cw, ch);
 
     // --- свет по времени суток + погодный тон ---
     if (L.tint[3] > 0.008) {
@@ -174,6 +184,7 @@ export class Renderer {
 
     // --- рассветные/закатные лучи ---
     if (this.quality.godRays) this.drawGodRays(ctx, cw, ch, L);
+    this.fx.drawSky(ctx, cw, ch);
 
     // --- луч Шпиля (поверх тона, чтобы светился и ночью, и днём) ---
     const sp = sim.buildings.find(b => b.id === 'spire' && !b.destroyed);
@@ -191,6 +202,7 @@ export class Renderer {
     if (this.quality.grain > 0) this.drawGrain(ctx, cw, ch);
 
     // --- миникарта (без пост-эффектов) ---
+    this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
     this.drawMinimap(sim, ctx, cw, ch);
   }
 
@@ -204,6 +216,8 @@ export class Renderer {
       this.sprites.setQuality(this.quality);
       this.people.setQuality(this.quality);
       this.beasts.setQuality(this.quality);
+    this.atmo.setQuality(this.quality);
+    this.fx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }

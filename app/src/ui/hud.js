@@ -1,7 +1,17 @@
 // ui/hud.js — весь DOM-интерфейс (presentation-слой).
-import { RES, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, UNITS, TRAIN_COST, SPIRE_STAGES, OBJECTIVES, FACTIONS, WEATHER, SEASONS, GREAT_TYPES } from '../core/data.js';
+import { RES, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, UNITS, TRAIN_COST, SPIRE_STAGES, OBJECTIVES, FACTIONS, WEATHER, SEASONS, GREAT_TYPES, ARMY_UPKEEP, TILE } from '../core/data.js';
+import { DAY_SECONDS } from '../core/simulation.js';
+import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
+
+// Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
+// разовым событиям дня, а еда вообще списывается одним куском на смене суток.
+// Поэтому прирост считается здесь — наблюдением за складом. Это чистое чтение:
+// симуляция про HUD по-прежнему не знает ничего.
+const RATE_TAU = 2.5;      // постоянная сглаживания, игровых дней
+const RATE_WARMUP = 0.3;   // до трети суток данных слишком мало даже для оценки
+const DAYS_PER_MIN = 60 / DAY_SECONDS;  // игровых дней в минуте реального времени на 1×
 
 const TABS = [
   { id: 'build', ru: 'Стройка', ic: '🏗' },
@@ -24,14 +34,22 @@ export class Hud {
     this.marketState = createMarketPanelState();
     this.speed = 1;
     this.el = {};
-    for (const id of ['topbar', 'rFood', 'rWood', 'rStone', 'rSteel', 'rGold', 'rKnow', 'rPop', 'rHappy', 'eraBadge', 'dateBox',
-      'timeBox', 'toasts', 'sidePanel', 'sideTabs', 'sideContent', 'sheet', 'sheetHandle', 'sheetTabs', 'sheetContent',
+    for (const id of ['topbar', 'rFood', 'rFoodDays', 'rWood', 'rStone', 'rSteel', 'rGold', 'rKnow', 'rPop', 'rIdle', 'rHappy', 'eraBadge', 'dateBox',
+      'timeBox', 'toasts', 'alerts', 'tip', 'sidePanel', 'sideTabs', 'sideContent', 'sheet', 'sheetHandle', 'sheetTabs', 'sheetContent',
       'placeBar', 'placeOk', 'placeCancel', 'consoleBox', 'consoleOut', 'consoleIn', 'modalWrap', 'modalBox',
       'eraBanner', 'eraName', 'eraYears', 'victory', 'victoryStats', 'victoryChron', 'overlay', 'coach', 'overlayArt'])
       this.el[id] = document.getElementById(id);
     this._logRendered = 0;
     this._eraTapCount = 0;
     this._eraTapTimer = 0;
+    // прирост ресурсов
+    this._rateSim = null; this._rateAt = 0; this._rateAge = 0;
+    this._rateEma = {}; this._ratePrev = {};
+    this._ws = null;          // сводка по занятости жителей, считается раз за refresh
+    this._alertsHtml = '';    // чтобы не трогать DOM, когда причины не изменились
+    this._tipKey = '';
+    this.fps = 0;
+    this.menuTab = 'game';
   }
 
   bind(callbacks) {
@@ -98,7 +116,70 @@ export class Hud {
     document.getElementById('btnNG').onclick = () => { this.audio.play('click'); location.reload(); };
     // модалка: закрытие по фону
     this.el.modalWrap.addEventListener('click', e => { if (e.target === this.el.modalWrap) this.closeModal(); });
+    this.bindTips();
+    this.startFpsMeter();
     this.setTab('build');
+  }
+
+  // ---------- всплывающие подсказки ----------
+  // Панели перерисовываются 4 раза в секунду целиком (innerHTML), поэтому
+  // слушать mouseenter на каждой карточке бесполезно: узел, с которого ушёл бы
+  // курсор, к тому моменту уже не существует, и подсказка залипает навсегда.
+  // Поэтому — делегирование от контейнера и разбор цели на каждом движении.
+  bindTips() {
+    const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    if (coarse) return;   // на тачах наведения нет, а палец закрывает подсказку собой
+    const hosts = [this.el.sideContent, this.el.sheetContent, this.el.topbar];
+    for (const host of hosts) {
+      if (!host) continue;
+      host.addEventListener('mousemove', e => {
+        const t = e.target.closest && e.target.closest('[data-tipk]');
+        if (!t) { this.hideTip(); return; }
+        this.showTip(t.dataset.tipk, e.clientX, e.clientY);
+      });
+      host.addEventListener('mouseleave', () => this.hideTip());
+    }
+    window.addEventListener('pointerdown', () => this.hideTip());
+    window.addEventListener('wheel', () => this.hideTip(), { passive: true });
+  }
+
+  showTip(key, x, y) {
+    const el = this.el.tip;
+    if (!el) return;
+    if (key !== this._tipKey) {
+      const html = this.tipHtml(key);
+      if (!html) { this.hideTip(); return; }
+      el.innerHTML = html;
+      this._tipKey = key;
+    }
+    el.classList.add('show');
+    // не вылезать за экран: у правого края панель шириной 320 и подсказка
+    // иначе уезжала бы под неё
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let px = x + 16, py = y + 16;
+    if (px + w > window.innerWidth - 8) px = x - w - 16;
+    if (py + h > window.innerHeight - 8) py = Math.max(8, y - h - 12);
+    el.style.left = Math.max(8, px) + 'px';
+    el.style.top = Math.max(8, py) + 'px';
+  }
+
+  hideTip() {
+    if (!this.el.tip) return;
+    this.el.tip.classList.remove('show');
+    this._tipKey = '';
+  }
+
+  // Счётчик кадров нужен только вкладке «Графика»: без него игрок выбирает
+  // пресет вслепую. Сам обработчик ничего не рисует и в DOM не лезет.
+  startFpsMeter() {
+    if (typeof requestAnimationFrame !== 'function') return;
+    let frames = 0, t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const loop = (t) => {
+      frames++;
+      if (t - t0 >= 500) { this.fps = Math.round(frames * 1000 / (t - t0)); frames = 0; t0 = t; }
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
   }
 
   setTab(id) {
@@ -131,27 +212,232 @@ export class Hud {
     setTimeout(() => { d.style.opacity = '0'; d.style.transition = 'opacity 0.4s'; setTimeout(() => d.remove(), 400); }, 2800);
   }
 
+  // ---------- прирост ресурсов ----------
+  tickRates() {
+    const s = this.sim;
+    const now = s.day + s.dayTime;
+    // новая партия, загруженный сейв или откат времени — начинаем замер заново
+    if (this._rateSim !== s || now < this._rateAt) {
+      this._rateSim = s; this._rateAt = now; this._rateAge = 0;
+      this._rateEma = {}; this._ratePrev = {};
+      for (const r of RES) { this._rateEma[r.id] = 0; this._ratePrev[r.id] = s.res[r.id] || 0; }
+      return;
+    }
+    const dt = Math.min(0.5, now - this._rateAt);
+    if (dt <= 0) return;   // пауза: время стоит, прирост не пересчитываем
+    this._rateAt = now;
+    this._rateAge += dt;
+    for (const r of RES) {
+      const v = s.res[r.id] || 0;
+      const d = v - this._ratePrev[r.id];
+      this._ratePrev[r.id] = v;
+      // Сглаживание с постоянной 2.5 дня в ИГРОВОМ времени: разовая трата на
+      // постройку (−20🪵) растворяется за пару дней и не врёт про добычу, а
+      // еда, списываемая одним куском на смене суток, не даёт пилу в шапке.
+      this._rateEma[r.id] += (d - this._rateEma[r.id] * dt) / RATE_TAU;
+    }
+  }
+
+  // Прирост в игровой день или null, пока замер не набрал данных.
+  // Сглаживание стартует с нуля и первые дни занижало бы любой прирост втрое —
+  // поэтому делим на (1−e^−t/τ): та же поправка, что в Adam. Уже через треть
+  // суток число честное, просто ещё шумное.
+  rate(id) {
+    if (this._rateAge < RATE_WARMUP) return null;
+    const corr = 1 - Math.exp(-this._rateAge / RATE_TAU);
+    return (this._rateEma[id] || 0) / Math.max(0.05, corr);
+  }
+
+  fmtRate(v) {
+    if (v === null || v === undefined) return '—';
+    const a = Math.abs(v);
+    if (a < 0.05) return '0';
+    return (v > 0 ? '+' : '−') + (a >= 10 ? Math.round(a) : a.toFixed(1));
+  }
+
+  rateHtml(id) {
+    const v = this.rate(id);
+    if (v === null) return '<i class="rate zero">·</i>';
+    const cls = v > 0.05 ? 'up' : v < -0.05 ? 'dn' : 'zero';
+    return `<i class="rate ${cls}">${this.fmtRate(v)}</i>`;
+  }
+
+  // ---------- занятость жителей ----------
+  workerStats() {
+    const s = this.sim;
+    let work = 0, build = 0, gather = 0, idle = 0;
+    // один проход по жителям: при 226 жителях и 55 зданиях вложенные циклы
+    // стоили бы 12 тысяч сравнений четыре раза в секунду
+    const taken = new Map();
+    for (const v of s.villagers) {
+      const k = v.target && v.target.kind;
+      if (k === 'work') { work++; taken.set(v.target.b, (taken.get(v.target.b) || 0) + 1); }
+      else if (k === 'build') build++;
+      else if (k === 'hunt' || k === 'forage' || k === 'deadfall') gather++;
+      else idle++;
+    }
+    let slots = 0, foodSlots = 0, foodTaken = 0;
+    for (const b of s.doneBuildings()) {
+      const def = BUILDINGS[b.id];
+      if (!def.workers) continue;
+      slots += def.workers;
+      if (def.out && def.out.food) { foodSlots += def.workers; foodTaken += taken.get(b) || 0; }
+    }
+    return { pop: s.villagers.length, work, build, gather, idle, slots, foodSlots, free: Math.max(0, slots - work), freeFood: Math.max(0, foodSlots - foodTaken) };
+  }
+
+  // Сколько дней еды осталось при нынешнем балансе. Считается по измеренному
+  // приросту, а не по формуле питания: так в числе уже учтены и урожай, и
+  // содержание армии, и зима.
+  foodDays() {
+    const r = this.rate('food');
+    if (r === null || r >= -0.02) return null;
+    return this.sim.res.food / -r;
+  }
+
+  // Сколько дней копить недостающее по стоимости — по измеренному приросту.
+  etaFor(cost) {
+    const s = this.sim, m = s.costMult();
+    let worst = 0;
+    for (const [r, v] of Object.entries(cost || {})) {
+      const need = Math.ceil(v * m) - (s.res[r] || 0);
+      if (need <= 0) continue;
+      const rt = this.rate(r);
+      if (rt === null) return '';
+      if (rt <= 0.05) return ' · само не накопится';
+      worst = Math.max(worst, need / rt);
+    }
+    return worst > 0 ? ` · ~${Math.ceil(worst)} дн. ожидания` : '';
+  }
+
+  // ---------- «почему не хватает» ----------
+  // Только то, что реально есть в состоянии симуляции: сезон, погода, штраф
+  // после события, число зданий, свободные рабочие места, потолок склада.
+  shortReason(id) {
+    const s = this.sim;
+    const w = this._ws || (this._ws = this.workerStats());
+    const cap = s.resCap[id];
+    if (cap && cap < 99999 && s.res[id] >= cap - 0.5) return 'склад полон — добыча уходит впустую';
+    if (id === 'food') {
+      if (s.farmPenaltyDays > 0) return `неурожай после события, ещё ${s.farmPenaltyDays} дн.`;
+      const farms = s.countBuilding('farm');
+      if (s.seasonIdx === 3 && farms > 0 && !s.hasBuilding('pasture')) return 'зима: фермы стоят, спасут пастбища или порт';
+      const foodB = s.doneBuildings().some(b => (BUILDINGS[b.id].out || {}).food);
+      if (!foodB) return 'нет ни одного здания еды — люди живут собирательством';
+      if (w.freeFood > 0) return `пусто ${w.freeFood} рабочих мест на еде — не хватает рук`;
+      if (WEATHER[s.weather].farm < 1) return `${WEATHER[s.weather].ru.toLowerCase()}: урожай ×${WEATHER[s.weather].farm}`;
+      if (s.army.soldiers > 0) return `${w.pop} едоков и ${s.army.soldiers} бойцов (−${(s.army.soldiers * ARMY_UPKEEP.food).toFixed(1)}🍞/день) — полей мало`;
+      return `${w.pop} едоков — полей на всех не хватает`;
+    }
+    // Голод перекрывает всё: assignJob уводит людей с любых не-едовых зданий,
+    // и настоящая причина простоя производства — не отрасль, а пустой амбар.
+    const starving = (() => { const d = this.foodDays(); return d !== null && d < 5; })();
+    if (id === 'wood') {
+      if (s.woodCrisis()) return 'дерево кончилось: жители собирают валежник, нужна лесопилка у леса';
+      if (!s.doneBuildings().some(b => (BUILDINGS[b.id].out || {}).wood)) return 'нет лесопилки — дерево только тратится';
+      if (starving) return 'все брошены на еду — лесопилки стоят';
+      if (w.free > 0 && w.idle === 0) return 'рук не хватает на все рабочие места';
+      return 'тратим быстрее, чем пилим';
+    }
+    if (id === 'stone' || id === 'steel') {
+      const src = s.doneBuildings().some(b => (BUILDINGS[b.id].out || {})[id]);
+      if (!src) return id === 'steel' ? 'нет кузницы или завода' : 'нет каменоломни или шахты';
+      if (starving) return 'все брошены на еду — добыча стоит';
+      const eater = s.doneBuildings().find(b => (BUILDINGS[b.id].consume || {})[id]);
+      if (eater) return `${BUILDINGS[eater.id].name} потребляет ${id === 'stone' ? '🪨' : '⚙️'} быстрее, чем добываем`;
+      return 'тратим быстрее, чем добываем';
+    }
+    if (id === 'gold') {
+      if (s.army.soldiers > 0) return `содержание армии: −${(s.army.soldiers * ARMY_UPKEEP.gold).toFixed(1)}🪙/день`;
+      return 'расходы обгоняют доход — нужен рынок или налоги';
+    }
+    if (id === 'knowledge') return 'знания уходят на технологии быстрее, чем копятся';
+    return '';
+  }
+
+  // ---------- строка причин ----------
+  alertList() {
+    const s = this.sim;
+    const w = this._ws || (this._ws = this.workerStats());
+    const out = [];
+    const days = this.foodDays();
+    if (days !== null && days < 12) {
+      const d = Math.max(0, Math.floor(days));
+      out.push({ k: days < 5 ? 'bad' : 'warn', h: `🍞 Еда кончится через <b>${d} дн.</b> — ${this.shortReason('food')}` });
+    } else if (s.res.food <= 0.5) {
+      out.push({ k: 'bad', h: `🍞 <b>Голод.</b> Жители умирают — ${this.shortReason('food')}` });
+    }
+    if (s.woodCrisis()) out.push({ k: 'bad', h: '🪵 <b>Дерево кончилось.</b> Жители собирают валежник — стройте лесопилку вплотную к лесу' });
+    const happy = s._happy ?? s.happiness();
+    if (happy < 35) out.push({ k: 'bad', h: `😟 Счастье <b>${happy}%</b> — люди уходят из поселения` });
+    if (w.pop >= s.housingCap()) out.push({ k: 'warn', h: `🏠 Жильё занято <b>${w.pop}/${s.housingCap()}</b> — новых жителей не будет` });
+    if (w.idle >= 2) {
+      out.push({ k: 'warn', h: w.free > 0
+        ? `🧍 <b>${w.idle}</b> без дела, свободно ${w.free} рабочих мест — поднимите приоритет во вкладке «Труд»`
+        : `🧍 <b>${w.idle}</b> без дела — рабочих мест больше нет, стройте производство` });
+    }
+    if (s.raids.warning) out.push({ k: 'bad', h: '⚔ <b>Враг близко</b> — удар в ближайшие 2 дня' });
+    for (const r of RES) {
+      const cap = s.resCap[r.id];
+      if (cap && cap < 99999 && s.res[r.id] >= cap - 0.5 && (this.rate(r.id) || 0) >= 0)
+        out.push({ k: 'info', h: `${r.icon} Склад полон (${cap}) — добыча уходит впустую, нужен склад` });
+    }
+    return out.slice(0, 3);
+  }
+
+  refreshAlerts() {
+    const box = this.el.alerts;
+    if (!box) return;
+    // При постановке здания подсказки на телефоне лежат ровно под кнопками ✓/✗
+    if (this.sim.placing) { box.classList.add('hide'); return; }
+    const html = this.alertList().map(a => `<div class="alert ${a.k}">${a.h}</div>`).join('');
+    box.classList.toggle('hide', !html);
+    if (html !== this._alertsHtml) { this._alertsHtml = html; box.innerHTML = html; }
+  }
+
   // ---------- верхняя полоса ----------
   refresh() {
     const s = this.sim;
+    this.tickRates();
+    this._ws = this.workerStats();
     // Знаменатель показывается у всех ограниченных ресурсов, а не только у еды:
     // без него игрок не понимал, почему лесопилка работает, а дерево стоит.
     // На потолке число подсвечивается — это сигнал строить склад.
     const cap = (id, icon) => {
       const v = Math.floor(s.res[id]), m = s.resCap[id];
-      if (!m || m >= 99999) return `${icon} <b>${v}</b>`;
+      const rate = this.rateHtml(id);
+      if (!m || m >= 99999) return `${icon} <b>${v}</b>${rate}`;
       const full = v >= m - 0.5;
-      return `${icon} <b${full ? ' style="color:var(--warn)"' : ''}>${v}</b><small>/${m}</small>`;
+      return `${icon} <b${full ? ' style="color:var(--warn)"' : ''}>${v}</b><small>/${m}</small>${rate}`;
     };
     this.el.rFood.innerHTML = cap('food', '🍞');
     this.el.rWood.innerHTML = cap('wood', '🪵');
     this.el.rStone.innerHTML = cap('stone', '🪨');
     this.el.rSteel.innerHTML = cap('steel', '⚙️');
-    this.el.rGold.innerHTML = `🪙 <b>${Math.floor(s.res.gold)}</b>`;
-    this.el.rKnow.innerHTML = `📜 <b>${Math.floor(s.res.knowledge)}</b>`;
+    this.el.rGold.innerHTML = `🪙 <b>${Math.floor(s.res.gold)}</b>${this.rateHtml('gold')}`;
+    this.el.rKnow.innerHTML = `📜 <b>${Math.floor(s.res.knowledge)}</b>${this.rateHtml('knowledge')}`;
     this.el.rPop.innerHTML = `👥 <b>${s.villagers.length}</b><small>/${s.housingCap()}</small>`;
     const happy = s.happiness();
     this.el.rHappy.innerHTML = `${happy >= 70 ? '😊' : happy >= 40 ? '😐' : '😟'} <b>${happy}%</b>`;
+    // Запас еды в днях — главное число ранней игры. Ниже пяти дней чип краснеет
+    // и пульсирует: это последний момент, когда голод ещё можно предотвратить.
+    const fd = this.foodDays();
+    const w = this._ws;
+    if (fd === null) {
+      const fr = this.rate('food');
+      const full = s.res.food >= s.resCap.food - 0.5;
+      const word = fr === null ? ' считаем…' : full ? ' склад полон' : fr > 0.05 ? ' запас растёт' : ' расход ≈ приход';
+      this.el.rFoodDays.innerHTML = `⏳ <b>${fr === null ? '—' : '∞'}</b><small class="wide">${word}</small>`;
+      this.el.rFoodDays.className = 'res';
+    } else {
+      const d = Math.floor(fd);
+      this.el.rFoodDays.innerHTML = `⏳ <b>${d}</b><small> дн.<span class="wide"> еды</span></small>`;
+      this.el.rFoodDays.className = 'res' + (d < 5 ? ' res-bad' : d < 12 ? ' res-warn' : '');
+    }
+    this.el.rFood.className = 'res' + (fd !== null && fd < 5 ? ' res-bad' : '');
+    this.el.rIdle.innerHTML = `🧍 <b>${w.idle}</b><small><span class="wide"> без дела</span>${w.free ? ` · ${w.free} мест` : ''}</small>`;
+    this.el.rIdle.className = 'res' + (w.idle >= 2 && w.free > 0 ? ' res-warn' : '');
+    this.refreshAlerts();
     const era = ERAS[s.eraIndex];
     this.el.eraBadge.textContent = era.ru;
     this.el.eraBadge.style.borderColor = era.hue;
@@ -264,6 +550,178 @@ export class Hud {
     });
   }
 
+  // ---------- содержимое подсказок ----------
+  tipHtml(key) {
+    const i = key.indexOf(':');
+    const kind = key.slice(0, i), id = key.slice(i + 1);
+    if (kind === 'r') return this.tipRes(id);
+    if (kind === 'days') return this.tipFood();
+    if (kind === 'idle') return this.tipIdle();
+    if (kind === 'pop') return this.tipPop();
+    if (kind === 'happy') return this.tipHappy();
+    if (kind === 'b') return this.tipBuilding(id);
+    if (kind === 't') return this.tipTech(id);
+    return '';
+  }
+
+  tipRow(a, b) { return `<div class="t-row"><span>${a}</span><b>${b}</b></div>`; }
+
+  num(v) { return Number.isInteger(v) ? String(v) : String(+v.toFixed(1)); }
+
+  // «за минуту» — та же скорость, пересчитанная в реальное время текущего темпа
+  perMin(v) { return `${this.fmtRate(v * DAYS_PER_MIN * this.speed)} в минуту на ${this.speed}×`; }
+
+  // кто в поселении даёт этот ресурс — по построенным зданиям, без выдумок
+  sourcesOf(id) {
+    const count = new Map();
+    for (const b of this.sim.doneBuildings()) {
+      const def = BUILDINGS[b.id];
+      if (def.out && def.out[id]) count.set(def.name, (count.get(def.name) || 0) + 1);
+    }
+    return [...count].map(([n, c]) => `${n}${c > 1 ? ' ×' + c : ''}`).join(', ');
+  }
+
+  tipRes(id) {
+    const s = this.sim, meta = RES.find(r => r.id === id);
+    const capV = s.resCap[id];
+    const v = this.rate(id);
+    let h = `<h5>${meta.icon} ${meta.ru}</h5>`;
+    h += this.tipRow('Сейчас', `${Math.floor(s.res[id])}${capV && capV < 99999 ? ' / ' + capV : ''}`);
+    h += this.tipRow('Прирост', v === null ? 'считаем…' : `${this.fmtRate(v)} в игровой день`);
+    if (v !== null) h += `<div class="t-note">≈ ${this.perMin(v)}</div>`;
+    const src = this.sourcesOf(id);
+    if (src) h += this.tipRow('Дают', src);
+    if (id === 'food') {
+      const d = this.foodDays();
+      if (d !== null) h += this.tipRow('Хватит на', `${Math.floor(d)} дн.`);
+      if (s.army.soldiers > 0) h += this.tipRow('Ест армия', `−${(s.army.soldiers * ARMY_UPKEEP.food).toFixed(1)}/день`);
+    }
+    const why = (v !== null && v < -0.02) || (capV && capV < 99999 && s.res[id] >= capV - 0.5) ? this.shortReason(id) : '';
+    if (why) h += `<div class="t-bad">Почему: ${why}</div>`;
+    return h;
+  }
+
+  tipFood() {
+    const s = this.sim, w = this._ws || this.workerStats();
+    const d = this.foodDays(), v = this.rate('food');
+    let h = `<h5>⏳ Запас еды</h5>`;
+    h += this.tipRow('На складе', `${Math.floor(s.res.food)} / ${s.resCap.food}`);
+    h += this.tipRow('Баланс', v === null ? 'считаем…' : `${this.fmtRate(v)} в день`);
+    h += this.tipRow('Хватит на', d !== null ? `${Math.floor(d)} дн.` : v === null ? 'считаем…' : v > 0.05 ? 'запас растёт' : 'расход ≈ приход');
+    h += this.tipRow('Мест на еде', !w.foodSlots ? 'зданий еды нет' : w.freeFood ? `свободно ${w.freeFood} из ${w.foodSlots}` : `все ${w.foodSlots} заняты`);
+    h += this.tipRow('Сезон', `${SEASONS[s.seasonIdx]}, ${WEATHER[s.weather].ru.toLowerCase()} (урожай ×${WEATHER[s.weather].farm})`);
+    if (d !== null && d < 5) h += `<div class="t-bad">Осталось меньше пяти дней. Причина: ${this.shortReason('food')}</div>`;
+    else if (v !== null && v < 0) h += `<div class="t-note">Причина убыли: ${this.shortReason('food')}</div>`;
+    return h;
+  }
+
+  tipIdle() {
+    const w = this._ws || this.workerStats();
+    let h = `<h5>🧍 Занятость жителей</h5>`;
+    h += this.tipRow('На рабочих местах', `${w.work} из ${w.slots}`);
+    h += this.tipRow('На стройке', w.build);
+    h += this.tipRow('Промысел и охота', w.gather);
+    h += this.tipRow('Без дела', w.idle);
+    h += `<div class="t-sep"></div>`;
+    h += this.tipRow('Свободных мест', w.free);
+    h += `<div class="t-note">${w.idle > 0 && w.free > 0
+      ? 'Руки есть, но до мест не дошли: проверьте приоритеты во вкладке «Труд».'
+      : w.free > 0 ? 'Мест больше, чем людей — нужны жители: жильё и еда.'
+      : 'Все места заняты. Новое производство даст новые места.'}</div>`;
+    return h;
+  }
+
+  tipPop() {
+    const s = this.sim, w = this._ws || this.workerStats();
+    let h = `<h5>👥 Население</h5>`;
+    h += this.tipRow('Жителей', w.pop);
+    h += this.tipRow('Жильё', s.housingCap());
+    h += this.tipRow('Бойцов', `${s.army.soldiers} / ${s.armyLimit()}`);
+    h += `<div class="t-note">Рождения идут, пока есть свободное жильё, запас еды и счастье выше среднего.</div>`;
+    if (w.pop >= s.housingCap()) h += `<div class="t-bad">Жильё занято полностью — стройте хижины и дома.</div>`;
+    return h;
+  }
+
+  tipHappy() {
+    const s = this.sim;
+    let fromB = 0;
+    for (const b of s.doneBuildings()) fromB += BUILDINGS[b.id].happy || 0;
+    const happy = s._happy ?? s.happiness();
+    let h = `<h5>😊 Настроение: ${happy}%</h5>`;
+    h += this.tipRow('От зданий', `${fromB >= 0 ? '+' : ''}${fromB}`);
+    h += this.tipRow('Погода', `${WEATHER[s.weather].happy >= 0 ? '+' : ''}${WEATHER[s.weather].happy} (${WEATHER[s.weather].ru.toLowerCase()})`);
+    if (s.villagers.length > s.housingCap()) h += `<div class="t-bad">Жителей больше, чем жилья — теснота бьёт по настроению.</div>`;
+    if (s.res.food <= 0) h += `<div class="t-bad">Склад еды пуст.</div>`;
+    if (happy < 35) h += `<div class="t-bad">Ниже 35% жители начинают уходить, а работа идёт медленнее.</div>`;
+    return h;
+  }
+
+  // Что здание даёт, что требует и почему сейчас недоступно — всё из BUILDINGS
+  // и текущего состояния, ничего придуманного.
+  tipBuilding(id) {
+    const s = this.sim, def = BUILDINGS[id];
+    if (!def) return '';
+    let h = `<h5>${def.name}</h5><div class="t-note" style="margin:0 0 6px">${def.desc}</div>`;
+    if (def.out) {
+      for (const [r, v] of Object.entries(def.out)) {
+        const meta = RES.find(q => q.id === r);
+        h += this.tipRow('Даёт', `${meta.icon} ${this.num(v)} в день с рабочего`);
+        if (def.workers) h += this.tipRow('Полным штатом', `${meta.icon} ${this.num(v * def.workers)} в день`);
+      }
+    }
+    if (def.consume) h += this.tipRow('Потребляет', Object.entries(def.consume).map(([r, v]) => `${RES.find(q => q.id === r)?.icon || r}${v}/день`).join(' '));
+    if (def.housing) h += this.tipRow('Жильё', `${def.housing} жителей`);
+    if (def.happy) h += this.tipRow('Счастье', `+${def.happy}`);
+    if (def.defense) h += this.tipRow('Оборона', `+${def.defense}`);
+    if (def.cap) h += this.tipRow('Склад', Object.entries(def.cap).map(([r, v]) => `+${v} ${RES.find(q => q.id === r)?.icon || r}`).join(' '));
+    if (def.workers) h += this.tipRow('Рабочих мест', def.workers);
+    h += `<div class="t-sep"></div>`;
+    h += this.tipRow('Стоит', this.costStr(def.cost));
+    h += this.tipRow('Стройка', `~${s.buildDays(def).toFixed(1)} дн. полной бригадой`);
+    if (def.req) h += this.tipRow('Технология', TECHS.find(t => t.id === def.req).name);
+    const place = def.needTile === TILE.FOREST ? 'вплотную к лесу'
+      : def.needTile === TILE.HILL ? 'вплотную к холму'
+      : def.needTile === TILE.MOUNTAIN ? 'вплотную к горе'
+      : def.needTile === TILE.GRASS ? 'на травяном лугу'
+      : def.coast ? 'на берегу, рядом с водой' : '';
+    if (place) h += this.tipRow('Место', place);
+    if (def.unique) h += this.tipRow('Ограничение', 'можно только одно');
+    const built = s.doneBuildings().filter(b => b.id === id).length;
+    if (built) h += this.tipRow('Уже построено', built);
+    // почему нельзя прямо сейчас
+    if (def.req && !s.techs.has(def.req)) h += `<div class="t-bad">Сейчас нельзя: не открыта технология «${TECHS.find(t => t.id === def.req).name}».</div>`;
+    else if (def.unique && s.buildings.some(b => b.id === id && !b.destroyed)) h += `<div class="t-bad">Сейчас нельзя: такое здание уже есть.</div>`;
+    else {
+      const lack = s.lackCost(def.cost);
+      if (lack) h += `<div class="t-bad">Сейчас нельзя: не хватает ${lack}.</div>`;
+      else h += `<div class="t-good">Можно строить — выберите место на карте.</div>`;
+    }
+    return h;
+  }
+
+  tipTech(id) {
+    const s = this.sim, t = TECHS.find(q => q.id === id);
+    if (!t) return '';
+    const cost = s.techCost(t);
+    let h = `<h5>${t.name}</h5><div class="t-note" style="margin:0 0 6px">${t.effect}</div>`;
+    h += this.tipRow('Стоит', `📜 ${cost}${cost < t.cost ? ` (было ${t.cost}, скидка от соседей)` : ''}`);
+    h += this.tipRow('Есть знаний', Math.floor(s.res.knowledge));
+    if (t.era) h += this.tipRow('Открывает эпоху', ERAS.find(e => e.id === t.era)?.ru || t.era);
+    const opens = Object.entries(BUILDINGS).filter(([, d]) => d.req === id).map(([, d]) => d.name);
+    if (opens.length) h += this.tipRow('Даёт здания', opens.join(', '));
+    const units = UNITS.filter(u => u.req === id).map(u => u.name);
+    if (units.length) h += this.tipRow('Даёт войска', units.join(', '));
+    const missing = t.prereq.filter(p => !s.techs.has(p));
+    if (s.techs.has(id)) h += `<div class="t-good">Уже изучено.</div>`;
+    else if (missing.length) h += `<div class="t-bad">Сейчас нельзя: сначала ${missing.map(m => TECHS.find(q => q.id === m).name).join(', ')}.</div>`;
+    else if (s.res.knowledge < cost) {
+      const kr = this.rate('knowledge');
+      const eta = kr && kr > 0.05 ? ` — при нынешнем темпе ~${Math.ceil((cost - s.res.knowledge) / kr)} дн.` : '';
+      h += `<div class="t-bad">Сейчас нельзя: не хватает 📜${Math.ceil(cost - s.res.knowledge)}${eta}.</div>`;
+    } else h += `<div class="t-good">Можно изучать.</div>`;
+    return h;
+  }
+
   costStr(cost) {
     return Object.entries(cost || {}).map(([r, v]) => {
       const meta = RES.find(q => q.id === r);
@@ -284,9 +742,9 @@ export class Hud {
       let reason = '';
       if (locked) reason = `Нужна технология: ${TECHS.find(t => t.id === def.req).name}`;
       else if (built) reason = 'Уже построено';
-      else if (lack) reason = `Не хватает: ${lack}`;
+      else if (lack) reason = `Не хватает: ${lack}${this.etaFor(def.cost)}`;
       const dis = locked || built || lack;
-      html += `<div class="card ${dis ? 'disabled' : ''}" ${!locked && !built ? `data-build="${id}"` : ''}>
+      html += `<div class="card ${dis ? 'disabled' : ''}" data-tipk="b:${id}" ${!locked && !built ? `data-build="${id}"` : ''}>
         <div class="ttl"><span>${def.name}</span><span class="cost">${this.costStr(def.cost)}</span></div>
         <div class="desc">${def.desc}</div>
         ${reason ? `<div class="reason">${reason}</div>` : ''}
@@ -313,7 +771,7 @@ export class Hud {
       // скидка диффузии
       let diff = '';
       if (!has && cost < t.cost) diff = `<div class="desc" style="color:var(--good)">Известна соседям: −${Math.round((1 - cost / t.cost) * 100)}%</div>`;
-      html += `<div class="card ${has ? 'done-card' : (reason ? 'disabled' : '')}" ${!has && !missing.length ? `data-tech="${t.id}"` : ''}>
+      html += `<div class="card ${has ? 'done-card' : (reason ? 'disabled' : '')}" data-tipk="t:${t.id}" ${!has && !missing.length ? `data-tech="${t.id}"` : ''}>
         <div class="ttl"><span>${has ? '✓ ' : ''}${t.name}${t.era ? ' ⚡' : ''}</span><span class="cost">${has ? '' : '📜' + cost}</span></div>
         <div class="desc">${t.effect}</div>${diff}
         ${reason ? `<div class="reason">${reason}</div>` : ''}
@@ -515,11 +973,14 @@ export class Hud {
   }
 
   // ---------- меню ----------
-  showMenu() {
+  showMenu(tab) {
+    if (tab) this.menuTab = tab;
+    if (this.menuTab === 'gfx') { this.showMenuGraphics(); return; }
     const slots = ['1', '2', '3'];
     const saves = this.saveSys.list();
     this.showModal(`
       <h3>Меню</h3>
+      ${this.menuTabsHtml()}
       <div class="btns">
         <button class="btn primary" data-m="resume">Продолжить</button>
         ${slots.map(i => `<button class="btn" data-m="save${i}">💾 Сохранить в слот ${i} ${saves.includes('slot' + i) ? '(есть сейв)' : ''}</button>`).join('')}
@@ -532,6 +993,7 @@ export class Hud {
         <button class="btn" data-m="how">❓ Как играть</button>
         <button class="btn danger" data-m="new">🔄 Новая игра</button>
       </div>`);
+    this.bindMenuTabs();
     this.el.modalBox.querySelectorAll('[data-m]').forEach(b => {
       b.onclick = () => {
         const m = b.dataset.m;
@@ -546,6 +1008,60 @@ export class Hud {
         else if (m === 'console') { this.closeModal(); this.toggleConsole(); }
         else if (m === 'how') this.showHow();
         else if (m === 'new') { this.closeModal(); this.showNewGame(); }
+      };
+    });
+  }
+
+  menuTabsHtml() {
+    const t = [['game', '⚙ Игра'], ['gfx', '🎨 Графика']];
+    return `<div class="mtabs">${t.map(([id, ru]) =>
+      `<button data-mt="${id}" class="${this.menuTab === id ? 'active' : ''}">${ru}</button>`).join('')}</div>`;
+  }
+
+  bindMenuTabs() {
+    this.el.modalBox.querySelectorAll('[data-mt]').forEach(b => {
+      b.onclick = () => { this.audio.play('click'); this.showMenu(b.dataset.mt); };
+    });
+  }
+
+  // Вкладка «Графика». Раньше пресет выбирал только автотюнер: один раз, только
+  // вниз и только в первые 10 секунд. Замер из аудита (55 зданий, 226 жителей):
+  // ultra 26 FPS, high 58, medium 78 — эти числа и показываем игроку.
+  showMenuGraphics() {
+    const cur = this.r.qualityId || 'auto';
+    const act = this.r.quality ? this.r.quality.id : 'high';
+    const NOTE = {
+      auto: 'Начинает с «Высоко» и снижает пресет, если первые секунды идут рывками.',
+      ultra: 'Всё: зерно, лучи, блики, птицы. На замере — 26 FPS. Только для мощных машин.',
+      high: 'Тени, облака, свечение, светлячки. На замере — 58 FPS. Рекомендуется.',
+      medium: 'Без свечения и лучей, тайл 24 px. На замере — 78 FPS. Ноутбуки и телефоны.',
+      eco: 'Без рельефа, воды, облаков и теней, тайл 16 px. Для слабых машин.',
+    };
+    const opt = (id, ru) => {
+      const on = cur === id;
+      return `<button class="btn ${on ? 'primary' : ''}" data-q="${id}">
+        <span class="qopt">${on ? '✓ ' : ''}${ru}${id === 'auto' && cur === 'auto' ? ` — сейчас «${QUALITY[act].ru}»` : ''}
+        <small>${NOTE[id]}</small></span></button>`;
+    };
+    this.showModal(`
+      <h3>Меню</h3>
+      ${this.menuTabsHtml()}
+      <div class="kv"><span>Кадров в секунду</span><span>${this.fps || '—'}</span></div>
+      <div class="kv"><span>Активный пресет</span><span>${QUALITY[act].ru}</span></div>
+      <div class="btns" style="margin-top:12px">
+        ${opt('auto', '🤖 Авто')}
+        ${QUALITY_ORDER.slice().reverse().map(id => opt(id, QUALITY[id].ru)).join('')}
+        <button class="btn" data-q="close">Закрыть</button>
+      </div>`);
+    this.bindMenuTabs();
+    this.el.modalBox.querySelectorAll('[data-q]').forEach(b => {
+      b.onclick = () => {
+        const id = b.dataset.q;
+        this.audio.play('click');
+        if (id === 'close') { this.closeModal(); return; }
+        this.r.setQuality(id);
+        this.toast(`Качество: ${id === 'auto' ? 'авто' : QUALITY[id].ru}`, 'good');
+        this.showMenuGraphics();
       };
     });
   }
