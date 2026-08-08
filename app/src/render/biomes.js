@@ -126,6 +126,12 @@ export const ORES = [
 ];
 const ORE_IRON = 0, ORE_COAL = 1, ORE_SALT = 2, ORE_GOLD = 3;
 
+// Шаг сетки, по которой залежи разложены по чанкам. Раскладка (buildOre) и
+// выборка (paintOre) ОБЯЗАНЫ считать по одному числу: если выборка возьмёт
+// размер чанка из аргумента, а раскладка — свой, ключи разойдутся и руда
+// просто пропадёт с карты, не уронив при этом ничего. Поэтому константа одна.
+const ORE_CHUNK = 16;
+
 // ---------------------------------------------------------------------------
 // Свой детерминированный шум. Сид мира входит в хеш, поэтому две партии с
 // разными сидами не получают одинаковых пятен и одинаковых залежей.
@@ -212,6 +218,11 @@ export class BiomeLayer {
     const W = world.w | 0, H = world.h | 0, N = W * H;
     if (!(N > 0)) { this.on = false; return; }
     this.w = W; this.h = H; this.seed = world.seed >>> 0;
+    // Влажность сбрасываем ЯВНО. Иначе при переходе на другой мир того же
+    // размера (новая партия, тот же 96×96) проверка «длина совпала — значит
+    // годится» ниже оставляла бы влажность от прошлого мира: пояса новые,
+    // насыщенность зелени старая. Ошибка тихая — видно только глазами.
+    this.fert = null;
 
     // Слой биомов: берём готовый из worldgen2, если он есть, иначе выводим сами
     // теми же формулами. Массивы ядра при этом не трогаются ни в одном случае.
@@ -838,7 +849,7 @@ export class BiomeLayer {
     }
 
     // Индекс по чанкам: чанк рисует только те залежи, которые его задевают.
-    const CH = 16;
+    const CH = ORE_CHUNK;
     this.ore.forEach((o, i) => {
       const c0x = Math.floor((o.x - o.r - 1) / CH), c1x = Math.floor((o.x + o.r + 1) / CH);
       const c0y = Math.floor((o.y - o.r - 1) / CH), c1y = Math.floor((o.y + o.r + 1) / CH);
@@ -857,7 +868,8 @@ export class BiomeLayer {
   // её не должны перекрывать ни трава, ни плиты породы.
   paintOre(c, sim, x0, y0, TP, chunk = 16) {
     if (!this.on || !this.ore.length) return;
-    const cell = this.oreByChunk.get(Math.floor(x0 / chunk) + ',' + Math.floor(y0 / chunk));
+    // Ключ считается по ORE_CHUNK, а не по chunk: см. комментарий у константы.
+    const cell = this.oreByChunk.get(Math.floor(x0 / ORE_CHUNK) + ',' + Math.floor(y0 / ORE_CHUNK));
     if (!cell) return;
     const D = this.q ? this.q.detail : 1;
     const tiles = sim.world.tiles, W = this.w, H = this.h;
