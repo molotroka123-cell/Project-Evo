@@ -11,6 +11,8 @@ import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } fr
 import { Atmosphere } from './weather.js';
 import { WaterLayer } from './water.js';
 import { Vegetation } from './vegetation.js';
+import { ReliefLayer } from './relief.js';
+import { ShadowLayer } from './shadows.js';
 import { FxLayer } from './fx.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 
@@ -48,6 +50,8 @@ export class Renderer {
     this.atmo = new Atmosphere(this.quality);
     this.water = new WaterLayer(this.quality);
     this.veg = new Vegetation(this.quality);
+    this.relief = new ReliefLayer(this.quality);
+    this.shadows = new ShadowLayer(this.quality);
     this.fx = new FxLayer(this.quality);
   }
 
@@ -69,6 +73,8 @@ export class Renderer {
     this.atmo.setQuality(this.quality);
     this.water.setQuality(this.quality);
     this.veg.setQuality(this.quality);
+    this.relief.setQuality(this.quality);
+    this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
@@ -114,6 +120,10 @@ export class Renderer {
 
     // --- местность (чанками, рельефное освещение, береговая линия) ---
     this.terrain.draw(ctx, sim, ox, oy, z, cw, ch);
+    // Рельефная светотень: замер 62 -> 9 FPS, то есть модуль съедает семь восьмых
+    // кадра. Агент не успел его замерить до отсечки лимита. Включаем только на
+    // ultra, который выбирается руками; на автопресетах карта остаётся прежней.
+    if (this.quality.richRelief) this.relief.draw(sim, ctx, ox, oy, z, cw, ch, L);
     // Богатая вода (отражения, гребни, прибой, лёд) только там, где есть запас
     // производительности. Замер на программном растеризаторе: 62 -> 26 FPS,
     // то есть модуль съедает больше половины кадра. На настоящем GPU он
@@ -124,8 +134,14 @@ export class Renderer {
     this.atmo.update(sim, dtReal, ox, oy, z, cw, ch);
     this.fx.update(sim, dtReal, ox, oy, z, cw, ch);
     this.veg.update(sim, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
+    // Новая система теней работает ПОВЕРХ старого кода теней в drawBuilding —
+    // то есть сцена платит дважды. Замер: общий вид карты 61 -> 37 FPS.
+    // До того как старый путь будет убран, новый включаем только на ultra.
+    if (this.quality.richRelief) this.shadows.begin(sim, dtReal, z, { fog: this.atmo.fogK });
     this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
-    this.veg.draw(sim, ctx, ox, oy, z, cw, ch);
+    // Растительность стоит 15 FPS на общем виде карты (58 -> 43). Держим её
+    // там, где есть запас: на eco лес остаётся тем, что печёт terrain.js.
+    if (this.quality.richVeg) this.veg.draw(sim, ctx, ox, oy, z, cw, ch);
 
     // --- тени облаков (мировые координаты — не дрожат при панораме) ---
     if (this.quality.clouds) this.drawClouds(sim, ctx, ox, oy, z, cw, ch);
@@ -233,6 +249,8 @@ export class Renderer {
     this.atmo.setQuality(this.quality);
     this.water.setQuality(this.quality);
     this.veg.setQuality(this.quality);
+    this.relief.setQuality(this.quality);
+    this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();

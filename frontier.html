@@ -4781,17 +4781,17 @@ ${s}`, "console");
       const x0 = cx * CHUNK, y0 = cy * CHUNK;
       c.imageSmoothingEnabled = true;
       c.imageSmoothingQuality = "high";
-      const S = 2, PAD = 2;
+      const S = 2, PAD2 = 2;
       c.drawImage(
         this.low,
-        Math.max(0, x0 - PAD) * S,
-        Math.max(0, y0 - PAD) * S,
-        (CHUNK + PAD * 2) * S,
-        (CHUNK + PAD * 2) * S,
-        (Math.max(0, x0 - PAD) - x0) * TP,
-        (Math.max(0, y0 - PAD) - y0) * TP,
-        (CHUNK + PAD * 2) * TP,
-        (CHUNK + PAD * 2) * TP
+        Math.max(0, x0 - PAD2) * S,
+        Math.max(0, y0 - PAD2) * S,
+        (CHUNK + PAD2 * 2) * S,
+        (CHUNK + PAD2 * 2) * S,
+        (Math.max(0, x0 - PAD2) - x0) * TP,
+        (Math.max(0, y0 - PAD2) - y0) * TP,
+        (CHUNK + PAD2 * 2) * TP,
+        (CHUNK + PAD2 * 2) * TP
       );
       for (let y = y0; y < y0 + CHUNK; y++) {
         for (let x = x0; x < x0 + CHUNK; x++) {
@@ -8411,6 +8411,10 @@ ${s}`, "console");
     eco: preset({
       id: "eco",
       ru: "Экономия",
+      richVeg: false,
+      // живая растительность: замер в renderer.draw
+      richRelief: false,
+      // рельефная светотень: замер в renderer.draw
       richWater: false,
       // богатая вода: см. замер в renderer.draw
       tilePx: 16,
@@ -8470,6 +8474,10 @@ ${s}`, "console");
     medium: preset({
       id: "medium",
       ru: "Средне",
+      richVeg: false,
+      // живая растительность: замер в renderer.draw
+      richRelief: false,
+      // рельефная светотень: замер в renderer.draw
       richWater: false,
       // богатая вода: см. замер в renderer.draw
       tilePx: 24,
@@ -8526,6 +8534,10 @@ ${s}`, "console");
     high: preset({
       id: "high",
       ru: "Высоко",
+      richVeg: true,
+      // живая растительность: замер в renderer.draw
+      richRelief: false,
+      // рельефная светотень: замер в renderer.draw
       richWater: false,
       // богатая вода: см. замер в renderer.draw
       tilePx: 32,
@@ -8593,6 +8605,10 @@ ${s}`, "console");
     ultra: preset({
       id: "ultra",
       ru: "Ультра",
+      richVeg: true,
+      // живая растительность: замер в renderer.draw
+      richRelief: true,
+      // рельефная светотень: замер в renderer.draw
       richWater: true,
       // богатая вода: см. замер в renderer.draw
       tilePx: 32,
@@ -9362,13 +9378,14 @@ ${s}`, "console");
   };
 
   // app/src/render/water.js
-  var BLK = 8;
+  var BLK = 4;
   var SUBRES = { eco: 0, medium: 4, high: 6, ultra: 8 };
   var WAVE_TEX = 128;
-  var SURF_CAP = 65e3;
+  var COMPOSE_CAP = 45e3;
+  var SMOOTH_CAP = 24e4;
   var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var lerp3 = (a, b, k) => a + (b - a) * k;
-  var smooth2 = (k) => k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k);
+  var sstep = (k) => k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k);
   function makeRnd2(seed) {
     let s = seed | 0 || 1831565813;
     return () => {
@@ -9414,6 +9431,12 @@ ${s}`, "console");
     }
     return D;
   }
+  function foamBand(d, center, width) {
+    const k = Math.abs(d - center) / width;
+    if (k >= 1) return 0;
+    const c = 1 - k * k;
+    return c * c;
+  }
   var WaterLayer = class {
     constructor(quality) {
       this.q = quality;
@@ -9442,20 +9465,19 @@ ${s}`, "console");
       this.ice = null;
       this.bakeKey = null;
       this.iceKey = null;
-      this._sc = null;
-      this._scx = null;
-      this._mx = null;
-      this._mxx = null;
+      this._fr = null;
+      this._frx = null;
       this._wave = null;
       this._chop = null;
       this._drops = null;
       this._patW = null;
       this._patC = null;
       this._patD = null;
-      this._spans = [];
-      this._nSpans = 0;
+      this._runs = [];
+      this._nRuns = 0;
+      this._area = 0;
+      this._bb = { x0: 0, y0: 0, x1: 0, y1: 0 };
       this.waveDir = [1, 4];
-      this.spriteFor = null;
     }
     setQuality(q) {
       this.q = q;
@@ -9470,10 +9492,8 @@ ${s}`, "console");
       this.ice = null;
       this.bakeKey = null;
       this.iceKey = null;
-      this._sc = null;
-      this._scx = null;
-      this._mx = null;
-      this._mxx = null;
+      this._fr = null;
+      this._frx = null;
       this._patW = null;
       this._patC = null;
       this._patD = null;
@@ -9489,31 +9509,32 @@ ${s}`, "console");
       if (!sim2 || !sim2.world) return;
       this.ensure(sim2);
       if (!this.base) return;
+      if (!this._collectRuns(ox, oy, z, cw, ch)) return;
       const light = L || lightAt(sim2.dayTime);
-      const n = this._collectSpans(ox, oy, z, cw, ch);
-      if (!n) return;
-      const S = this.S;
       const zoom = z / 32;
-      const smoothBlit = zoom >= 1.2;
-      const prevSmooth = ctx.imageSmoothingEnabled;
-      ctx.imageSmoothingEnabled = smoothBlit;
-      this._blit(ctx, this.base, ox, oy, z, S, 1);
       const lod = this.q.lod || {};
-      const animate = zoom >= (lod.waterMinZoom || 0.45) && this.freeze < 0.92;
-      if (animate) this._surface(sim2, ctx, ox, oy, z, light);
-      if (this.q.shoreFoam && zoom >= (lod.foamMinZoom || 0.55) && this.freeze < 0.8) {
-        const k = 0.5 + 0.5 * Math.sin(this.time * 0.85);
-        const amp = (1 - this.freeze) * (0.72 + 0.34 * this.rain);
-        this._blit(ctx, this.foamA, ox, oy, z, S, amp * k);
-        this._blit(ctx, this.foamB, ox, oy, z, S, amp * (1 - k));
+      const bb = this._bb;
+      const S = this.S;
+      const composeArea = (bb.x1 + 1 - bb.x0) * (bb.y1 + 1 - bb.y0) * S * S;
+      const wantAnim = zoom >= (lod.waterMinZoom || 0.45) && this.freeze < 0.92;
+      const wantFoam = !!this.q.shoreFoam && zoom >= (lod.foamMinZoom || 0.55) && this.freeze < 0.8;
+      const wantIce = this.freeze > 0.01 && !!this.ice;
+      const canCompose = composeArea <= COMPOSE_CAP && (wantAnim || wantFoam || wantIce);
+      const prevSmooth = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = this._area <= SMOOTH_CAP;
+      const src = canCompose ? this._compose(sim2, light, wantAnim, wantFoam, wantIce) : null;
+      if (src) {
+        this._blit(ctx, src, ox, oy, z, S, 1, cw, ch, bb.x0 * S, bb.y0 * S);
+      } else {
+        this._blit(ctx, this.base, ox, oy, z, S, 1, cw, ch);
+        if (wantIce) this._blit(ctx, this.ice, ox, oy, z, S, this.freeze, cw, ch);
       }
-      if (this.freeze > 0.01 && this.ice) this._blit(ctx, this.ice, ox, oy, z, S, this.freeze);
       ctx.imageSmoothingEnabled = prevSmooth;
     }
     // Дождь набирается быстро, спадает медленно; лёд — по дню внутри зимы.
     _trackWeather(sim2, dt) {
       if (!sim2) return;
-      const wet = sim2.weather === "rain" ? 1 : 0;
+      const wet = sim2.weather === "rain" || sim2.weather === "storm" ? 1 : 0;
       this.rain = clamp012(this.rain + Math.max(-dt / 6, Math.min(dt / 2, wet - this.rain)));
       let f = 0;
       if (sim2.seasonIdx === 3) {
@@ -9547,8 +9568,8 @@ ${s}`, "console");
         this.bakeKey = key;
         this.ice = null;
         this.iceKey = null;
-        this._sc = null;
-        this._mx = null;
+        this._fr = null;
+        this._frx = null;
       }
       if (this.freeze > 0.01 && this.iceKey !== key) {
         this._bakeIce(sim2);
@@ -9608,7 +9629,7 @@ ${s}`, "console");
       this.gx = gx;
       this.gy = gy;
       this._buildFlow(world);
-      this._buildBlocks(wet);
+      this._buildBlocks();
     }
     // ---- течение ----------------------------------------------------------
     // Река отличается от озера не цветом, а тем, что она УЗКАЯ И ДЛИННАЯ:
@@ -9656,11 +9677,11 @@ ${s}`, "console");
           if (vl < 1e-4) continue;
           vx /= vl;
           vy /= vl;
-          let ox = x + 0.5 - cx, oy = y + 0.5 - cy;
-          const ol = Math.hypot(ox, oy) || 1;
-          ox /= ol;
-          oy /= ol;
-          let dot = vx * ox + vy * oy;
+          let rx = x + 0.5 - cx, ry = y + 0.5 - cy;
+          const rl = Math.hypot(rx, ry) || 1;
+          rx /= rl;
+          ry /= rl;
+          let dot = vx * rx + vy * ry;
           if (Math.abs(dot) < 0.12) dot = vx !== 0 ? vx : vy;
           if (dot < 0) {
             vx = -vx;
@@ -9703,29 +9724,32 @@ ${s}`, "console");
       this.fy = sy;
       this.hasFlow = any;
     }
-    // ---- индекс блоков: где вода вообще есть ------------------------------
-    _buildBlocks(wet) {
-      const W = this.W, H = this.H;
+    // ---- индекс блоков: где модуль вообще что-то рисует --------------------
+    //
+    // Блок помечается не «здесь есть водный тайл», а «здесь есть хоть что-то из
+    // нарисованного этим модулем»: сама вода, полоса мокрого песка на суше и
+    // пена, которая выходит за кромку. Всё это укладывается в sd > -RIM, и
+    // граница берётся из готового поля расстояний — точно, без запаса.
+    //
+    // Раньше здесь было расширение индекса на ЦЕЛЫЙ блок во все стороны, чтобы
+    // прикрыть гуляющую по шуму кромку. При BLK = 8 это раздувало запас до
+    // восьми клеток в каждую сторону: озерцо в четыре клетки заставляло блитить
+    // полосу шириной в двадцать четыре. Замер на кадре с поселением: отрезки
+    // покрывали весь экран (1 440 000 пикселей) при том, что воды в кадре была
+    // пятая часть. Точная граница по sd убирает и расширение, и лишний блит.
+    _buildBlocks() {
+      const W = this.W, H = this.H, sd = this.sd;
+      const RIM = -1.2;
       const bw = Math.ceil(W / BLK), bh = Math.ceil(H / BLK);
       const b = new Uint8Array(bw * bh);
       for (let y = 0; y < H; y++) {
+        const by = (y / BLK | 0) * bw;
         for (let x = 0; x < W; x++) {
-          if (!wet[y * W + x]) continue;
-          b[(y / BLK | 0) * bw + (x / BLK | 0)] = 1;
+          if (sd[y * W + x] < RIM) continue;
+          b[by + (x / BLK | 0)] = 1;
         }
       }
-      const g = new Uint8Array(bw * bh);
-      for (let y = 0; y < bh; y++) {
-        for (let x = 0; x < bw; x++) {
-          if (!b[y * bw + x]) continue;
-          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            const xx = x + dx, yy = y + dy;
-            if (xx < 0 || yy < 0 || xx >= bw || yy >= bh) continue;
-            g[yy * bw + xx] = 1;
-          }
-        }
-      }
-      this.blocks = g;
+      this.blocks = b;
       this.bw = bw;
       this.bh = bh;
     }
@@ -9784,7 +9808,7 @@ ${s}`, "console");
           const wb = this._grid(wob, gw, gh, wx * 2, wy * 2);
           const d = d0 + wb * 0.34;
           if (d < 0) {
-            const k = smooth2(1 + d / 0.42);
+            const k = sstep(1 + d / 0.42);
             if (k > 0.01) {
               pB[o] = wetSand[0];
               pB[o + 1] = wetSand[1];
@@ -9794,8 +9818,8 @@ ${s}`, "console");
             continue;
           }
           const dp = this._sample(this.deepK, wx, wy);
-          const shelf = smooth2(d / 1.15);
-          const abyss = smooth2((d - 1.6) / 3.4) * 0.62 + dp * 0.38;
+          const shelf = sstep(d / 1.15);
+          const abyss = sstep((d - 1.6) / 3.4) * 0.62 + dp * 0.38;
           let r = lerp3(shallow[0], midC[0], shelf);
           let g = lerp3(shallow[1], midC[1], shelf);
           let b = lerp3(shallow[2], midC[2], shelf);
@@ -9813,14 +9837,14 @@ ${s}`, "console");
             const nx = this._sample(this.gx, wx, wy), ny = this._sample(this.gy, wx, wy);
             const face = nx * SUNX + ny * SUNY;
             if (face > 0) {
-              const sh = face * (1 - smooth2(d / 1.6)) * 0.34;
+              const sh = face * (1 - sstep(d / 1.6)) * 0.34;
               r *= 1 - sh;
               g *= 1 - sh;
               b *= 1 - sh * 0.86;
             }
           }
           const edge = clamp012(d / (0.9 * inv + 1e-3));
-          const alpha = (0.6 + 0.4 * smooth2(d / 1)) * Math.min(1, edge);
+          const alpha = (0.6 + 0.4 * sstep(d / 1)) * Math.min(1, edge);
           pB[o] = r;
           pB[o + 1] = g;
           pB[o + 2] = b;
@@ -9870,7 +9894,6 @@ ${s}`, "console");
       const c = cv.getContext("2d");
       const img = c.createImageData(mw, mh);
       const p = img.data;
-      const gw = W * 2 + 1, gh = H * 2 + 1;
       const inv = 1 / S;
       const rnd = makeRnd2(this.seed ^ 462);
       for (let py = 0; py < mh; py++) {
@@ -9882,7 +9905,7 @@ ${s}`, "console");
           const o = (py * mw + px) * 4;
           const n = fbm2(wx * 1.3 + 300, wy * 1.3 + 300);
           const open = clamp012((d - 3.2) / 3) * clamp012((n - 0.42) * 4.5);
-          const near = 1 - smooth2((d - 0.3) / 4);
+          const near = 1 - sstep((d - 0.3) / 4);
           const r = lerp3(176, 226, near), g = lerp3(200, 238, near), b = lerp3(216, 246, near);
           const a = (0.86 - open * 0.8) * Math.min(1, d / (0.7 * inv + 1e-3));
           if (a <= 0.01) continue;
@@ -9925,56 +9948,94 @@ ${s}`, "console");
     // =========================================================================
     // КАДР
     // =========================================================================
-    // Полосы блоков с водой в видимом прямоугольнике. Одна полоса на ряд
-    // блоков — это максимум 12 блитов на слой вместо 144 и без единого
-    // полноэкранного прохода там, где воды нет.
-    _collectSpans(ox, oy, z, cw, ch) {
+    // Горизонтальные отрезки блоков с водой внутри видимого прямоугольника.
+    // Разрывы в один блок склеиваются: лишний drawImage дороже, чем лишние
+    // восемь прозрачных клеток. Заодно копится площадь блита в экранных
+    // пикселях — по ней решается, потянем ли мы сглаживание.
+    _collectRuns(ox, oy, z, cw, ch) {
       const W = this.W, H = this.H;
       const tx0 = Math.max(0, Math.floor(-ox / z) - 1);
       const tx1 = Math.min(W - 1, Math.ceil((cw - ox) / z) + 1);
       const ty0 = Math.max(0, Math.floor(-oy / z) - 1);
       const ty1 = Math.min(H - 1, Math.ceil((ch - oy) / z) + 1);
-      this._nSpans = 0;
+      this._nRuns = 0;
+      this._area = 0;
       if (tx1 < tx0 || ty1 < ty0) return 0;
       const b0x = tx0 / BLK | 0, b1x = tx1 / BLK | 0;
       const b0y = ty0 / BLK | 0, b1y = ty1 / BLK | 0;
       let n = 0;
+      let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
       for (let by = b0y; by <= b1y; by++) {
+        const row = by * this.bw;
         let lo = -1, hi = -1;
-        for (let bx = b0x; bx <= b1x; bx++) {
-          if (!this.blocks[by * this.bw + bx]) continue;
-          if (lo < 0) lo = bx;
-          hi = bx;
+        for (let bx = b0x; bx <= b1x + 1; bx++) {
+          const wetHere = bx <= b1x && this.blocks[row + bx];
+          if (wetHere) {
+            if (lo < 0) lo = bx;
+            hi = bx;
+            continue;
+          }
+          if (lo >= 0 && bx < b1x && bx - hi <= 1 && this.blocks[row + bx + 1]) continue;
+          if (lo < 0) continue;
+          const r = this._runs[n] || (this._runs[n] = { x0: 0, y0: 0, x1: 0, y1: 0 });
+          r.x0 = Math.max(tx0, lo * BLK);
+          r.x1 = Math.min(tx1, (hi + 1) * BLK - 1);
+          r.y0 = Math.max(ty0, by * BLK);
+          r.y1 = Math.min(ty1, (by + 1) * BLK - 1);
+          if (r.x0 < mnx) mnx = r.x0;
+          if (r.y0 < mny) mny = r.y0;
+          if (r.x1 > mxx) mxx = r.x1;
+          if (r.y1 > mxy) mxy = r.y1;
+          const cx0 = Math.max(r.x0, -ox / z), cx1 = Math.min(r.x1 + 1, (cw - ox) / z);
+          const cy0 = Math.max(r.y0, -oy / z), cy1 = Math.min(r.y1 + 1, (ch - oy) / z);
+          if (cx1 > cx0 && cy1 > cy0) this._area += (cx1 - cx0) * z * (cy1 - cy0) * z;
+          n++;
+          lo = -1;
+          hi = -1;
         }
-        if (lo < 0) continue;
-        const s = this._spans[n] || (this._spans[n] = { x0: 0, y0: 0, x1: 0, y1: 0 });
-        s.x0 = Math.max(tx0, lo * BLK);
-        s.x1 = Math.min(tx1, (hi + 1) * BLK - 1);
-        s.y0 = Math.max(ty0, by * BLK);
-        s.y1 = Math.min(ty1, (by + 1) * BLK - 1);
-        n++;
       }
-      this._nSpans = n;
+      this._nRuns = n;
+      if (!n) return 0;
+      this._bb.x0 = mnx;
+      this._bb.y0 = mny;
+      this._bb.x1 = mxx;
+      this._bb.y1 = mxy;
       return n;
     }
-    // Блит полос из карты воды на экран. Границы округляются к целым: соседние
-    // полосы делят один и тот же край, поэтому между ними нет ни щели, ни
-    // двойного наложения полупрозрачной воды.
-    _blit(ctx, src, ox, oy, z, S, alpha) {
+    // Блит отрезков из карты воды на экран.
+    //
+    // Отрезки специально захватывают тайл запаса вокруг экрана — кромка гуляет по
+    // шуму и без запаса у края кадра появлялась бы обрезанная полоса. Но платить
+    // за этот запас пикселями нельзя: при зуме 3 один тайл — это 96 px, и запас
+    // раздувает площадь блита на треть. Поэтому источник и назначение
+    // обрезаются по краю холста: наружу не выводится ни одного пикселя.
+    //
+    // Границы округляются к целым: соседние отрезки делят один и тот же край,
+    // поэтому между ними нет ни щели, ни двойного наложения полупрозрачной воды.
+    // sox/soy — начало источника в пикселях выпечки. Для карты воды (base, ice)
+    // это ноль, для буфера сборки — левый верхний угол собранной области.
+    _blit(ctx, src, ox, oy, z, S, alpha, cw, ch, sox = 0, soy = 0) {
       if (!src || alpha <= 4e-3) return;
       const prev = ctx.globalAlpha;
       ctx.globalAlpha = prev * Math.min(1, alpha);
-      for (let i = 0; i < this._nSpans; i++) {
-        const s = this._spans[i];
-        const dx = Math.round(ox + s.x0 * z), dx2 = Math.round(ox + (s.x1 + 1) * z);
-        const dy = Math.round(oy + s.y0 * z), dy2 = Math.round(oy + (s.y1 + 1) * z);
+      for (let i = 0; i < this._nRuns; i++) {
+        const r = this._runs[i];
+        let t0x = r.x0, t1x = r.x1 + 1, t0y = r.y0, t1y = r.y1 + 1;
+        const vx0 = -ox / z, vx1 = (cw - ox) / z, vy0 = -oy / z, vy1 = (ch - oy) / z;
+        if (t0x < vx0) t0x = vx0;
+        if (t1x > vx1) t1x = vx1;
+        if (t0y < vy0) t0y = vy0;
+        if (t1y > vy1) t1y = vy1;
+        if (t1x <= t0x || t1y <= t0y) continue;
+        const dx = Math.round(ox + t0x * z), dx2 = Math.round(ox + t1x * z);
+        const dy = Math.round(oy + t0y * z), dy2 = Math.round(oy + t1y * z);
         if (dx2 <= dx || dy2 <= dy) continue;
         ctx.drawImage(
           src,
-          s.x0 * S,
-          s.y0 * S,
-          (s.x1 + 1 - s.x0) * S,
-          (s.y1 + 1 - s.y0) * S,
+          t0x * S - sox,
+          t0y * S - soy,
+          (t1x - t0x) * S,
+          (t1y - t0y) * S,
           dx,
           dy,
           dx2 - dx,
@@ -9983,140 +10044,142 @@ ${s}`, "console");
       }
       ctx.globalAlpha = prev;
     }
-    // ---- поверхность: небо, гребни, дождь, отражения, течение -------------
-    _surface(sim2, ctx, ox, oy, z, L) {
-      const S = this.S;
-      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-      for (let i = 0; i < this._nSpans; i++) {
-        const s2 = this._spans[i];
-        if (s2.x0 < x0) x0 = s2.x0;
-        if (s2.y0 < y0) y0 = s2.y0;
-        if (s2.x1 > x1) x1 = s2.x1;
-        if (s2.y1 > y1) y1 = s2.y1;
-      }
-      const rx = x0 * S, ry = y0 * S, rw = (x1 + 1 - x0) * S, rh = (y1 + 1 - y0) * S;
-      if (rw <= 0 || rh <= 0) return;
-      if (rw * rh > SURF_CAP) return;
-      const sc = this._scratch();
-      if (!sc) return;
-      const s = this._scx;
-      s.save();
-      s.beginPath();
-      s.rect(rx, ry, rw, rh);
-      s.clip();
-      s.clearRect(rx, ry, rw, rh);
-      const night = clamp012((1 - L.mul) / 0.58);
-      const sky = hex2rgb(L.sky);
-      s.globalCompositeOperation = "source-over";
-      s.globalAlpha = 0.3 + 0.16 * (1 - night);
-      s.fillStyle = `rgb(${sky[0] | 0},${sky[1] | 0},${sky[2] | 0})`;
-      s.fillRect(rx, ry, rw, rh);
-      this._reflections(sim2, s, rx, ry, rw, rh, L);
-      this._crests(s, rx, ry, rw, rh, L, night);
-      if (this.hasFlow) this._flowDashes(s, x0, y0, x1, y1, L);
-      s.globalCompositeOperation = "destination-in";
-      s.globalAlpha = 1;
-      s.drawImage(this.base, rx, ry, rw, rh, rx, ry, rw, rh);
-      s.restore();
-      this._blit(ctx, sc, ox, oy, z, S, 1);
-    }
-    _crests(s, rx, ry, rw, rh, L, night) {
-      const m = this._mixer();
-      if (!m) return;
-      const mc = this._mxx;
-      const t = this.time;
-      const [ax, ay] = this.waveDir;
-      const al = Math.hypot(ax, ay) || 1;
-      const S = this.S;
-      mc.save();
-      mc.beginPath();
-      mc.rect(rx, ry, rw, rh);
-      mc.clip();
-      mc.clearRect(rx, ry, rw, rh);
-      this._pattern(
-        mc,
-        this._patW || (this._patW = mc.createPattern(this._waveTex(), "repeat")),
-        rx,
-        ry,
-        rw,
-        rh,
-        -ax / al * t * S * 0.34,
-        -ay / al * t * S * 0.34,
-        "source-over",
-        1
-      );
-      this._pattern(
-        mc,
-        this._patC || (this._patC = mc.createPattern(this._chopTex(), "repeat")),
-        rx,
-        ry,
-        rw,
-        rh,
-        -ay / al * t * S * 0.62,
-        ax / al * t * S * 0.62,
-        "lighter",
-        1
-      );
-      if (this.rain > 0.02) {
+    // ---- сборка всех слоёв в буфере выпечки --------------------------------
+    //
+    // Здесь и живёт вся экономия. Каждый проход идёт по прямоугольнику в
+    // разрешении выпечки — при S = 6 это в 28 раз меньше пикселей, чем на экране
+    // при зуме 1, поэтому восемь проходов стоят меньше, чем один лишний блит.
+    //
+    // ПОЧЕМУ ЗДЕСЬ 'source-over', А НЕ 'source-atop'. Напрашивается решение
+    // «рисовать каждый слой через source-atop, тогда маска воды получится сама
+    // собой». Оно работает и стоит вчетверо дороже. Замер на том же стенде
+    // (область 480×300, сброс конвейера ПО САМОМУ буферу — без него команды в
+    // offscreen просто не растеризуются и замер врёт нулём):
+    //
+    //   заливка паттерном 'source-over' ..... 0,7 нс/пиксель
+    //   заливка паттерном 'source-atop' ..... 6,9 нс/пиксель   ← в десять раз
+    //   заливка паттерном 'lighter' ......... 6,9 нс/пиксель
+    //   drawImage 'destination-in' .......... 2,8 нс/пиксель
+    //   вся сборка на source-atop ........... 22,9 нс/пиксель
+    //   вся сборка на source-over + одна destination-in ... 5,6 нс/пиксель
+    //
+    // Паттерн с нетривиальной операцией композита сваливается с быстрого пути
+    // растеризатора. Поэтому все слои кладутся обычным 'source-over', а маска
+    // воды применяется ОДИН раз в конце: 'destination-in' альфой того же base
+    // обрезает всё лишнее ровно по кромке. Результат тот же — цена вчетверо ниже.
+    //
+    // Пена и лёд идут ПОСЛЕ маски: пена обязана выходить на мокрый песок за
+    // кромку воды, а лёд — накрывать воду целиком.
+    _compose(sim2, L, wantAnim, wantFoam, wantIce) {
+      const S = this.S, bb = this._bb;
+      const rx = bb.x0 * S, ry = bb.y0 * S;
+      const rw = (bb.x1 + 1 - bb.x0) * S, rh = (bb.y1 + 1 - bb.y0) * S;
+      const cv = this._frame(rw, rh);
+      if (!cv) return null;
+      const c = this._frx;
+      c.setTransform(1, 0, 0, 1, -rx, -ry);
+      c.globalCompositeOperation = "copy";
+      c.globalAlpha = 1;
+      c.drawImage(this.base, rx, ry, rw, rh, rx, ry, rw, rh);
+      c.globalCompositeOperation = "source-over";
+      if (wantAnim) {
+        const night = clamp012((1 - L.mul) / 0.58);
+        const sky = hex2rgb(L.sky);
+        c.globalAlpha = 0.26 + 0.14 * (1 - night);
+        c.fillStyle = `rgb(${sky[0] | 0},${sky[1] | 0},${sky[2] | 0})`;
+        c.fillRect(rx, ry, rw, rh);
+        this._reflections(sim2, c, rx, ry, rw, rh, L);
+        const t = this.time;
+        const [ax, ay] = this.waveDir;
+        const al = Math.hypot(ax, ay) || 1;
+        const lit = (0.55 + 0.45 * L.mul) * (1 - this.freeze);
         this._pattern(
-          mc,
-          this._patD || (this._patD = mc.createPattern(this._dropTex(), "repeat")),
+          c,
+          this._patW || (this._patW = c.createPattern(this._waveTex(), "repeat")),
           rx,
           ry,
           rw,
           rh,
-          t * 13 % 64,
-          t * 7 % 64,
-          "lighter",
-          this.rain * 0.85
+          -ax / al * t * S * 0.34,
+          -ay / al * t * S * 0.34,
+          (0.78 - 0.24 * this.rain) * lit
         );
+        if (this.q.detail >= 1) {
+          this._pattern(
+            c,
+            this._patC || (this._patC = c.createPattern(this._chopTex(), "repeat")),
+            rx,
+            ry,
+            rw,
+            rh,
+            -ay / al * t * S * 0.62,
+            ax / al * t * S * 0.62,
+            0.7 * lit
+          );
+        }
+        if (this.rain > 0.02) {
+          this._pattern(
+            c,
+            this._patD || (this._patD = c.createPattern(this._dropTex(), "repeat")),
+            rx,
+            ry,
+            rw,
+            rh,
+            t * 13 % WAVE_TEX,
+            t * 7 % WAVE_TEX,
+            this.rain * 0.8 * lit
+          );
+        }
+        if (this.hasFlow) this._flowDashes(c, bb, L);
+        c.globalCompositeOperation = "destination-in";
+        c.globalAlpha = 1;
+        c.drawImage(this.base, rx, ry, rw, rh, rx, ry, rw, rh);
+        c.globalCompositeOperation = "source-over";
       }
-      const warm = clamp012(L.tint[0] - L.tint[2]) > 0 ? L.tint : null;
-      let cr = 244, cg = 250, cb = 255;
-      if (warm && warm[3] > 0.05 && night < 0.6) {
-        cr = lerp3(244, warm[0], 0.55);
-        cg = lerp3(250, warm[1], 0.5);
-        cb = lerp3(255, warm[2], 0.45);
-      } else if (night > 0.4) {
-        cr = 168;
-        cg = 196;
-        cb = 236;
+      if (wantFoam) {
+        const k = 0.5 + 0.5 * Math.sin(this.time * 0.85);
+        const amp = (1 - this.freeze) * (0.72 + 0.34 * this.rain);
+        const aA = amp * k, aB = amp * (1 - k);
+        if (aA > 0.06) {
+          c.globalAlpha = Math.min(1, aA);
+          c.drawImage(this.foamA, rx, ry, rw, rh, rx, ry, rw, rh);
+        }
+        if (aB > 0.06) {
+          c.globalAlpha = Math.min(1, aB);
+          c.drawImage(this.foamB, rx, ry, rw, rh, rx, ry, rw, rh);
+        }
       }
-      mc.globalCompositeOperation = "source-in";
-      mc.globalAlpha = 1;
-      mc.fillStyle = `rgb(${cr | 0},${cg | 0},${cb | 0})`;
-      mc.fillRect(rx, ry, rw, rh);
-      mc.restore();
-      s.globalCompositeOperation = "lighter";
-      s.globalAlpha = (0.62 - 0.2 * this.rain) * (1 - this.freeze) * (0.55 + 0.45 * L.mul);
-      s.drawImage(m, rx, ry, rw, rh, rx, ry, rw, rh);
-      s.globalCompositeOperation = "source-over";
-      s.globalAlpha = 1;
+      if (wantIce) {
+        c.globalAlpha = Math.min(1, this.freeze);
+        c.drawImage(this.ice, rx, ry, rw, rh, rx, ry, rw, rh);
+      }
+      c.globalAlpha = 1;
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      return cv;
     }
-    _pattern(c, pat, rx, ry, rw, rh, offx, offy, op, alpha) {
-      if (!pat) return;
+    // Заливка паттерном со смещением. Паттерн привязан к координатам буфера, то
+    // есть к миру: волна не «плывёт» при панораме и не дёргается при зуме.
+    _pattern(c, pat, rx, ry, rw, rh, offx, offy, alpha) {
+      if (!pat || alpha <= 4e-3) return;
       const N = WAVE_TEX;
-      const dx = (offx % N + N) % N, dy = (offy % N + N) % N;
-      c.save();
-      c.globalCompositeOperation = op;
-      c.globalAlpha = alpha;
+      const dx = (Math.round(offx) % N + N) % N, dy = (Math.round(offy) % N + N) % N;
+      c.globalAlpha = Math.min(1, alpha);
       c.translate(dx, dy);
       c.fillStyle = pat;
       c.fillRect(rx - dx, ry - dy, rw, rh);
-      c.restore();
+      c.translate(-dx, -dy);
     }
     // Отражение построек: перевёрнутое, вдвое сплющенное, разрезанное на
     // горизонтальные ломти, которые слегка расходятся по времени — вода
     // качается. Отражается только то, у чего вода СНИЗУ: здание рисуется
     // стоящим, и отражение может идти лишь вниз по экрану.
-    _reflections(sim2, s, rx, ry, rw, rh, L) {
+    _reflections(sim2, c, rx, ry, rw, rh, L) {
       const S = this.S;
       const buildings = sim2.buildings;
       if (!buildings || !buildings.length) return;
       const x0 = rx / S, y0 = ry / S, x1 = (rx + rw) / S, y1 = (ry + rh) / S;
       let drawn = 0;
       const cap = this.q.detail >= 2 ? 14 : 8;
-      s.globalCompositeOperation = "source-over";
       for (let i = 0; i < buildings.length && drawn < cap; i++) {
         const b = buildings[i];
         if (b.destroyed || !b.done) continue;
@@ -10135,35 +10198,35 @@ ${s}`, "console");
           const t0 = k / 3, t1 = (k + 1) / 3;
           const sy = py + h * t0 * 0.5, sh = h * (t1 - t0) * 0.5;
           const shift = Math.sin(this.time * 1.6 + k * 1.7 + b.y) * S * 0.12 + wob * S * 0.06;
-          s.globalAlpha = 0.26 * (1 - t0 * 0.55);
-          s.fillStyle = cols[k];
-          s.fillRect(px + shift, sy, w, sh + 0.6);
+          c.globalAlpha = 0.26 * (1 - t0 * 0.55);
+          c.fillStyle = cols[k];
+          c.fillRect(px + shift, sy, w, sh + 0.6);
         }
         if (L.glow > 0.12) {
-          s.globalAlpha = 0.34 * L.glow;
-          s.fillStyle = pal.glow;
-          s.fillRect(px + w * 0.3 + wob * S * 0.1, py, w * 0.4, h * 0.55);
+          c.globalAlpha = 0.34 * L.glow;
+          c.fillStyle = pal.glow;
+          c.fillRect(px + w * 0.3 + wob * S * 0.1, py, w * 0.4, h * 0.55);
         }
       }
-      s.globalAlpha = 1;
+      c.globalAlpha = 1;
     }
     // Штрихи течения: короткие светлые чёрточки, сносимые вдоль русла. Все
     // рисуются одним путём на три уровня прозрачности — три вызова stroke
     // на всю реку, а не по вызову на клетку.
-    _flowDashes(s, tx0, ty0, tx1, ty1, L) {
+    _flowDashes(c, bb, L) {
       const S = this.S, W = this.W;
       const fx = this.fx, fy = this.fy;
       const t = this.time;
       const lvl = [[0.3, 0.34], [0.65, 0.5], [1, 0.28]];
-      s.lineCap = "round";
-      s.lineWidth = Math.max(1, S * 0.16);
-      s.globalCompositeOperation = "lighter";
+      c.lineCap = "round";
+      c.lineWidth = Math.max(1, S * 0.16);
+      c.globalAlpha = 1;
       for (let l = 0; l < 3; l++) {
-        s.strokeStyle = `rgba(226,242,255,${lvl[l][1] * (0.4 + 0.6 * L.mul)})`;
-        s.beginPath();
+        c.strokeStyle = `rgba(226,242,255,${lvl[l][1] * (0.4 + 0.6 * L.mul)})`;
+        c.beginPath();
         let any = false;
-        for (let y = ty0; y <= ty1; y++) {
-          for (let x = tx0; x <= tx1; x++) {
+        for (let y = bb.y0; y <= bb.y1; y++) {
+          for (let x = bb.x0; x <= bb.x1; x++) {
             const i = y * W + x;
             const vx = fx[i], vy = fy[i];
             const m = Math.hypot(vx, vy);
@@ -10175,36 +10238,30 @@ ${s}`, "console");
             const cx = (x + 0.5 + (ph - 0.5) * 1.5 * ux) * S;
             const cy = (y + 0.5 + (ph - 0.5) * 1.5 * uy) * S;
             const len = S * (0.22 + m * 0.3);
-            s.moveTo(cx - ux * len, cy - uy * len);
-            s.lineTo(cx + ux * len, cy + uy * len);
+            c.moveTo(cx - ux * len, cy - uy * len);
+            c.lineTo(cx + ux * len, cy + uy * len);
             any = true;
           }
         }
-        if (any) s.stroke();
+        if (any) c.stroke();
       }
-      s.globalCompositeOperation = "source-over";
     }
     // =========================================================================
     // ТЕКСТУРЫ И ХОЛСТЫ
     // =========================================================================
-    _scratch() {
-      if (this._sc) return this._sc;
-      if (typeof document === "undefined" || !this.W) return null;
+    // Буфер сборки. Размер округляется вверх до кратного QUANT: при плавном зуме
+    // область меняется каждый кадр, а пересоздавать холст каждый кадр дороже, чем
+    // терпеть несколько лишних строк пикселей.
+    _frame(rw, rh) {
+      if (typeof document === "undefined" || rw <= 0 || rh <= 0) return null;
+      const QUANT = 32;
+      const w = Math.ceil(rw / QUANT) * QUANT, h = Math.ceil(rh / QUANT) * QUANT;
+      if (this._fr && this._fr.width === w && this._fr.height === h) return this._fr;
       const cv = document.createElement("canvas");
-      cv.width = this.W * this.S;
-      cv.height = this.H * this.S;
-      this._sc = cv;
-      this._scx = cv.getContext("2d");
-      return cv;
-    }
-    _mixer() {
-      if (this._mx) return this._mx;
-      if (typeof document === "undefined" || !this.W) return null;
-      const cv = document.createElement("canvas");
-      cv.width = this.W * this.S;
-      cv.height = this.H * this.S;
-      this._mx = cv;
-      this._mxx = cv.getContext("2d");
+      cv.width = w;
+      cv.height = h;
+      this._fr = cv;
+      this._frx = cv.getContext("2d");
       return cv;
     }
     // Плитка длинной зыби. Гребни — линии постоянной фазы a·x + b·y, где a и b
@@ -10308,7 +10365,8 @@ ${s}`, "console");
       const fx = u - xi, fy = v - yi;
       const a = field[yi * W + xi], b = field[yi * W + xj];
       const c = field[yj * W + xi], d = field[yj * W + xj];
-      return a + (b - a) * fx + (c + (d - c) * fx - (a + (b - a) * fx)) * fy;
+      const top = a + (b - a) * fx, bot = c + (d - c) * fx;
+      return top + (bot - top) * fy;
     }
     _grid(g, gw, gh, u, v) {
       if (u < 0) u = 0;
@@ -10324,12 +10382,6 @@ ${s}`, "console");
       return t + (bt - t) * fy;
     }
   };
-  function foamBand(d, center, width) {
-    const k = Math.abs(d - center) / width;
-    if (k >= 1) return 0;
-    const v = 1 - k;
-    return v * v * (3 - 2 * v);
-  }
 
   // app/src/render/vegetation.js
   var TILE_PX = 32;
@@ -11556,6 +11608,1411 @@ ${s}`, "console");
     }
   };
 
+  // app/src/render/relief.js
+  var RELIEF_SUBRES = { eco: 2, medium: 4, high: 6, ultra: 8 };
+  var RELIEF_MAX_SIDE = 1024;
+  var RELIEF_BUDGET = { first: 6, rebake: 2.5 };
+  var TUNE = {
+    // Вертикальное преувеличение. Рельеф в масштабе 1 клетка = 8 метров при
+    // взгляде сверху не читался бы вовсе: перепад в 200 м на 20 клетках — это
+    // наклон в 8°. Карты рисуют с преувеличением, и это честный приём.
+    exagg: 2.9,
+    // Ключевой свет — сверху-слева под 45°, канон проекта (art-direction §5.1,
+    // terrain.buildHeight считает ровно оттуда). Нарушать нельзя: спрайты
+    // зданий и тени жителей подсвечены отсюда же.
+    sun: [-0.62, -0.62, 0.48],
+    // ЮЖНАЯ ЭКСПОЗИЦИЯ И ЧЕСТНЫЙ КОМПРОМИСС.
+    // Требование «южные склоны светлее, северные в тени» и канон «свет сверху-
+    // слева» противоречат друг другу буквально: свет с северо-запада освещает
+    // как раз СЕВЕРНЫЕ склоны. Ломать канон нельзя — все испечённые спрайты,
+    // тени зданий и hillshade terrain.js подсвечены с северо-запада, и один
+    // модуль, светящий с юга, рассыпал бы кадр.
+    // Поэтому экспозиция сделана тем, чем она является в природе: не вторым
+    // солнцем, а разницей ТЕПЛА. Южный склон получает свет под прямым углом —
+    // он суше, светлее, снег с него сходит первым, тень на нём тёплая. Северный
+    // склон холодный, синеватый, снег держится ниже. Читается это ровно как
+    // «южный светлее, северный в тени», при этом форма остаётся согласованной
+    // со всей остальной графикой.
+    // Кому нужен буквальный свет с юга — достаточно поменять sun на
+    // [-0.62, 0.62, 0.48]; ценой рассогласования с тенями зданий.
+    aspect: 0.2,
+    // вклад в яркость
+    aspectSnow: 0.09,
+    // насколько ниже держится снег на северном склоне
+    // Ламберт ослаблен вдвое НЕ по вкусу: terrain.js уже кладёт в испечённый
+    // чанк свой поклеточный hillshade. Складывать два одинаковых света в полную
+    // силу — значит выбить светлые места в белое, а тени в грязь. Наш вклад —
+    // непрерывность (без ступенек) и крупная форма, а не удвоение контраста.
+    micro: 0.62,
+    // Крупная форма: высота минус сильно размытая высота. Ровно этого у
+    // terrain.js нет вообще — там свет чисто локальный, поэтому массив гор
+    // выглядит плоским, как бы ни были подсвечены отдельные клетки.
+    //
+    // ВВЕРХ И ВНИЗ ПО-РАЗНОМУ, И ЭТО НЕ КАПРИЗ. Симметричный слой в полную силу
+    // просто заливает весь массив ровным светлым пятном: плато выше округи
+    // целиком, значит целиком и светлее — это не форма, это подложка другого
+    // цвета (проверено, массив выбеливался до потолка яркости). Работает же
+    // обратная половина: лощины и подножия темнее округи. Поэтому вниз слой
+    // сильнее, чем вверх, — по сути мягкое затенение впадин.
+    macroUp: 0.34,
+    macroDown: 0.58,
+    // Уступ: перегиб рельефа. Выпуклый перегиб (бровка) ловит свет, вогнутый
+    // (подошва) уходит в тень. Это то, что превращает склон в СТУПЕНЬ.
+    // Кривизна считается на широком шаблоне (полклетки), иначе её целиком
+    // забивает мелкий шум фактуры — см. paintRow.
+    //
+    // Коэффициент применяется к НОРМИРОВАННОЙ кривизне (единица = 90-й процентиль
+    // по этой карте), а не к сырой. Сырая кривизна на здешнем рельефе имеет
+    // порядок 0,05–0,11, и подобранный «на глаз» множитель 0,13 давал сдвиг
+    // света в 0,01 — то есть уступов не было вовсе, при том что код для них
+    // исправно работал. Это ровно та ошибка, которую не видно в коде и видно в
+    // счётчиках stats().pct.
+    ledgeN: 0.17,
+    screeCurv: 0.5,
+    // тоже по нормированной кривизне
+    lapMin: 8e-3,
+    lapMax: 0.5,
+    lapQ: 0.9,
+    // Крутизна обрыва берётся КВАНТИЛЕМ по конкретной карте, а не константой —
+    // см. buildField. Здесь только рамки, за которые квантиль не пускают:
+    // на карте из одних дюн обрывов быть не должно, на карте из одних гор
+    // обрывом не может оказаться вся суша.
+    // Рамки нарочно широкие: решать должен квантиль, а не они. Первая версия
+    // зажимала нижнюю рамку на 0,15, и на карте worldgen2, где САМЫЙ крутой
+    // склон равен 0,183, порог оказывался выше почти всего рельефа: обрывы
+    // достались 0,4 % подпикселей, пласты и осыпь — нулю. Проверяется счётчиками
+    // stats().pct, ради этого они и заведены.
+    cliffMin: 0.05,
+    cliffMax: 0.3,
+    cliffFull: 0.6,
+    cliffQ: 0.88,
+    cliffQFull: 0.995,
+    // Потолки прозрачности. Земля не имеет права стать самым тёмным или самым
+    // ярким объектом кадра (art-direction §1.2).
+    maxShadow: 0.44,
+    maxLight: 0.18,
+    // Цвета. Тень не чёрная, а холодная синевато-серая — её заполняет небо
+    // (art-direction §5.2/§5.4). Свет тёплый. Тень северного склона холоднее
+    // тени южного — см. комментарий про экспозицию выше.
+    shadowRGB: [26, 34, 52],
+    shadowWarm: [26, 14, -18],
+    // сдвиг тени на южном склоне
+    shadowCool: [-6, -2, 12],
+    // сдвиг тени на северном склоне
+    lightRGB: [255, 246, 220],
+    rockRGB: [122, 116, 108],
+    // голая порода на обрыве
+    screeRGB: [146, 138, 124],
+    // осыпь
+    snowRGB: [232, 239, 248],
+    isoRGB: [46, 40, 32],
+    // тушь изогипс
+    // Изогипсы: шаг по нормированной высоте и ширина линии в клетках.
+    isoStep: 1 / 22,
+    isoWidth: 0.085,
+    isoIndex: 5
+  };
+  var ISO_MAX_PX = 23;
+  var ISO_FULL_PX = 13;
+  var clamp3 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var sstep2 = (a, b, x) => {
+    const t = (x - a) / (b - a);
+    return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
+  };
+  function makeRnd4(seed) {
+    let s = seed | 0 || 2654435769;
+    return () => {
+      s ^= s << 13;
+      s |= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      s |= 0;
+      return (s >>> 0) / 4294967296;
+    };
+  }
+  var NT_SIZE = 128;
+  var NT_MASK = 127;
+  function makeNoiseTex(rnd) {
+    const g = new Float32Array(NT_SIZE * NT_SIZE);
+    for (let i = 0; i < g.length; i++) g[i] = rnd();
+    return g;
+  }
+  function ntAt(g, x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const fx = x - xi, fy = y - yi;
+    const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+    const x0 = xi & NT_MASK, x1 = xi + 1 & NT_MASK;
+    const y0 = (yi & NT_MASK) * NT_SIZE, y1 = (yi + 1 & NT_MASK) * NT_SIZE;
+    const a = g[y0 + x0], b = g[y0 + x1], c = g[y1 + x0], d = g[y1 + x1];
+    const t = a + (b - a) * sx, u = c + (d - c) * sx;
+    return t + (u - t) * sy;
+  }
+  function rankOf(t) {
+    if (t === TILE.DEEP) return 0;
+    if (t === TILE.WATER) return 1;
+    if (t === TILE.SAND) return 2;
+    if (t === TILE.HILL) return 4;
+    if (t === TILE.MOUNTAIN) return 5;
+    return 3;
+  }
+  var ReliefLayer = class _ReliefLayer {
+    constructor(quality, opts = {}) {
+      this.q = quality;
+      this.opts = opts;
+      this.enabled = opts.enabled !== false;
+      this.seed = null;
+      this.season = -1;
+      this.w = 0;
+      this.h = 0;
+      this.S = 0;
+      this.SW = 0;
+      this.SH = 0;
+      this.H = null;
+      this.Hlow = null;
+      this.tileH = null;
+      this.landK = null;
+      this.snowH = null;
+      this.nt = null;
+      this.Hrows = 0;
+      this.rowTmp = null;
+      this.bs = null;
+      this.cliff0 = 0;
+      this.cliff1 = 1;
+      this.lapScale = 0.05;
+      this.base = null;
+      this.lite = null;
+      this.iso = null;
+      this.job = null;
+      this.buildMs = 0;
+      this.count = { cliff: 0, strata: 0, scree: 0, snow: 0, shadow: 0, light: 0 };
+      this.drawn = 0;
+    }
+    setQuality(q) {
+      if (this.q === q) return;
+      this.q = q;
+      this.dropMaps();
+      this.H = null;
+      this.seed = null;
+      this.Hrows = 0;
+      this.rowTmp = null;
+    }
+    // Полный сброс (смена мира, ручная инвалидация).
+    invalidate() {
+      this.dropMaps();
+      this.H = null;
+      this.seed = null;
+      this.season = -1;
+      this.Hrows = 0;
+      this.rowTmp = null;
+    }
+    dropMaps() {
+      this.base = null;
+      this.lite = null;
+      this.iso = null;
+      this.job = null;
+      this.season = -1;
+    }
+    // Модуль молчит целиком: на пресетах, где рельефное освещение выключено
+    // (кроме eco — там у него свой упрощённый путь), и в среде без DOM.
+    get off() {
+      if (!this.enabled) return true;
+      if (typeof document === "undefined") return true;
+      return !this.q.relief && this.q.id !== "eco";
+    }
+    // eco: только крупная форма и снег, одна карта, один блит.
+    get simple() {
+      return this.q.id === "eco";
+    }
+    // =========================================================================
+    // ПОЛЕ ВЫСОТ
+    // =========================================================================
+    // Высота по клеткам. Два источника, и оба нужны.
+    //
+    // world.elev (worldgen2) — настоящее поле высот: материковые пятна, гребневой
+    // шум, шельф. Но уровень моря в мире не записан: generateWorld2 режет сушу
+    // КВАНТИЛЕМ и число никуда не сохраняет. Восстанавливаем его по границе
+    // «самая высокая вода / самая низкая суша» — это ровно тот порог, по которому
+    // тайлы и резались.
+    //
+    // Тип клетки — второй источник, и он обязателен даже при живом elev. Тайлы в
+    // worldgen2 назначаются не по высоте, а по «горности» (гребень + высота),
+    // поэтому клетка MOUNTAIN может сидеть на умеренной отметке. Если рисовать
+    // рельеф строго по elev, гора окажется нарисована горой, но освещена как
+    // равнина — картинка развалится на два несогласных слоя.
+    buildTileHeight(world) {
+      const w = world.w, h = world.h, N = w * h;
+      const t = world.tiles;
+      const Ht = new Float32Array(N);
+      const elev = world.elev && world.elev.length === N ? world.elev : null;
+      let sea = 0, span = 1;
+      if (elev) {
+        let wetMax = -Infinity, dryMin = Infinity, dryMax = -Infinity;
+        for (let i = 0; i < N; i++) {
+          const e = elev[i];
+          if (t[i] === TILE.DEEP || t[i] === TILE.WATER) {
+            if (e > wetMax) wetMax = e;
+          } else {
+            if (e < dryMin) dryMin = e;
+            if (e > dryMax) dryMax = e;
+          }
+        }
+        if (!isFinite(wetMax)) wetMax = isFinite(dryMin) ? dryMin : 0;
+        if (!isFinite(dryMin)) {
+          dryMin = wetMax;
+          dryMax = wetMax + 1;
+        }
+        sea = (wetMax + dryMin) * 0.5;
+        span = Math.max(1e-4, dryMax - sea);
+      }
+      for (let i = 0; i < N; i++) {
+        const byTile = (TILE_HEIGHT[t[i]] ?? 0) / 1.35;
+        Ht[i] = elev ? (elev[i] - sea) / span * 0.55 + byTile * 0.45 : byTile;
+      }
+      return { Ht, hasElev: !!elev };
+    }
+    // Купола массивов. Клетка тем выше, чем дальше она от ближайшей клетки более
+    // низкого ранга. Без этого гряда из сорока клеток MOUNTAIN — идеальное плато
+    // с отвесными краями: ровно то, как горы выглядят сейчас.
+    //
+    // Считается как пять волновых фронтов (по одному на ранг) — пять проходов
+    // BFS по всей карте, O(N) каждый. На 96×96 это доли миллисекунды.
+    buildDome(world, weight) {
+      const w = world.w, h = world.h, N = w * h;
+      const dome = new Float32Array(N);
+      const dist = new Int32Array(N);
+      const q = new Int32Array(N);
+      const rank = new Uint8Array(N);
+      for (let i = 0; i < N; i++) rank[i] = rankOf(world.tiles[i]);
+      const AMP = [0, 0.05, 0.05, 0.07, 0.16, 0.3];
+      const REACH = [1, 3, 3, 5, 5, 7];
+      for (let lvl = 1; lvl <= 5; lvl++) {
+        dist.fill(-1);
+        let qh = 0, qt = 0;
+        for (let i = 0; i < N; i++) {
+          if (rank[i] >= lvl) continue;
+          dist[i] = 0;
+          q[qt++] = i;
+        }
+        if (!qt) continue;
+        while (qh < qt) {
+          const i = q[qh++], x = i % w, y = i / w | 0, d = dist[i] + 1;
+          for (let k = 0; k < 4; k++) {
+            const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+            const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            const ni = ny * w + nx;
+            if (dist[ni] >= 0 || rank[ni] < lvl) continue;
+            dist[ni] = d;
+            q[qt++] = ni;
+          }
+        }
+        const amp = AMP[lvl] * weight, reach = REACH[lvl];
+        for (let i = 0; i < N; i++) {
+          if (dist[i] <= 0) continue;
+          dome[i] += amp * Math.sqrt(Math.min(dist[i], reach) / reach);
+        }
+      }
+      return dome;
+    }
+    // Размытие 3×3 биномом. n проходов, вода не участвует в усреднении суши:
+    // иначе весь берег уезжает под уровень моря и материк «тает» по кромке.
+    //
+    // Без маски ядро [1,2,1]⊗[1,2,1] РАЗДЕЛЯЕТСЯ на два одномерных прохода: три
+    // отсчёта вместо девяти и никаких проверок границ во внутреннем цикле.
+    // Это не микрооптимизация: крупная форма требует шести проходов, и на них
+    // уходило 16 мс из 43 всей сборки поля. Маску разделить нельзя — там веса
+    // зависят от соседей, — поэтому у неё остаётся честный путь 3×3.
+    static blur(src, w, h, n, mask) {
+      if (!mask) return _ReliefLayer.blurFast(src, w, h, n);
+      let a = src, b = new Float32Array(a.length);
+      for (let p = 0; p < n; p++) {
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            let s = 0, k = 0;
+            for (let dy = -1; dy <= 1; dy++) {
+              const yy = y + dy;
+              if (yy < 0 || yy >= h) continue;
+              for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx;
+                if (xx < 0 || xx >= w) continue;
+                const wgt = (dx === 0 ? 2 : 1) * (dy === 0 ? 2 : 1);
+                const j = yy * w + xx;
+                const m = mask ? mask[j] : 1;
+                s += a[j] * wgt * m;
+                k += wgt * m;
+              }
+            }
+            b[y * w + x] = k > 0 ? s / k : a[y * w + x];
+          }
+        }
+        const tmp = a;
+        a = b;
+        b = tmp;
+      }
+      return a;
+    }
+    // Разделимое размытие. Меняет ПЕРЕДАННЫЙ массив на месте и возвращает его.
+    static blurFast(a, w, h, n) {
+      const tmp = new Float32Array(a.length);
+      for (let p = 0; p < n; p++) {
+        for (let y = 0; y < h; y++) {
+          const r = y * w;
+          for (let x = 0; x < w; x++) {
+            tmp[r + x] = (a[r + (x > 0 ? x - 1 : 0)] + 2 * a[r + x] + a[r + (x < w - 1 ? x + 1 : w - 1)]) * 0.25;
+          }
+        }
+        for (let y = 0; y < h; y++) {
+          const r = y * w, ru = (y > 0 ? y - 1 : 0) * w, rd = (y < h - 1 ? y + 1 : h - 1) * w;
+          for (let x = 0; x < w; x++) a[r + x] = (tmp[ru + x] + 2 * tmp[r + x] + tmp[rd + x]) * 0.25;
+        }
+      }
+      return a;
+    }
+    // Широкое размытие бегущей суммой: цена НЕ зависит от радиуса.
+    //
+    // Нужно оно ровно для крупной формы. Биномиальное 3×3 за шесть проходов даёт
+    // σ около 1,7 клетки — на такой ширине разность «высота минус размытая
+    // высота» составляет сотые доли и на экране не видна вообще. Замерено: слой
+    // крупной формы не работал совсем, массив гор оставался мягким пятном. Здесь
+    // радиус — около десятой доли карты, и разность наконец означает то, что
+    // должна: «этот кусок выше своей округи».
+    // Меняет переданный массив на месте и возвращает его.
+    static boxBlur(a, w, h, r, passes) {
+      const tmp = new Float32Array(a.length);
+      const inv = 1 / (2 * r + 1);
+      for (let p = 0; p < passes; p++) {
+        for (let y = 0; y < h; y++) {
+          const row = y * w;
+          let sum = a[row] * (r + 1);
+          for (let x = 1; x <= r; x++) sum += a[row + (x < w ? x : w - 1)];
+          for (let x = 0; x < w; x++) {
+            tmp[row + x] = sum * inv;
+            const add = x + r + 1, sub = x - r;
+            sum += a[row + (add < w ? add : w - 1)] - a[row + (sub > 0 ? sub : 0)];
+          }
+        }
+        for (let x = 0; x < w; x++) {
+          let sum = tmp[x] * (r + 1);
+          for (let y = 1; y <= r; y++) sum += tmp[(y < h ? y : h - 1) * w + x];
+          for (let y = 0; y < h; y++) {
+            a[y * w + x] = sum * inv;
+            const add = y + r + 1, sub = y - r;
+            sum += tmp[(add < h ? add : h - 1) * w + x] - tmp[(sub > 0 ? sub : 0) * w + x];
+          }
+        }
+      }
+      return a;
+    }
+    // Кубический B-сплайн: веса одного отсчёта.
+    //
+    // ПОЧЕМУ ИМЕННО ОН, А НЕ БИЛИНЕЙНАЯ И НЕ CATMULL-ROM. Требование — никаких
+    // ступенек по клеткам. Ступенька в ЦВЕТЕ убирается любой интерполяцией, но
+    // свет считается по ПРОИЗВОДНОЙ высоты, а уступы — по второй производной.
+    // У билинейной интерполяции производная рвётся на каждой границе клетки:
+    // получается сетка светлых и тёмных полос. У Catmull-Rom рвётся вторая
+    // производная — сетка проступает на кромках уступов. B-сплайн непрерывен
+    // до второй производной включительно, поэтому решётка не видна нигде.
+    // Плата — лёгкое сглаживание (сплайн приближающий, а не интерполирующий),
+    // и это ровно то, что нужно переходу равнина→холм→гора.
+    static bsplineTable(n, S) {
+      const idx = new Int32Array(n), wt = new Float32Array(n * 4);
+      for (let i = 0; i < n; i++) {
+        const u = (i + 0.5) / S - 0.5;
+        const iu = Math.floor(u), t = u - iu;
+        const t2 = t * t, t3 = t2 * t;
+        idx[i] = iu;
+        wt[i * 4] = (1 - 3 * t + 3 * t2 - t3) / 6;
+        wt[i * 4 + 1] = (4 - 6 * t2 + 3 * t3) / 6;
+        wt[i * 4 + 2] = (1 + 3 * t + 3 * t2 - 3 * t3) / 6;
+        wt[i * 4 + 3] = t3 / 6;
+      }
+      return { idx, wt };
+    }
+    // Полная сборка непрерывного поля высот. Не зависит от сезона — считается
+    // один раз на мир.
+    buildField(sim2) {
+      const world = sim2.world;
+      const w = world.w, h = world.h, N = w * h;
+      const t = world.tiles;
+      const S = this.pickSubres(w, h);
+      const SW = w * S, SH = h * S;
+      const rnd = makeRnd4((world.seed ^ 1592594687) >>> 0);
+      this.nt = makeNoiseTex(rnd);
+      this.ntOff = [rnd() * 512, rnd() * 512, rnd() * 512, rnd() * 512];
+      const { Ht, hasElev } = this.buildTileHeight(world);
+      const dome = this.buildDome(world, hasElev ? 0.7 : 1);
+      const landK = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const wet = t[i] === TILE.DEEP || t[i] === TILE.WATER;
+        landK[i] = wet ? 0 : 1;
+        if (!wet) Ht[i] += dome[i];
+      }
+      const smooth3 = _ReliefLayer.blur(Ht, w, h, 1, landK);
+      let top = 1e-3;
+      for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
+      for (let i = 0; i < N; i++) smooth3[i] /= top;
+      const R = clamp3(Math.round(Math.min(w, h) / 11), 3, 18);
+      const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
+      const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
+      const slopeT = new Float32Array(N);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          const l = smooth3[y * w + Math.max(0, x - 1)], r = smooth3[y * w + Math.min(w - 1, x + 1)];
+          const u = smooth3[Math.max(0, y - 1) * w + x], d = smooth3[Math.min(h - 1, y + 1) * w + x];
+          slopeT[i] = Math.hypot((r - l) * 0.5, (d - u) * 0.5);
+        }
+      }
+      let nLand = 0;
+      for (let i = 0; i < N; i++) if (landK[i] > 0) nLand++;
+      const lands = new Float32Array(nLand);
+      for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
+      lands.sort();
+      const qAt = (q) => nLand ? lands[clamp3(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp3(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      this.cliff0 = c0;
+      this.cliff1 = clamp3(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      const lapsArr = new Float32Array(nLand);
+      for (let y = 0, k = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          if (landK[i] <= 0) continue;
+          const l = smooth3[y * w + Math.max(0, x - 1)], r = smooth3[y * w + Math.min(w - 1, x + 1)];
+          const u = smooth3[Math.max(0, y - 1) * w + x], d = smooth3[Math.min(h - 1, y + 1) * w + x];
+          lapsArr[k++] = Math.abs(l + r + u + d - 4 * smooth3[i]);
+        }
+      }
+      lapsArr.sort();
+      this.lapScale = clamp3(
+        nLand ? lapsArr[clamp3(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+        TUNE.lapMin,
+        TUNE.lapMax
+      );
+      this.bs = _ReliefLayer.bsplineTable(SH, S);
+      const tx = _ReliefLayer.bsplineTable(SW, S);
+      this.txA = new Int32Array(SW);
+      this.txB = new Int32Array(SW);
+      this.txF = new Float32Array(SW);
+      for (let sx = 0; sx < SW; sx++) {
+        const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
+        this.txA[sx] = clamp3(i0, 0, w - 1);
+        this.txB[sx] = clamp3(i0 + 1, 0, w - 1);
+        this.txF[sx] = u - i0;
+      }
+      const rowTmp = new Float32Array(SW * h);
+      for (let y = 0; y < h; y++) {
+        const row = y * w, out = y * SW;
+        for (let sx = 0; sx < SW; sx++) {
+          const i0 = tx.idx[sx], o = sx * 4;
+          const a = row + clamp3(i0 - 1, 0, w - 1), b = row + clamp3(i0, 0, w - 1);
+          const c = row + clamp3(i0 + 1, 0, w - 1), d = row + clamp3(i0 + 2, 0, w - 1);
+          rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
+        }
+      }
+      this.rowTmp = rowTmp;
+      this.Hrows = 0;
+      const H = new Float32Array(SW * SH);
+      this.w = w;
+      this.h = h;
+      this.S = S;
+      this.SW = SW;
+      this.SH = SH;
+      this.H = H;
+      this.Hlow = low;
+      this.tileH = smooth3;
+      this.landK = landSoft;
+      this.slopeT = slopeT;
+      this.seed = world.seed;
+    }
+    // Достроить строки поля высот до upTo. Вертикальный B-сплайн плюс мелкий
+    // рельеф — то, что раньше считалось одним куском на 60–80 мс.
+    //
+    // МЕЛКИЙ РЕЛЬЕФ И ЕГО АМПЛИТУДА. Без него склон остаётся математически
+    // гладким и читается как надутый пузырь; настоящий склон изрыт промоинами.
+    // Но амплитуда тут крошечная, и это не осторожность, а арифметика: свет
+    // считается по производной высоты, а производная бьёт по высокой частоте.
+    // Рябь амплитудой 0,05 с периодом в четверть клетки даёт наклон 1,2 на
+    // клетку — вчетверо круче настоящего горного склона. Такой «рельеф» — не
+    // фактура, а белый шум поверх карты. Здесь амплитуда подобрана так, чтобы
+    // вклад шума в наклон был около 0,13 на крутизне и около нуля на равнине.
+    ensureRows(upTo) {
+      const H = this.H;
+      if (!H || this.Hrows >= upTo) return;
+      const SW = this.SW, S = this.S, w = this.w, h = this.h;
+      const ty = this.bs, rowTmp = this.rowTmp;
+      const slopeT = this.slopeT, landSoft = this.landK;
+      const g = this.nt, oA = this.ntOff[0], oB = this.ntOff[1];
+      const invS = 1 / S;
+      const end = Math.min(this.SH, upTo);
+      for (let sy = this.Hrows; sy < end; sy++) {
+        const j0 = ty.idx[sy], o = sy * 4;
+        const ra = clamp3(j0 - 1, 0, h - 1) * SW, rb = clamp3(j0, 0, h - 1) * SW;
+        const rc = clamp3(j0 + 1, 0, h - 1) * SW, rd = clamp3(j0 + 2, 0, h - 1) * SW;
+        const out = sy * SW;
+        const wy = sy * invS;
+        const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
+        const jA = clamp3(jy, 0, h - 1) * w, jB = clamp3(jy + 1, 0, h - 1) * w;
+        const txA = this.txA, txB = this.txB, txF = this.txF;
+        for (let sx = 0; sx < SW; sx++) {
+          let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
+          const iA = txA[sx], iB = txB[sx], fx = txF[sx];
+          const s0 = slopeT[jA + iA] + (slopeT[jA + iB] - slopeT[jA + iA]) * fx;
+          const s1 = slopeT[jB + iA] + (slopeT[jB + iB] - slopeT[jB + iA]) * fx;
+          const l0 = landSoft[jA + iA] + (landSoft[jA + iB] - landSoft[jA + iA]) * fx;
+          const l1 = landSoft[jB + iA] + (landSoft[jB + iB] - landSoft[jB + iA]) * fx;
+          const amp = (2e-3 + Math.min(0.014, (s0 + (s1 - s0) * fy) * 0.07)) * (l0 + (l1 - l0) * fy);
+          if (amp >= 4e-4) {
+            const wx = sx * invS;
+            const n1 = ntAt(g, wx * 1.15 + oA, wy * 1.15 + oA) - 0.5;
+            const n2 = ntAt(g, wx * 3.7 + oB, wy * 3.7 + oB) - 0.5;
+            v += (n1 * 0.68 + n2 * 0.32) * amp;
+          }
+          H[out + sx] = v;
+        }
+      }
+      this.Hrows = end;
+      if (this.Hrows >= this.SH) {
+        this.rowTmp = null;
+        this.bs = null;
+      }
+    }
+    pickSubres(w, h) {
+      const want = RELIEF_SUBRES[this.q.id] || 4;
+      const side = Math.max(w, h);
+      return Math.max(2, Math.min(want, Math.floor(RELIEF_MAX_SIDE / Math.max(1, side))));
+    }
+    // =========================================================================
+    // СНЕГОВАЯ ЛИНИЯ
+    //
+    // По ВЫСОТЕ, а не по типу клетки. Ниже линии снега нет вовсе, выше он ложится
+    // сплошняком, между — рваная кромка. Сама линия гуляет: она ниже у полюсов,
+    // выше на экваторе, ниже зимой, ниже на северных склонах и выше на крутизне,
+    // с которой снег просто сползает.
+    // =========================================================================
+    buildSnowLine(sim2, season) {
+      const world = sim2.world, w = world.w, h = world.h, N = w * h;
+      const BY_SEASON = [0.78, 0.92, 0.74, 0.52];
+      const base = BY_SEASON[season] ?? 0.78;
+      const temp = world.temp && world.temp.length === N ? world.temp : null;
+      const Ht = this.tileH;
+      const line = new Float32Array(N);
+      const g = this.nt, oC = this.ntOff[2];
+      for (let y = 0; y < h; y++) {
+        const lat = Math.abs((y + 0.5) / h * 2 - 1);
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          const warm = temp ? clamp3(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp3(1 - Math.pow(lat, 1.35), 0, 1);
+          const n = ntAt(g, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
+          line[i] = clamp3(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+        }
+      }
+      this.snowH = line;
+    }
+    // =========================================================================
+    // ВЫПЕЧКА
+    // =========================================================================
+    // Возвращает true, если в ЭТОМ кадре уже сделана тяжёлая работа. Сборка поля
+    // высот и заведение выпечки (три канваса и три ImageData размером с карту)
+    // — вещи разовые, но не бесплатные, и складывать их в один кадр с покраской
+    // первой полосы незачем: так худший кадр загрузки складывался из трёх
+    // расходов сразу. Разнесены по кадрам — и худший из них вдвое дешевле.
+    ensure(sim2) {
+      const world = sim2.world;
+      if (!world || !world.tiles) return true;
+      if (this.seed !== world.seed || !this.H) {
+        this.dropMaps();
+        this.buildField(sim2);
+        return true;
+      }
+      const season = sim2.seasonIdx | 0;
+      const want = this.job ? this.job.season : this.season;
+      if (want !== season) {
+        this.startJob(sim2, season);
+        return true;
+      }
+      return false;
+    }
+    startJob(sim2, season) {
+      const SW = this.SW, SH = this.SH;
+      this.buildSnowLine(sim2, season);
+      const mk = () => {
+        const cv = document.createElement("canvas");
+        cv.width = SW;
+        cv.height = SH;
+        return { cv, c: cv.getContext("2d") };
+      };
+      const b = mk();
+      const l = this.simple ? null : mk();
+      const i = this.simple || this.q.detail < 1 ? null : mk();
+      this.count = { cliff: 0, strata: 0, scree: 0, snow: 0, shadow: 0, light: 0 };
+      this.job = {
+        season,
+        y: 0,
+        t0: now(),
+        base: b,
+        lite: l,
+        iso: i,
+        imgBase: b.c.createImageData(SW, SH),
+        imgLite: l ? l.c.createImageData(SW, SH) : null,
+        imgIso: i ? i.c.createImageData(SW, SH) : null,
+        first: !this.base
+      };
+    }
+    // Один шаг выпечки. Возвращает true, когда карта готова.
+    step(budgetMs) {
+      const J = this.job;
+      if (!J) return false;
+      const t0 = now();
+      const SH = this.SH;
+      while (J.y < SH) {
+        const y1 = Math.min(SH, J.y + 4);
+        this.ensureRows(y1 + Math.max(1, Math.round(this.S * 0.5)));
+        for (let sy = J.y; sy < y1; sy++) this.paintRow(J, sy);
+        J.y = y1;
+        if (now() - t0 >= budgetMs) return false;
+      }
+      J.base.c.putImageData(J.imgBase, 0, 0);
+      if (J.lite) J.lite.c.putImageData(J.imgLite, 0, 0);
+      if (J.iso) J.iso.c.putImageData(J.imgIso, 0, 0);
+      this.base = J.base.cv;
+      this.lite = J.lite ? J.lite.cv : null;
+      this.iso = J.iso ? J.iso.cv : null;
+      this.season = J.season;
+      this.buildMs = now() - J.t0;
+      this.job = null;
+      return true;
+    }
+    // ---- одна строка подрешётки ----
+    //
+    // ДВА ШАБЛОНА, А НЕ ОДИН. Наклон для света берётся с шага в один подпиксель:
+    // так в свет попадает мелкая фактура склона. А вот КРУТИЗНА (обрыв это или
+    // нет) и КРИВИЗНА (бровка или подошва) считаются с шага в полклетки. Причина
+    // арифметическая: производная усиливает высокие частоты, и на шаге в один
+    // подпиксель рябь фактуры даёт кривизну в десятки раз больше, чем настоящий
+    // перегиб рельефа. На узком шаблоне уступы утонули бы в сыпи случайных
+    // бликов по всему склону.
+    paintRow(J, sy) {
+      const SW = this.SW, SH = this.SH, S = this.S, w = this.w, h = this.h;
+      const H = this.H, low = this.Hlow, landK = this.landK, snowH = this.snowH;
+      const pB = J.imgBase.data, pL = J.imgLite ? J.imgLite.data : null;
+      const pI = J.imgIso ? J.imgIso.data : null;
+      const simple = this.simple, detail = this.q.detail | 0;
+      const g = this.nt, oD = this.ntOff[3];
+      const CNT = this.count;
+      const T2 = TUNE;
+      const C0 = this.cliff0, C1 = this.cliff1;
+      const invLap = 1 / (this.lapScale || 0.05);
+      const ln = Math.hypot(T2.sun[0], T2.sun[1], T2.sun[2]) || 1;
+      const LX = T2.sun[0] / ln, LY = T2.sun[1] / ln, LZ = T2.sun[2] / ln;
+      const nz = 1 / T2.exagg;
+      const invS = 1 / S;
+      const D = Math.max(1, Math.round(S * 0.5));
+      const dTile = D * invS;
+      const invD = 1 / dTile, invD2 = invD * invD;
+      const row = sy * SW;
+      const rowUp = (sy > 0 ? sy - 1 : sy) * SW;
+      const rowDn = (sy < SH - 1 ? sy + 1 : sy) * SW;
+      const rowUpD = Math.max(0, sy - D) * SW;
+      const rowDnD = Math.min(SH - 1, sy + D) * SW;
+      const wy = sy * invS;
+      const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
+      const jA = clamp3(j0, 0, h - 1) * w, jB = clamp3(j0 + 1, 0, h - 1) * w;
+      const txA = this.txA, txB = this.txB, txF = this.txF;
+      let iA = 0, iB = 0, fx = 0;
+      const bil = (arr) => {
+        const a = arr[jA + iA], b = arr[jA + iB], c = arr[jB + iA], d = arr[jB + iB];
+        const t = a + (b - a) * fx, u = c + (d - c) * fx;
+        return t + (u - t) * fy;
+      };
+      let cr = 0, cg = 0, cb = 0, ca = 0;
+      const over = (r, gg, b, a) => {
+        if (a <= 0) return;
+        const k = 1 - a;
+        cr = r * a + cr * k;
+        cg = gg * a + cg * k;
+        cb = b * a + cb * k;
+        ca = a + ca * k;
+      };
+      for (let sx = 0; sx < SW; sx++) {
+        const i = row + sx;
+        iA = txA[sx];
+        iB = txB[sx];
+        fx = txF[sx];
+        const land = bil(landK);
+        if (land <= 0.02) continue;
+        const o = i * 4;
+        const hC = H[i];
+        const xL = sx > 0 ? sx - 1 : sx, xR = sx < SW - 1 ? sx + 1 : sx;
+        const xLD = Math.max(0, sx - D), xRD = Math.min(SW - 1, sx + D);
+        const gx = (H[row + xR] - H[row + xL]) * 0.5 * S;
+        const gy = (H[rowDn + sx] - H[rowUp + sx]) * 0.5 * S;
+        const gxW = (H[row + xRD] - H[row + xLD]) * 0.5 * invD;
+        const gyW = (H[rowDnD + sx] - H[rowUpD + sx]) * 0.5 * invD;
+        const slopeW = Math.sqrt(gxW * gxW + gyW * gyW);
+        const lap = (H[row + xLD] + H[row + xRD] + H[rowUpD + sx] + H[rowDnD + sx] - 4 * hC) * invD2 * invLap;
+        const len = Math.sqrt(gx * gx + gy * gy + nz * nz) || 1;
+        const nX = -gx / len, nY = -gy / len, nZ = nz / len;
+        let v = (nX * LX + nY * LY + nZ * LZ - LZ) * T2.micro;
+        const macro = hC - bil(low);
+        v += macro * (macro > 0 ? T2.macroUp : T2.macroDown);
+        const asp = nY;
+        v += asp * T2.aspect;
+        const cliff = sstep2(C0, C1, slopeW);
+        if (cliff > 0.25) CNT.cliff++;
+        if (!simple) v -= clamp3(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        cr = 0;
+        cg = 0;
+        cb = 0;
+        ca = 0;
+        let strataLip = 0;
+        if (!simple && detail >= 1 && cliff > 0.03) {
+          let rockK = cliff * 0.58;
+          const wx = sx * invS;
+          const bed = 15 + ntAt(g, wx * 0.16 + oD, wy * 0.16 + oD) * 26;
+          const warp = (ntAt(g, wx * 1.9 + 61, wy * 1.9 + 23) - 0.5) * 1.7;
+          const ph = hC * bed + warp;
+          const b = ph - Math.floor(ph);
+          const seam = b < 0.17 ? 1 - b / 0.17 : 0;
+          strataLip = b >= 0.17 && b < 0.36 ? 1 - (b - 0.17) / 0.19 : 0;
+          const k = cliff * (detail >= 2 ? 1 : 0.6);
+          if (seam * k > 0.25) CNT.strata++;
+          over(T2.rockRGB[0] * 0.62, T2.rockRGB[1] * 0.62, T2.rockRGB[2] * 0.62, seam * 0.3 * k);
+          rockK *= 1 - seam * 0.25;
+          over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
+        }
+        if (!simple && detail >= 1) {
+          const foot = clamp3(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          if (foot > 0.02) {
+            if (foot > 0.15) CNT.scree++;
+            const gc = Math.max(1, S / 3);
+            const grain = hash2((sx / gc | 0) * 7 + 13, (sy / gc | 0) * 11 + 5);
+            const m = grain < 0.42 ? 0.72 : 1.16;
+            over(
+              T2.screeRGB[0] * m,
+              T2.screeRGB[1] * m,
+              T2.screeRGB[2] * m,
+              foot * (0.12 + Math.abs(grain - 0.5) * 0.26)
+            );
+          }
+        }
+        const line = bil(snowH);
+        const snow = sstep2(line, line + 0.17, hC - asp * T2.aspectSnow - slopeW * 0.34);
+        if (snow > 0.4) CNT.snow++;
+        if (snow > 0.01) over(T2.snowRGB[0], T2.snowRGB[1], T2.snowRGB[2], snow * 0.78 * land);
+        if (v < 0) {
+          CNT.shadow++;
+          const warm = asp > 0 ? asp : 0, cool = asp < 0 ? -asp : 0;
+          over(
+            T2.shadowRGB[0] + T2.shadowWarm[0] * warm + T2.shadowCool[0] * cool,
+            T2.shadowRGB[1] + T2.shadowWarm[1] * warm + T2.shadowCool[1] * cool,
+            T2.shadowRGB[2] + T2.shadowWarm[2] * warm + T2.shadowCool[2] * cool,
+            Math.min(T2.maxShadow, -v) * land
+          );
+        }
+        if (ca > 16e-4) {
+          const inv = 1 / ca;
+          pB[o] = cr * inv;
+          pB[o + 1] = cg * inv;
+          pB[o + 2] = cb * inv;
+          pB[o + 3] = ca * 255;
+        }
+        if (pL) {
+          let a = v > 0 ? Math.min(T2.maxLight, v) : 0;
+          a += strataLip * 0.1;
+          a *= 1 + snow * 0.55;
+          a = Math.min(0.34, a) * land;
+          if (a > 4e-3) {
+            CNT.light++;
+            pL[o] = T2.lightRGB[0];
+            pL[o + 1] = T2.lightRGB[1] + (250 - T2.lightRGB[1]) * snow;
+            pL[o + 2] = T2.lightRGB[2] + (255 - T2.lightRGB[2]) * snow;
+            pL[o + 3] = a * 255;
+          }
+        }
+        if (pI && slopeW > 1e-4) {
+          const f = hC / T2.isoStep;
+          const nrst = Math.round(f);
+          const d = Math.abs(f - nrst) * T2.isoStep / slopeW;
+          const a0 = 1 - sstep2(T2.isoWidth * 0.45, T2.isoWidth, d);
+          if (a0 > 0.01) {
+            const a = a0 * (nrst % T2.isoIndex === 0 ? 0.42 : 0.22) * land;
+            pI[o] = T2.isoRGB[0];
+            pI[o + 1] = T2.isoRGB[1];
+            pI[o + 2] = T2.isoRGB[2];
+            pI[o + 3] = a * 255;
+          }
+        }
+      }
+    }
+    // =========================================================================
+    // КАДР
+    // =========================================================================
+    //
+    // Всё, что здесь происходит: посчитать видимый прямоугольник карты и сделать
+    // два-три drawImage. Никаких примитивов, никаких проходов по клеткам.
+    draw(sim2, ctx, ox, oy, z, cw, ch, L) {
+      this.drawn = 0;
+      if (this.off || !sim2 || !sim2.world) return;
+      const busy = this.ensure(sim2);
+      if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
+      if (!this.base) return;
+      const S = this.S, w = this.w, h = this.h;
+      const x0 = clamp3(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp3(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp3(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp3(Math.ceil((ch - oy) / z) + 1, 0, h);
+      if (x1 <= x0 || y1 <= y0) return;
+      const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
+      const dx = ox + x0 * z, dy = oy + y0 * z;
+      const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
+      let k = 1;
+      if (L && typeof L.mul === "number") {
+        const sun = clamp3((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp3(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+      }
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.globalAlpha = clamp3(0.72 + 0.28 * k, 0, 1);
+      ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
+      this.drawn++;
+      if (this.lite) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = clamp3(k, 0, 1);
+        ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
+        ctx.globalCompositeOperation = "source-over";
+        this.drawn++;
+      }
+      if (this.iso && z < ISO_MAX_PX) {
+        const a = sstep2(ISO_MAX_PX, ISO_FULL_PX, z);
+        if (a > 0.02) {
+          ctx.globalAlpha = a * 0.85;
+          ctx.drawImage(this.iso, sx, sy, sw, sh, dx, dy, dw, dh);
+          this.drawn++;
+        }
+      }
+      ctx.restore();
+    }
+    // =========================================================================
+    // ЗАПРОСЫ (для других слоёв и отладки; в кадре не обязательны)
+    // =========================================================================
+    // Нормированная высота клетки: 0 — уровень моря, 1 — высшая точка суши.
+    heightAt(x, y) {
+      if (!this.tileH) return 0;
+      const xi = Math.floor(x), yi = Math.floor(y);
+      if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) return 0;
+      return this.tileH[yi * this.w + xi];
+    }
+    // Крутизна клетки: перепад нормированной высоты на клетку.
+    slopeAt(x, y) {
+      if (!this.slopeT) return 0;
+      const xi = Math.floor(x), yi = Math.floor(y);
+      if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) return 0;
+      return this.slopeT[yi * this.w + xi];
+    }
+    // Обрыв ли здесь — по той же шкале, что и картинка.
+    isCliff(x, y) {
+      return this.cliff0 > 0 && this.slopeAt(x, y) >= this.cliff0;
+    }
+    // Лежит ли снег: 0 — нет, 1 — сплошной. Считается по высоте и снеговой
+    // линии, а не по типу клетки.
+    snowAt(x, y) {
+      if (!this.snowH || !this.tileH) return 0;
+      const xi = Math.floor(x), yi = Math.floor(y);
+      if (xi < 0 || yi < 0 || xi >= this.w || yi >= this.h) return 0;
+      const i = yi * this.w + xi;
+      return sstep2(this.snowH[i], this.snowH[i] + 0.17, this.tileH[i] - this.slopeT[i] * 0.34);
+    }
+    // Русская строка для тултипа клетки.
+    describe(x, y) {
+      if (!this.tileH) return "";
+      const hgt = this.heightAt(x, y), s = this.slopeAt(x, y), sn = this.snowAt(x, y);
+      if (hgt <= 0) return "под водой";
+      const parts = [`высота ${Math.round(hgt * 100)}`];
+      if (s >= this.cliff1) parts.push("отвесный обрыв");
+      else if (s >= this.cliff0) parts.push("крутой склон");
+      else if (s >= this.cliff0 * 0.45) parts.push("склон");
+      if (sn > 0.55) parts.push("снега");
+      else if (sn > 0.1) parts.push("пятна снега");
+      return parts.join(", ");
+    }
+    stats() {
+      return {
+        sub: this.S,
+        size: this.SW + "×" + this.SH,
+        maps: (this.base ? 1 : 0) + (this.lite ? 1 : 0) + (this.iso ? 1 : 0),
+        mb: +(this.SW * this.SH * 4 * ((this.base ? 1 : 0) + (this.lite ? 1 : 0) + (this.iso ? 1 : 0)) / 1048576).toFixed(1),
+        buildMs: +this.buildMs.toFixed(1),
+        baking: !!this.job,
+        progress: this.job ? +(this.job.y / this.SH).toFixed(2) : 1,
+        drawn: this.drawn,
+        cliff0: +this.cliff0.toFixed(3),
+        cliff1: +this.cliff1.toFixed(3),
+        // доля подпикселей карты, доставшаяся каждому слою (в процентах)
+        pct: Object.fromEntries(Object.entries(this.count).map(([k, v]) => [k, +(v / Math.max(1, this.SW * this.SH) * 100).toFixed(1)]))
+      };
+    }
+  };
+  function now() {
+    return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  }
+
+  // app/src/render/shadows.js
+  var TILE_PX2 = 32;
+  var SHADOW_LIMITS = {
+    casts: 420,
+    // вытянутых теней в кадре; больше — просто не рисуем
+    selfs: 72,
+    // самозатенений в кадре: см. замер в bakeSelfShade
+    softMB: 8
+    // память под испечённые мягкие силуэты
+  };
+  var COL = "44,52,76";
+  var SHEAR = 0.62;
+  var FLAT = 0.34;
+  var DAY_A = 0.23;
+  var DAY_B = 0.77;
+  var SUN_KEY = [
+    [0, 0],
+    [0.19, 0],
+    [0.25, 0.34],
+    [0.31, 0.74],
+    [0.39, 0.96],
+    [0.5, 1],
+    [0.63, 0.96],
+    [0.71, 0.78],
+    [0.79, 0.34],
+    [0.85, 0],
+    [1, 0]
+  ];
+  var WEATHER_SHADOW = {
+    sun: { a: 1, soft: 1 },
+    cloud: { a: 0.44, soft: 1.9 },
+    rain: { a: 0.22, soft: 2.3 },
+    snow: { a: 0.32, soft: 2 },
+    storm: { a: 0.13, soft: 2.6 }
+  };
+  var WEATHER_DEFAULT = { a: 1, soft: 1 };
+  var CAST_A = 0.42;
+  var CONTACT_A = 0.38;
+  var SELF_A = 0.5;
+  var SELF_MIN_H = 1.45;
+  var SELF_MIN_ZOOM = 0.75;
+  var PAD = 0.055;
+  var SPREAD_PAD = 0.45;
+  var clamp4 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  var smooth2 = (k) => k * k * (3 - 2 * k);
+  var FALLBACK_Q = {
+    id: "high",
+    detail: 2,
+    shadows: true,
+    lod: { shadowMinZoom: 0.65 },
+    caps: { spriteMB: 32, buildings: 200, people: 300 }
+  };
+  function sunAt(t) {
+    const x = (t % 1 + 1) % 1;
+    let i = 0;
+    while (i < SUN_KEY.length - 2 && SUN_KEY[i + 1][0] <= x) i++;
+    const a = SUN_KEY[i], b = SUN_KEY[i + 1];
+    const k = b[0] === a[0] ? 0 : (x - a[0]) / (b[0] - a[0]);
+    return a[1] + (b[1] - a[1]) * smooth2(clamp014(k));
+  }
+  function supportsOp2(ctx, op) {
+    const prev = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = op;
+    const ok = ctx.globalCompositeOperation === op;
+    ctx.globalCompositeOperation = prev;
+    return ok;
+  }
+  function makeCanvas(w, h) {
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, w | 0);
+    cv.height = Math.max(1, h | 0);
+    return cv;
+  }
+  function bakeSoft(src, sw, sh, alpha) {
+    const w = Math.max(8, Math.round(sw * 0.5));
+    const h = Math.max(8, Math.round(sh * 0.5));
+    const padX = Math.max(2, Math.round(w * PAD));
+    const padY = Math.max(2, Math.round(h * PAD));
+    const W = w + padX * 2, H = h + padY * 2;
+    const flat = makeCanvas(W, H);
+    const fc = flat.getContext("2d");
+    fc.drawImage(src, padX, padY, w, h);
+    fc.globalCompositeOperation = "source-in";
+    fc.fillStyle = `rgba(${COL},1)`;
+    fc.fillRect(0, 0, W, H);
+    const D = Math.max(2, Math.round(Math.min(padX, padY) * 0.9));
+    let cur = flat;
+    for (let pass = 0; pass < 2; pass++) {
+      const small = makeCanvas(Math.max(2, Math.round(W / D)), Math.max(2, Math.round(H / D)));
+      const sc = small.getContext("2d");
+      sc.imageSmoothingEnabled = true;
+      sc.drawImage(cur, 0, 0, small.width, small.height);
+      const up = makeCanvas(W, H);
+      const uc = up.getContext("2d");
+      uc.imageSmoothingEnabled = true;
+      if ("imageSmoothingQuality" in uc) uc.imageSmoothingQuality = "high";
+      uc.drawImage(small, 0, 0, W, H);
+      cur = up;
+    }
+    if (alpha < 0.999) {
+      const out = makeCanvas(W, H);
+      const oc = out.getContext("2d");
+      oc.globalAlpha = alpha;
+      oc.drawImage(cur, 0, 0);
+      cur = out;
+    }
+    return { cv: cur, pad: PAD, bytes: W * H * 4 };
+  }
+  function bakeBlob() {
+    const S = 64;
+    const cv = makeCanvas(S, S);
+    const c = cv.getContext("2d");
+    const g = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    g.addColorStop(0, `rgba(${COL},0.95)`);
+    g.addColorStop(0.42, `rgba(${COL},0.72)`);
+    g.addColorStop(0.72, `rgba(${COL},0.26)`);
+    g.addColorStop(1, `rgba(${COL},0)`);
+    c.fillStyle = g;
+    c.fillRect(0, 0, S, S);
+    return cv;
+  }
+  function bakeSelfShade(src, sw, sh, band) {
+    const W = Math.max(8, Math.round(sw * 0.5));
+    const H = Math.max(8, Math.round(sh * 0.5));
+    const Hb = Math.max(4, Math.round(H * band));
+    const off = Hb - H;
+    const cv = makeCanvas(W, Hb);
+    const c = cv.getContext("2d");
+    c.drawImage(src, 0, off, W, H);
+    c.globalCompositeOperation = "source-in";
+    const g = c.createLinearGradient(0, off, W, off + H);
+    g.addColorStop(0, `rgba(${COL},0)`);
+    g.addColorStop(0.4, `rgba(${COL},0.06)`);
+    g.addColorStop(0.75, `rgba(${COL},0.34)`);
+    g.addColorStop(1, `rgba(${COL},0.62)`);
+    c.fillStyle = g;
+    c.fillRect(0, 0, W, Hb);
+    c.globalCompositeOperation = "source-atop";
+    const y0 = off + H * 0.62;
+    const g2 = c.createLinearGradient(0, y0, 0, off + H);
+    g2.addColorStop(0, `rgba(${COL},0)`);
+    g2.addColorStop(1, `rgba(${COL},0.40)`);
+    c.fillStyle = g2;
+    c.fillRect(0, Math.max(0, y0), W, Hb);
+    return { cv, band, bytes: W * Hb * 4 };
+  }
+  var ShadowLayer = class {
+    constructor(quality) {
+      this.q = quality || FALLBACK_Q;
+      this.off = this.q.id === "eco" || !this.q.shadows;
+      this.enabled = true;
+      this.unitContact = false;
+      this.frame = 0;
+      this.on = false;
+      this.sun = 0;
+      this.k = 0;
+      this.m = FLAT * 0.6;
+      this.castA = 0;
+      this.contactA = 0;
+      this.contactMix = 1;
+      this.selfA = 0;
+      this.spread = 1;
+      this.self = false;
+      this.casts = 0;
+      this.maxCasts = SHADOW_LIMITS.casts;
+      this.selfs = 0;
+      this.maxSelf = SHADOW_LIMITS.selfs;
+      this.drawn = 0;
+      this._blob = null;
+      this._soft = /* @__PURE__ */ new WeakMap();
+      this._self = /* @__PURE__ */ new WeakMap();
+      this._bytes = 0;
+      this._m = null;
+      this._mFrame = -1;
+      this._noMat = false;
+      this._mul = null;
+      this._eased = false;
+    }
+    setQuality(q) {
+      this.q = q || FALLBACK_Q;
+      this.off = this.q.id === "eco" || !this.q.shadows;
+      this.clear();
+    }
+    clear() {
+      this._soft = /* @__PURE__ */ new WeakMap();
+      this._self = /* @__PURE__ */ new WeakMap();
+      this._bytes = 0;
+      this._blob = null;
+    }
+    // =========================================================================
+    // НАЧАЛО КАДРА. Один вызов до отрисовки объектов: здесь считаются солнце,
+    // погода и геометрия перекоса — по одному разу на кадр, а не на объект.
+    //
+    //   dt   — реальные секунды с прошлого кадра (для плавной смены погоды)
+    //   z    — пикселей на тайл (TILE_PX * zoom), как во всех модулях рендера
+    //   opts — { fog: 0..1 } из weather.js (Atmosphere.fogK). Не обязателен.
+    // =========================================================================
+    begin(sim2, dt, z, opts) {
+      this.frame++;
+      this.casts = 0;
+      this.selfs = 0;
+      this.drawn = 0;
+      this._mFrame = -1;
+      this.on = false;
+      if (!sim2 || this.off || !this.enabled) return;
+      const zoom = z / TILE_PX2;
+      const minZoom = this.q.lod && this.q.lod.shadowMinZoom || 0.65;
+      if (zoom < minZoom) return;
+      this.on = true;
+      this.self = this.q.detail >= 2 && zoom >= SELF_MIN_ZOOM;
+      this.maxCasts = Math.min(
+        SHADOW_LIMITS.casts,
+        (this.q.caps && this.q.caps.buildings || 200) + Math.round((this.q.caps && this.q.caps.people || 200) * 0.7)
+      );
+      const t = (sim2.dayTime % 1 + 1) % 1;
+      const L = lightAt(t);
+      const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
+      const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
+      const len = clamp4(L.shadowLen, 0.45, 2.2);
+      const u = clamp4((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
+      const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
+      const target = {
+        sun,
+        k: -SHEAR * u * len,
+        m: FLAT * len,
+        castA: CAST_A * sun * dim,
+        contactA: CONTACT_A * (0.3 + 0.7 * sun) * (0.55 + 0.45 * W.a),
+        selfA: SELF_A * (0.4 + 0.6 * sun),
+        spread: W.soft * (0.75 + 0.35 * len) * (1 + 0.7 * fog)
+      };
+      const e = this._eased ? Math.min(1, Math.max(0, dt || 0) * 1.8) : 1;
+      this._eased = true;
+      this.sun += (target.sun - this.sun) * e;
+      this.k += (target.k - this.k) * e;
+      this.m += (target.m - this.m) * e;
+      this.castA += (target.castA - this.castA) * e;
+      this.contactA += (target.contactA - this.contactA) * e;
+      this.selfA += (target.selfA - this.selfA) * e;
+      this.spread += (target.spread - this.spread) * e;
+      if (this.castA < 0.012) this.castA = 0;
+      this.contactMix = this.castA <= 0 ? 1 : 1 - 0.62 * clamp014((len - 0.6) / 1);
+    }
+    // =========================================================================
+    // ЗДАНИЕ. spr — то, что отдаёт sprites.building(): { cv, glow, sil, hFact }.
+    // dx/dy/dw/dh — тот самый прямоугольник, в который renderer кладёт спрайт.
+    // Вызывать ДО отрисовки самого здания.
+    // =========================================================================
+    building(ctx, spr, dx, dy, dw, dh) {
+      if (!this.on || !spr || !spr.sil) return;
+      const by = dy + dh;
+      if (this.castA > 0 && this.casts < this.maxCasts) {
+        const soft = this._softOf(spr.sil, dw, dh);
+        if (soft) {
+          this._cast(ctx, soft, dx, dy, dw, dh, by, this.castA);
+          this.casts++;
+        }
+      }
+      this._contact(ctx, dx + dw / 2, by, dw * 0.46, this.contactA * this.contactMix);
+    }
+    // Нарисованный арт (artpack): у него нет испечённого силуэта, зато есть сам
+    // спрайт с прозрачным фоном — силуэт из него печётся здесь же, один раз на
+    // картинку. Контактную тень арт уже несёт в себе (её требует промт), поэтому
+    // добавляется только вытянутая.
+    paintedBuilding(ctx, img, dx, dy, dw, dh) {
+      if (!this.on || this.castA <= 0 || !img) return;
+      if (this.casts >= this.maxCasts) return;
+      const soft = this._softOf(img, dw, dh);
+      if (!soft) return;
+      this._cast(ctx, soft, dx, dy, dw, dh, dy + dh, this.castA * 0.9);
+      this.casts++;
+    }
+    // Самозатенение. Вызывать ПОСЛЕ отрисовки здания: карта ложится поверх
+    // спрайта умножением и гасит грани, отвёрнутые от света.
+    selfShade(ctx, spr, dx, dy, dw, dh) {
+      if (!this.on || !this.self || !spr || !spr.sil) return;
+      const hf = spr.hFact || 0;
+      if (hf < SELF_MIN_H) return;
+      if (this.selfs >= this.maxSelf) return;
+      const band = clamp4(0.78 / hf, 0.32, 0.6);
+      const a = this._selfOf(spr.sil, dw, dh, band);
+      if (!a) return;
+      const mul = this._checkMul(ctx);
+      const prevOp = ctx.globalCompositeOperation;
+      if (mul) ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = mul ? this.selfA : this.selfA * 0.45;
+      ctx.drawImage(a.cv, dx, dy + dh * (1 - a.band), dw, dh * a.band);
+      ctx.globalAlpha = 1;
+      if (mul) ctx.globalCompositeOperation = prevOp;
+      this.selfs++;
+      this.drawn++;
+    }
+    // =========================================================================
+    // ЖИТЕЛЬ И ЖИВОТНОЕ. Фигура узкая и вертикальная: её тень — не силуэт, а
+    // мягкая вытянутая полоса, и печь на неё отдельные силуэты (16 кадров ×
+    // эпоха × профессия) было бы расточительством ради разницы в два пикселя.
+    //   sx  — центр по горизонтали, sy — точка опоры (ноги/лапы)
+    //   w/h — размер фигуры на экране
+    // =========================================================================
+    unit(ctx, sx, sy, w, h) {
+      if (!this.on) return;
+      if (this.castA > 0 && this.casts < this.maxCasts) {
+        const blob2 = this._blobCv();
+        const bw = w * 0.52, bh = h * 0.92;
+        this._cast(ctx, { cv: blob2, pad: 0 }, sx - bw / 2, sy - bh, bw, bh, sy, this.castA * 0.72, 1.25);
+        this.casts++;
+      }
+      if (this.unitContact) this._contact(ctx, sx, sy, w * 0.34, this.contactA * 0.9);
+    }
+    beast(ctx, sx, sy, w, h) {
+      if (!this.on) return;
+      if (this.castA > 0 && this.casts < this.maxCasts) {
+        const blob2 = this._blobCv();
+        const bw = w * 0.72, bh = h * 0.7;
+        this._cast(ctx, { cv: blob2, pad: 0 }, sx - bw / 2, sy - bh, bw, bh, sy, this.castA * 0.68, 1.2);
+        this.casts++;
+      }
+      if (this.unitContact) this._contact(ctx, sx, sy, w * 0.4, this.contactA * 0.9);
+    }
+    // Дерево, куст, реквизит. Тень кроны — то же мягкое пятно: крона и есть
+    // облако листвы, её тень не имеет чёткого края ни при каком солнце.
+    //   sx — центр, sy — комель, d — сторона спрайта на экране (vegetation
+    //   рисует растение как drawImage(cv, sx - d/2, sy - d*0.88, d, d)).
+    prop(ctx, sx, sy, d, k) {
+      if (!this.on || this.castA <= 0) return;
+      if (this.casts >= this.maxCasts) return;
+      const w = d * (k || 0.62), h = d * 0.78;
+      this._cast(ctx, { cv: this._blobCv(), pad: 0 }, sx - w / 2, sy - h, w, h, sy, this.castA * 0.78, 1.15);
+      this.casts++;
+    }
+    stats() {
+      return {
+        on: this.on,
+        sun: +this.sun.toFixed(2),
+        castA: +this.castA.toFixed(3),
+        k: +this.k.toFixed(2),
+        m: +this.m.toFixed(2),
+        spread: +this.spread.toFixed(2),
+        casts: this.casts,
+        selfs: this.selfs,
+        drawn: this.drawn,
+        cacheKB: Math.round(this._bytes / 1024)
+      };
+    }
+    // =========================================================================
+    // ВНУТРЕННЕЕ
+    // =========================================================================
+    // Базовая матрица кадра. Берётся лениво и один раз за кадр: renderer ставит
+    // её как (dpr,0,0,dpr,0,0), но между begin() и первой тенью он мог её
+    // поменять, а спрашивать getTransform на каждую тень — лишняя работа.
+    _base(ctx) {
+      if (this._mFrame === this.frame) return this._m;
+      this._mFrame = this.frame;
+      if (typeof ctx.getTransform !== "function") {
+        this._noMat = true;
+        this._m = null;
+        return null;
+      }
+      const m = ctx.getTransform();
+      this._m = [m.a, m.b, m.c, m.d, m.e, m.f];
+      return this._m;
+    }
+    _checkMul(ctx) {
+      if (this._mul === null) this._mul = supportsOp2(ctx, "multiply");
+      return this._mul;
+    }
+    _blobCv() {
+      if (!this._blob) this._blob = bakeBlob();
+      return this._blob;
+    }
+    // Мягкий силуэт спрайта. Ключ — сам холст силуэта: он живёт ровно столько,
+    // сколько живёт спрайт в SpriteCache, и WeakMap освобождает тень вместе с
+    // ним. Потолок памяти сторожится отдельно: превысили — кэш сбрасывается
+    // целиком (перепечь два десятка силуэтов дешевле, чем вести LRU-учёт по
+    // объектам, которые нельзя перечислить).
+    _softOf(src, dw, dh) {
+      if (!src) return null;
+      let s = this._soft.get(src);
+      if (s) return s;
+      const cap = Math.min(SHADOW_LIMITS.softMB, (this.q.caps && this.q.caps.spriteMB || 32) * 0.5) * 1048576;
+      if (this._bytes > cap) {
+        this._soft = /* @__PURE__ */ new WeakMap();
+        this._self = /* @__PURE__ */ new WeakMap();
+        this._bytes = 0;
+      }
+      const w = clamp4(Math.round(dw), 12, 256);
+      const h = clamp4(Math.round(dh), 12, 384);
+      s = bakeSoft(src, w, h, 1);
+      this._bytes += s.bytes;
+      this._soft.set(src, s);
+      return s;
+    }
+    _selfOf(src, dw, dh, band) {
+      if (!src) return null;
+      let s = this._self.get(src);
+      if (s) return s;
+      const w = clamp4(Math.round(dw), 12, 256);
+      const h = clamp4(Math.round(dh), 12, 384);
+      s = bakeSelfShade(src, w, h, band);
+      this._bytes += s.bytes;
+      this._self.set(src, s);
+      return s;
+    }
+    // Вытянутая тень: перекос вокруг линии «пола» by.
+    //
+    // Локальное преобразование S: u = x + k·(y − by), v = by + m·(y − by).
+    // Точка на уровне пола остаётся на месте, верхушка объекта уезжает вбок на
+    // k·h и поднимается к горизонту на m·h. Композиция с базовой матрицей M
+    // считается вручную: ctx.transform() умножал бы то же самое, но потребовал
+    // бы save/restore, а это две лишние операции со стеком состояний на объект.
+    _cast(ctx, soft, dx, dy, dw, dh, by, alpha, softMul) {
+      const M = this._base(ctx);
+      if (!M || alpha <= 0) return;
+      const k = this.k, m = this.m;
+      const M0 = M[0], M1 = M[1], M2 = M[2], M3 = M[3], M4 = M[4], M5 = M[5];
+      const e = -k * by, f = by * (1 - m);
+      const p = soft.pad * (1 + SPREAD_PAD * (this.spread - 1)) * (softMul || 1);
+      const rx = dx - dw * p, ry = dy - dh * p;
+      const rw = dw * (1 + 2 * p), rh = dh * (1 + 2 * p);
+      const mul = this._checkMul(ctx);
+      const prevOp = ctx.globalCompositeOperation;
+      if (mul) ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = mul ? alpha : alpha * 0.55;
+      ctx.setTransform(
+        M0,
+        M1,
+        M0 * k + M2 * m,
+        M1 * k + M3 * m,
+        M0 * e + M2 * f + M4,
+        M1 * e + M3 * f + M5
+      );
+      ctx.drawImage(soft.cv, rx, ry, rw, rh);
+      ctx.setTransform(M0, M1, M2, M3, M4, M5);
+      ctx.globalAlpha = 1;
+      if (mul) ctx.globalCompositeOperation = prevOp;
+      this.drawn++;
+    }
+    // Контактная тень: мягкий эллипс, прижатый к основанию. Он есть всегда,
+    // даже ночью и в дождь, — это не тень от солнца, а стык объекта с землёй.
+    _contact(ctx, cx, by, r, alpha) {
+      if (alpha <= 6e-3 || r < 2.5) return;
+      const blob2 = this._blobCv();
+      const rw = r * (1 + 0.16 * (this.spread - 1));
+      const rh = rw * 0.34;
+      const mul = this._checkMul(ctx);
+      const prevOp = ctx.globalCompositeOperation;
+      if (mul) ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = mul ? alpha : alpha * 0.55;
+      ctx.drawImage(blob2, cx - rw, by - rh, rw * 2, rh * 2);
+      ctx.globalAlpha = 1;
+      if (mul) ctx.globalCompositeOperation = prevOp;
+      this.drawn++;
+    }
+  };
+
   // app/src/render/fx.js
   var FX_LIMITS = {
     puff: 240,
@@ -11659,9 +13116,9 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp3 = (v, a, b) => v < a ? a : v > b ? b : v;
-  var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
-  function makeRnd4(seed) {
+  var clamp5 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
     return () => {
       s ^= s << 13;
@@ -11741,7 +13198,7 @@ ${s}`, "console");
       this.time = 0;
       this.night = 0;
       this.wind = -0.3;
-      this.rnd = makeRnd4(528734635);
+      this.rnd = makeRnd5(528734635);
       this.seeded = false;
       this.cw = 0;
       this.ch = 0;
@@ -11957,7 +13414,7 @@ ${s}`, "console");
     update(sim2, dt, ox, oy, z, cw, ch) {
       if (!sim2) return;
       if (!this.seeded) {
-        this.rnd = makeRnd4((sim2.world && sim2.world.seed) | 0 || 20250808);
+        this.rnd = makeRnd5((sim2.world && sim2.world.seed) | 0 || 20250808);
         this.seeded = true;
       }
       dt = Math.min(0.05, Math.max(0, dt || 0));
@@ -12046,7 +13503,7 @@ ${s}`, "console");
           this.em.splice(i, 1);
           continue;
         }
-        const k = clamp014(e.ttl / Math.max(1e-3, e.life));
+        const k = clamp015(e.ttl / Math.max(1e-3, e.life));
         switch (e.kind) {
           case "fire":
             this._tickFire(e, dt, dens);
@@ -12175,7 +13632,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp3(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp5(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -12277,7 +13734,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp3(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp5(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -12346,7 +13803,7 @@ ${s}`, "console");
         const top = this._roofY(b);
         const maxHp = def.wall || 100;
         if (b.hp != null && b.hp < maxHp * 0.6) {
-          const k = 1 - clamp014(b.hp / (maxHp * 0.6));
+          const k = 1 - clamp015(b.hp / (maxHp * 0.6));
           st.acc += (3 + 7 * k) * dens * dt;
           while (st.acc >= 1) {
             st.acc--;
@@ -12458,9 +13915,9 @@ ${s}`, "console");
       const cd = 0.7 * Math.max(1, Math.min(4, sim2.speed || 1));
       for (const r of RES) {
         const prev = this.prevRes[r.id] || 0;
-        const now = res[r.id] || 0;
-        const d = now - prev;
-        this.prevRes[r.id] = now;
+        const now2 = res[r.id] || 0;
+        const d = now2 - prev;
+        this.prevRes[r.id] = now2;
         const t = (this.resCd[r.id] || 0) - dt;
         this.resCd[r.id] = Math.max(0, t);
         if (Math.abs(d) < this.numMin || t > 0) continue;
@@ -12650,7 +14107,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp3(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp5(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -12734,7 +14191,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp3(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp5(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -12781,7 +14238,7 @@ ${s}`, "console");
   };
 
   // app/src/render/renderer.js
-  var TILE_PX2 = 32;
+  var TILE_PX3 = 32;
   var Renderer = class {
     constructor(canvas2) {
       this.canvas = canvas2;
@@ -12809,6 +14266,8 @@ ${s}`, "console");
       this.atmo = new Atmosphere(this.quality);
       this.water = new WaterLayer(this.quality);
       this.veg = new Vegetation(this.quality);
+      this.relief = new ReliefLayer(this.quality);
+      this.shadows = new ShadowLayer(this.quality);
       this.fx = new FxLayer(this.quality);
     }
     // id ∈ QUALITY_ORDER или 'auto'
@@ -12829,6 +14288,8 @@ ${s}`, "console");
       this.atmo.setQuality(this.quality);
       this.water.setQuality(this.quality);
       this.veg.setQuality(this.quality);
+      this.relief.setQuality(this.quality);
+      this.shadows.setQuality(this.quality);
       this.fx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
@@ -12842,14 +14303,14 @@ ${s}`, "console");
     }
     screenToWorld(sx, sy) {
       return {
-        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX2 * this.cam.zoom),
-        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX2 * this.cam.zoom)
+        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX3 * this.cam.zoom),
+        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX3 * this.cam.zoom)
       };
     }
     worldToScreen(wx, wy) {
       return {
-        x: (wx - this.cam.x) * TILE_PX2 * this.cam.zoom + this.canvas.width / this.dpr / 2,
-        y: (wy - this.cam.y) * TILE_PX2 * this.cam.zoom + this.canvas.height / this.dpr / 2
+        x: (wx - this.cam.x) * TILE_PX3 * this.cam.zoom + this.canvas.width / this.dpr / 2,
+        y: (wy - this.cam.y) * TILE_PX3 * this.cam.zoom + this.canvas.height / this.dpr / 2
       };
     }
     // ---------------------------------------------------------------------
@@ -12863,16 +14324,18 @@ ${s}`, "console");
       const L = lightAt(sim2.dayTime);
       ctx.fillStyle = L.sky;
       ctx.fillRect(0, 0, cw, ch);
-      const z = TILE_PX2 * this.cam.zoom;
+      const z = TILE_PX3 * this.cam.zoom;
       const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
       this.terrain.draw(ctx, sim2, ox, oy, z, cw, ch);
+      if (this.quality.richRelief) this.relief.draw(sim2, ctx, ox, oy, z, cw, ch, L);
       if (this.quality.richWater) this.water.draw(sim2, ctx, ox, oy, z, cw, ch, dtReal, L);
       else if (this.quality.water) this.terrain.drawWater(ctx, sim2, ox, oy, z, cw, ch, this.time);
       this.atmo.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.fx.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.veg.update(sim2, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
+      if (this.quality.richRelief) this.shadows.begin(sim2, dtReal, z, { fog: this.atmo.fogK });
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
-      this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
+      if (this.quality.richVeg) this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
       if (sim2.showTerritory) this.drawTerritory(sim2, ctx, ox, oy, z);
       for (const f of sim2.factions) {
@@ -12956,6 +14419,8 @@ ${s}`, "console");
         this.atmo.setQuality(this.quality);
         this.water.setQuality(this.quality);
         this.veg.setQuality(this.quality);
+        this.relief.setQuality(this.quality);
+        this.shadows.setQuality(this.quality);
         this.fx.setQuality(this.quality);
         this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
         this.resize();
@@ -13722,10 +15187,10 @@ ${s}`, "console");
           ctx.fill();
         }
       }
-      const vx = mx + (this.cam.x - this.canvas.width / this.dpr / 2 / (TILE_PX2 * this.cam.zoom)) * scale;
-      const vy = my + (this.cam.y - this.canvas.height / this.dpr / 2 / (TILE_PX2 * this.cam.zoom)) * scale;
-      const vw = this.canvas.width / this.dpr / (TILE_PX2 * this.cam.zoom) * scale;
-      const vh = this.canvas.height / this.dpr / (TILE_PX2 * this.cam.zoom) * scale;
+      const vx = mx + (this.cam.x - this.canvas.width / this.dpr / 2 / (TILE_PX3 * this.cam.zoom)) * scale;
+      const vy = my + (this.cam.y - this.canvas.height / this.dpr / 2 / (TILE_PX3 * this.cam.zoom)) * scale;
+      const vw = this.canvas.width / this.dpr / (TILE_PX3 * this.cam.zoom) * scale;
+      const vh = this.canvas.height / this.dpr / (TILE_PX3 * this.cam.zoom) * scale;
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
       ctx.strokeRect(vx, vy, vw, vh);
@@ -13801,7 +15266,7 @@ ${s}`, "console");
   var BUY_MARKUP = 1.25;
   var CARAVAN_PERIOD = 15;
   var HIST_LEN = 12;
-  var FLAT = 0.02;
+  var FLAT2 = 0.02;
   var RES_META = Object.fromEntries(RES.map((r) => [r.id, r]));
   function createMarketPanelState() {
     return { v: 1, hist: [] };
@@ -13833,7 +15298,7 @@ ${s}`, "console");
       base,
       ratio,
       pct: Math.round((ratio - 1) * 100),
-      dir: ratio > 1 + FLAT ? 1 : ratio < 1 - FLAT ? -1 : 0,
+      dir: ratio > 1 + FLAT2 ? 1 : ratio < 1 - FLAT2 ? -1 : 0,
       recent: 0,
       days: 0
     };
@@ -13843,7 +15308,7 @@ ${s}`, "console");
       const was = Number(first.p[resId]);
       if (was > 0) {
         const d = price / was - 1;
-        out.recent = d > FLAT ? 1 : d < -FLAT ? -1 : 0;
+        out.recent = d > FLAT2 ? 1 : d < -FLAT2 ? -1 : 0;
         out.days = Math.max(1, Math.floor(sim2.day || 0) - first.day);
       }
     }
@@ -14373,10 +15838,10 @@ ${out}`;
     // ---------- прирост ресурсов ----------
     tickRates() {
       const s = this.sim;
-      const now = s.day + s.dayTime;
-      if (this._rateSim !== s || now < this._rateAt) {
+      const now2 = s.day + s.dayTime;
+      if (this._rateSim !== s || now2 < this._rateAt) {
         this._rateSim = s;
-        this._rateAt = now;
+        this._rateAt = now2;
         this._rateAge = 0;
         this._rateEma = {};
         this._ratePrev = {};
@@ -14386,9 +15851,9 @@ ${out}`;
         }
         return;
       }
-      const dt = Math.min(0.5, now - this._rateAt);
+      const dt = Math.min(0.5, now2 - this._rateAt);
       if (dt <= 0) return;
-      this._rateAt = now;
+      this._rateAt = now2;
       this._rateAge += dt;
       for (const r of RES) {
         const v = s.res[r.id] || 0;
@@ -15846,16 +17311,16 @@ ${out}`;
       const sim2 = this.getSim();
       if (!sim2) return;
       if (sim2 !== this.sim) this.rebind(sim2);
-      const now = this.now();
-      this.scanLog(now);
-      if (this.mode === "teach") this.teach(now);
-      else this.remind(now);
+      const now2 = this.now();
+      this.scanLog(now2);
+      if (this.mode === "teach") this.teach(now2);
+      else this.remind(now2);
     }
     // События приходят строкой в журнал. Читаем только хвост и раз в полсекунды:
     // журнал обрезается по 120 записям, поэтому по индексам следить нельзя.
-    scanLog(now) {
-      if (now - this._logAt < 500) return;
-      this._logAt = now;
+    scanLog(now2) {
+      if (now2 - this._logAt < 500) return;
+      this._logAt = now2;
       const log = this.sim.log;
       for (let i = Math.max(0, log.length - 5); i < log.length; i++) {
         const l = log[i];
@@ -15868,9 +17333,9 @@ ${out}`;
       if (this._seenLog.size > 40) this._seenLog = new Set([...this._seenLog].slice(-20));
     }
     // ---------- обучение ----------
-    teach(now) {
+    teach(now2) {
       if (this._okUntil) {
-        if (now < this._okUntil) {
+        if (now2 < this._okUntil) {
           this.place(this._okTarget, true);
           return;
         }
@@ -15891,7 +17356,7 @@ ${out}`;
         this.doneIds.add(step.id);
         this.save();
         this.audio?.play("tech");
-        this._okUntil = now + 1300;
+        this._okUntil = now2 + 1300;
         this._okTarget = this.resolve(step);
         this.renderCard(step, true);
         return;
@@ -16003,9 +17468,9 @@ ${out}`;
       card.style.top = Math.round(Math.max(56, Math.min(innerHeight - h - pad, y))) + "px";
     }
     // ---------- напоминания ----------
-    remind(now) {
-      if (!this._skipped && now - this._resumeAt > RESUME_GAP) {
-        this._resumeAt = now;
+    remind(now2) {
+      if (!this._skipped && now2 - this._resumeAt > RESUME_GAP) {
+        this._resumeAt = now2;
         if (this.nextStep()) {
           this.mode = "teach";
           this.step = null;
@@ -16014,7 +17479,7 @@ ${out}`;
         }
       }
       if (this._flash) {
-        if (now > this._flash.until) {
+        if (now2 > this._flash.until) {
           this._flash = null;
           this.hide();
         } else {
@@ -16023,18 +17488,18 @@ ${out}`;
           else this.hide();
         }
       }
-      if (now < this._remindAt || now - this._lastRemind < REMIND_GAP) return;
+      if (now2 < this._remindAt || now2 - this._lastRemind < REMIND_GAP) return;
       if (modalOpen() || this.sim.placing || this.sim.paused) return;
       for (const rule of REMINDERS) {
         const r = this.safe(() => rule.test(this), null);
         if (!r) continue;
         const key = r.key || rule.id;
         const last2 = this._remindLog.get(key);
-        if (last2 !== void 0 && now - last2 < REMIND_REPEAT) continue;
-        this._remindLog.set(key, now);
-        this._lastRemind = now;
+        if (last2 !== void 0 && now2 - last2 < REMIND_REPEAT) continue;
+        this._remindLog.set(key, now2);
+        this._lastRemind = now2;
         this.hud.toast(r.text, r.type || "info");
-        if (r.target) this._flash = { sel: r.target, until: now + 4500 };
+        if (r.target) this._flash = { sel: r.target, until: now2 + 4500 };
         return;
       }
     }
@@ -16485,10 +17950,10 @@ ${out}`;
     // ------------------------------------------------------------- эффекты ----
     play(name, opts) {
       if (!this.ctx || !this.enabled || !name) return;
-      const now = this.ctx.currentTime;
+      const now2 = this.ctx.currentTime;
       const gap = name === "click" ? 0.03 : 0.06;
-      if (this._last[name] !== void 0 && now - this._last[name] < gap) return;
-      this._last[name] = now;
+      if (this._last[name] !== void 0 && now2 - this._last[name] < gap) return;
+      this._last[name] = now2;
       this._pollFast();
       const era = this.world.eraIndex;
       switch (name) {
@@ -16814,8 +18279,8 @@ ${out}`;
     // Включается только если встроенного трека нет — спорить с ним не нужно.
     _musicTick() {
       if (!this.ctx || !this.musicEnabled || this.musicEl) return;
-      const now = this.ctx.currentTime;
-      if (now < this._musicNext) return;
+      const now2 = this.ctx.currentTime;
+      if (now2 < this._musicNext) return;
       const era = Math.min(9, this.world.eraIndex);
       const sc = ERA_SCALE[era], type = ERA_TIMBRE[era];
       const night = this._phase() === "night";
@@ -16830,7 +18295,7 @@ ${out}`;
         const d2 = (deg + 2) % sc.length;
         this._pluck(midi(root + 24 + sc[d2]), 1.2, 0.03, 1.6, "sine", bus);
       }
-      this._musicNext = now + dur * 0.75;
+      this._musicNext = now2 + dur * 0.75;
     }
     // ------------------------------------------------------------------ тик --
     _startTick() {
@@ -17184,9 +18649,9 @@ ${out}`;
   document.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
   var last = performance.now();
   var hudTimer = 0;
-  function frame(now) {
-    const dtReal = Math.min(0.1, (now - last) / 1e3);
-    last = now;
+  function frame(now2) {
+    const dtReal = Math.min(0.1, (now2 - last) / 1e3);
+    last = now2;
     const camSpeed = 30 * dtReal / renderer.cam.zoom;
     if (keys.has("w") || keys.has("arrowup")) renderer.cam.y -= camSpeed;
     if (keys.has("s") || keys.has("arrowdown")) renderer.cam.y += camSpeed;
