@@ -2237,12 +2237,12 @@
     }
     const day = ctx.day || 0;
     if (day % BUILD_CHECK !== 0) return;
-    const pick = chooseBuilding(c, f, ctx, rng);
-    if (!pick) return;
-    const def = BUILDINGS[pick];
+    const pick2 = chooseBuilding(c, f, ctx, rng);
+    if (!pick2) return;
+    const def = BUILDINGS[pick2];
     for (const k of Object.keys(def.cost || {})) c.res[k] -= def.cost[k];
     const days = Math.round(costWeight(def.cost || {}) / BUILD_RATE / (bonus(f).build || 1));
-    c.site = { id: pick, daysLeft: Math.max(BUILD_MIN_DAYS, Math.min(BUILD_MAX_DAYS, days)) };
+    c.site = { id: pick2, daysLeft: Math.max(BUILD_MIN_DAYS, Math.min(BUILD_MAX_DAYS, days)) };
   }
   function chooseBuilding(c, f, ctx, rng) {
     const tr = c.tr, known = new Set(c.techs);
@@ -8411,6 +8411,8 @@ ${s}`, "console");
     eco: preset({
       id: "eco",
       ru: "Экономия",
+      richWater: false,
+      // богатая вода: см. замер в renderer.draw
       tilePx: 16,
       tilePxFar: 8,
       dprCap: 1,
@@ -8468,6 +8470,8 @@ ${s}`, "console");
     medium: preset({
       id: "medium",
       ru: "Средне",
+      richWater: false,
+      // богатая вода: см. замер в renderer.draw
       tilePx: 24,
       tilePxFar: 12,
       dprCap: 1.5,
@@ -8522,6 +8526,8 @@ ${s}`, "console");
     high: preset({
       id: "high",
       ru: "Высоко",
+      richWater: false,
+      // богатая вода: см. замер в renderer.draw
       tilePx: 32,
       tilePxFar: 16,
       dprCap: 2,
@@ -8587,6 +8593,8 @@ ${s}`, "console");
     ultra: preset({
       id: "ultra",
       ru: "Ультра",
+      richWater: true,
+      // богатая вода: см. замер в renderer.draw
       tilePx: 32,
       tilePxFar: 16,
       dprCap: 2,
@@ -8639,6 +8647,34 @@ ${s}`, "console");
       budget: { frameMs: 16.6, farFrameMs: 16 }
     })
   };
+  function touch(map, key) {
+    if (!map.has(key)) return;
+    const v = map.get(key);
+    map.delete(key);
+    map.set(key, v);
+  }
+  function prune(map, { maxEntries = Infinity, maxBytes = Infinity, bytesOf = null } = {}) {
+    let dropped = 0;
+    while (map.size > maxEntries) {
+      const k = map.keys().next().value;
+      map.delete(k);
+      dropped++;
+    }
+    if (bytesOf && maxBytes < Infinity) {
+      let total = 0;
+      for (const v of map.values()) total += bytesOf(v) || 0;
+      while (total > maxBytes && map.size > 1) {
+        const k = map.keys().next().value;
+        total -= bytesOf(map.get(k)) || 0;
+        map.delete(k);
+        dropped++;
+      }
+    }
+    return dropped;
+  }
+  function canvasBytes(cv) {
+    return cv && cv.width ? cv.width * cv.height * 4 : 0;
+  }
   var LS_KEY = "frontier_quality";
   function loadQualityId() {
     try {
@@ -9325,6 +9361,2201 @@ ${s}`, "console");
     }
   };
 
+  // app/src/render/water.js
+  var BLK = 8;
+  var SUBRES = { eco: 0, medium: 4, high: 6, ultra: 8 };
+  var WAVE_TEX = 128;
+  var SURF_CAP = 65e3;
+  var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  var lerp3 = (a, b, k) => a + (b - a) * k;
+  var smooth2 = (k) => k <= 0 ? 0 : k >= 1 ? 1 : k * k * (3 - 2 * k);
+  function makeRnd2(seed) {
+    let s = seed | 0 || 1831565813;
+    return () => {
+      s ^= s << 13;
+      s |= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      s |= 0;
+      return (s >>> 0) / 4294967296;
+    };
+  }
+  function isWet(t) {
+    return t === TILE.WATER || t === TILE.DEEP;
+  }
+  function chamfer(W, H, zero) {
+    const D = new Float32Array(W * H);
+    const BIG = 1e6;
+    for (let i = 0; i < W * H; i++) D[i] = zero[i] ? 0 : BIG;
+    const d1 = 1, d2 = 1.4142;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        let d = D[i];
+        if (d === 0) continue;
+        if (x > 0 && D[i - 1] + d1 < d) d = D[i - 1] + d1;
+        if (y > 0 && D[i - W] + d1 < d) d = D[i - W] + d1;
+        if (x > 0 && y > 0 && D[i - W - 1] + d2 < d) d = D[i - W - 1] + d2;
+        if (x < W - 1 && y > 0 && D[i - W + 1] + d2 < d) d = D[i - W + 1] + d2;
+        D[i] = d;
+      }
+    }
+    for (let y = H - 1; y >= 0; y--) {
+      for (let x = W - 1; x >= 0; x--) {
+        const i = y * W + x;
+        let d = D[i];
+        if (d === 0) continue;
+        if (x < W - 1 && D[i + 1] + d1 < d) d = D[i + 1] + d1;
+        if (y < H - 1 && D[i + W] + d1 < d) d = D[i + W] + d1;
+        if (x < W - 1 && y < H - 1 && D[i + W + 1] + d2 < d) d = D[i + W + 1] + d2;
+        if (x > 0 && y < H - 1 && D[i + W - 1] + d2 < d) d = D[i + W - 1] + d2;
+        D[i] = d;
+      }
+    }
+    return D;
+  }
+  var WaterLayer = class {
+    constructor(quality) {
+      this.q = quality;
+      this.off = !quality || !quality.water;
+      this.time = 0;
+      this.rain = 0;
+      this.freeze = 0;
+      this.seed = 0;
+      this.W = 0;
+      this.H = 0;
+      this.sd = null;
+      this.gx = null;
+      this.gy = null;
+      this.fx = null;
+      this.fy = null;
+      this.deepK = null;
+      this.blocks = null;
+      this.bw = 0;
+      this.bh = 0;
+      this.fieldSeed = null;
+      this.hasFlow = false;
+      this.S = 0;
+      this.base = null;
+      this.foamA = null;
+      this.foamB = null;
+      this.ice = null;
+      this.bakeKey = null;
+      this.iceKey = null;
+      this._sc = null;
+      this._scx = null;
+      this._mx = null;
+      this._mxx = null;
+      this._wave = null;
+      this._chop = null;
+      this._drops = null;
+      this._patW = null;
+      this._patC = null;
+      this._patD = null;
+      this._spans = [];
+      this._nSpans = 0;
+      this.waveDir = [1, 4];
+      this.spriteFor = null;
+    }
+    setQuality(q) {
+      this.q = q;
+      this.off = !q || !q.water;
+      if (this.S !== (SUBRES[q && q.id] || 0)) this.invalidate();
+    }
+    // Сбросить всё испечённое (смена мира, сезона, пресета).
+    invalidate() {
+      this.base = null;
+      this.foamA = null;
+      this.foamB = null;
+      this.ice = null;
+      this.bakeKey = null;
+      this.iceKey = null;
+      this._sc = null;
+      this._scx = null;
+      this._mx = null;
+      this._mxx = null;
+      this._patW = null;
+      this._patC = null;
+      this._patD = null;
+    }
+    // =========================================================================
+    // ГЛАВНЫЙ ВХОД
+    // =========================================================================
+    draw(sim2, ctx, ox, oy, z, cw, ch, dt, L) {
+      const step = Math.min(0.05, Math.max(0, dt || 0));
+      this.time += step;
+      this._trackWeather(sim2, step);
+      if (this.off || typeof document === "undefined") return;
+      if (!sim2 || !sim2.world) return;
+      this.ensure(sim2);
+      if (!this.base) return;
+      const light = L || lightAt(sim2.dayTime);
+      const n = this._collectSpans(ox, oy, z, cw, ch);
+      if (!n) return;
+      const S = this.S;
+      const zoom = z / 32;
+      const smoothBlit = zoom >= 1.2;
+      const prevSmooth = ctx.imageSmoothingEnabled;
+      ctx.imageSmoothingEnabled = smoothBlit;
+      this._blit(ctx, this.base, ox, oy, z, S, 1);
+      const lod = this.q.lod || {};
+      const animate = zoom >= (lod.waterMinZoom || 0.45) && this.freeze < 0.92;
+      if (animate) this._surface(sim2, ctx, ox, oy, z, light);
+      if (this.q.shoreFoam && zoom >= (lod.foamMinZoom || 0.55) && this.freeze < 0.8) {
+        const k = 0.5 + 0.5 * Math.sin(this.time * 0.85);
+        const amp = (1 - this.freeze) * (0.72 + 0.34 * this.rain);
+        this._blit(ctx, this.foamA, ox, oy, z, S, amp * k);
+        this._blit(ctx, this.foamB, ox, oy, z, S, amp * (1 - k));
+      }
+      if (this.freeze > 0.01 && this.ice) this._blit(ctx, this.ice, ox, oy, z, S, this.freeze);
+      ctx.imageSmoothingEnabled = prevSmooth;
+    }
+    // Дождь набирается быстро, спадает медленно; лёд — по дню внутри зимы.
+    _trackWeather(sim2, dt) {
+      if (!sim2) return;
+      const wet = sim2.weather === "rain" ? 1 : 0;
+      this.rain = clamp012(this.rain + Math.max(-dt / 6, Math.min(dt / 2, wet - this.rain)));
+      let f = 0;
+      if (sim2.seasonIdx === 3) {
+        const d = ((sim2.day | 0) % DAYS_PER_SEASON + DAYS_PER_SEASON) % DAYS_PER_SEASON;
+        f = clamp012((d - 2) / 6) * clamp012((DAYS_PER_SEASON - 2 - d) / 4);
+        if (sim2.weather === "snow") f = Math.min(1, f * 1.12);
+      }
+      this.freeze += (f - this.freeze) * Math.min(1, dt * 0.5);
+      if (this.freeze < 4e-3) this.freeze = 0;
+    }
+    // =========================================================================
+    // ПОДГОТОВКА
+    // =========================================================================
+    ensure(sim2) {
+      const world = sim2.world;
+      if (this.fieldSeed !== world.seed || this.W !== world.w || this.H !== world.h) {
+        this._buildField(world);
+        this.fieldSeed = world.seed;
+        this.bakeKey = null;
+        this.iceKey = null;
+      }
+      const S = SUBRES[this.q.id] || 0;
+      if (!S) {
+        this.off = true;
+        return;
+      }
+      const key = `${S}|${sim2.seasonIdx}|${this.q.detail}`;
+      if (key !== this.bakeKey) {
+        this.S = S;
+        this._bake(sim2);
+        this.bakeKey = key;
+        this.ice = null;
+        this.iceKey = null;
+        this._sc = null;
+        this._mx = null;
+      }
+      if (this.freeze > 0.01 && this.iceKey !== key) {
+        this._bakeIce(sim2);
+        this.iceKey = key;
+      }
+    }
+    // ---- поле: знаковое расстояние, нормаль кромки, течение --------------
+    _buildField(world) {
+      const W = world.w, H = world.h, N = W * H;
+      this.W = W;
+      this.H = H;
+      this.seed = world.seed | 0 || 12345;
+      const wet = new Uint8Array(N), dry = new Uint8Array(N);
+      for (let i = 0; i < N; i++) {
+        const w = isWet(world.tiles[i]) ? 1 : 0;
+        wet[i] = w;
+        dry[i] = w ^ 1;
+      }
+      const toLand = chamfer(W, H, dry);
+      const toWater = chamfer(W, H, wet);
+      const sd = new Float32Array(N);
+      for (let i = 0; i < N; i++) sd[i] = wet[i] ? toLand[i] - 0.5 : -(toWater[i] - 0.5);
+      this.sd = sd;
+      const deep = new Float32Array(N);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          let s = 0, n = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+            s += world.tiles[yy * W + xx] === TILE.DEEP ? 1 : 0;
+            n++;
+          }
+          deep[y * W + x] = n ? s / n : 0;
+        }
+      }
+      this.deepK = deep;
+      const gx = new Float32Array(N), gy = new Float32Array(N);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const l = sd[y * W + Math.max(0, x - 1)], r = sd[y * W + Math.min(W - 1, x + 1)];
+          const u = sd[Math.max(0, y - 1) * W + x], d = sd[Math.min(H - 1, y + 1) * W + x];
+          let ax = (r - l) * 0.5, ay = (d - u) * 0.5;
+          const len = Math.hypot(ax, ay);
+          if (len > 1e-4) {
+            ax /= len;
+            ay /= len;
+          } else {
+            ax = 0;
+            ay = 0;
+          }
+          gx[i] = ax;
+          gy[i] = ay;
+        }
+      }
+      this.gx = gx;
+      this.gy = gy;
+      this._buildFlow(world);
+      this._buildBlocks(wet);
+    }
+    // ---- течение ----------------------------------------------------------
+    // Река отличается от озера не цветом, а тем, что она УЗКАЯ И ДЛИННАЯ:
+    // sd вдоль всего русла остаётся маленьким. Направление русла — это
+    // направление, вдоль которого поле расстояния меняется меньше всего, то есть
+    // собственный вектор наименьшего собственного числа структурного тензора
+    // градиента. Знак («куда течёт») решается эвристикой: реки уходят к морю,
+    // а море в этой генерации — по краю карты, значит от центра наружу.
+    _buildFlow(world) {
+      const W = this.W, H = this.H, N = W * H;
+      const sd = this.sd, gx = this.gx, gy = this.gy;
+      const fx = new Float32Array(N), fy = new Float32Array(N);
+      const cx = W * 0.5, cy = H * 0.5;
+      const river = world.river || null;
+      let any = false;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          if (sd[i] <= 0) continue;
+          const narrow = clamp012((3 - sd[i]) / 2.2);
+          if (narrow <= 0.02 && !(river && river[i])) continue;
+          let a = 0, b = 0, c = 0;
+          for (let dy = -2; dy <= 2; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= H) continue;
+            for (let dx = -2; dx <= 2; dx++) {
+              const xx = x + dx;
+              if (xx < 0 || xx >= W) continue;
+              const j = yy * W + xx;
+              if (sd[j] <= -0.6) continue;
+              const wgt = 1 / (1 + dx * dx + dy * dy);
+              a += gx[j] * gx[j] * wgt;
+              b += gx[j] * gy[j] * wgt;
+              c += gy[j] * gy[j] * wgt;
+            }
+          }
+          const tr = a + c, det = Math.sqrt(Math.max(0, (a - c) * (a - c) + 4 * b * b));
+          const lo = (tr - det) * 0.5;
+          let vx = b, vy = lo - a;
+          if (Math.hypot(vx, vy) < 1e-4) {
+            vx = lo - c;
+            vy = b;
+          }
+          const vl = Math.hypot(vx, vy);
+          if (vl < 1e-4) continue;
+          vx /= vl;
+          vy /= vl;
+          let ox = x + 0.5 - cx, oy = y + 0.5 - cy;
+          const ol = Math.hypot(ox, oy) || 1;
+          ox /= ol;
+          oy /= ol;
+          let dot = vx * ox + vy * oy;
+          if (Math.abs(dot) < 0.12) dot = vx !== 0 ? vx : vy;
+          if (dot < 0) {
+            vx = -vx;
+            vy = -vy;
+          }
+          const strength = river && river[i] ? Math.max(0.55, narrow) : narrow * 0.85;
+          fx[i] = vx * strength;
+          fy[i] = vy * strength;
+          if (strength > 0.15) any = true;
+        }
+      }
+      const sx = new Float32Array(N), sy = new Float32Array(N);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          if (!fx[i] && !fy[i]) continue;
+          let ax = 0, ay = 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= H) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const xx = x + dx;
+              if (xx < 0 || xx >= W) continue;
+              const j = yy * W + xx;
+              if (!fx[j] && !fy[j]) continue;
+              const s = fx[j] * fx[i] + fy[j] * fy[i] < 0 ? -1 : 1;
+              ax += fx[j] * s;
+              ay += fy[j] * s;
+            }
+          }
+          const l = Math.hypot(ax, ay);
+          if (l > 1e-4) {
+            const m = Math.hypot(fx[i], fy[i]);
+            sx[i] = ax / l * m;
+            sy[i] = ay / l * m;
+          }
+        }
+      }
+      this.fx = sx;
+      this.fy = sy;
+      this.hasFlow = any;
+    }
+    // ---- индекс блоков: где вода вообще есть ------------------------------
+    _buildBlocks(wet) {
+      const W = this.W, H = this.H;
+      const bw = Math.ceil(W / BLK), bh = Math.ceil(H / BLK);
+      const b = new Uint8Array(bw * bh);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          if (!wet[y * W + x]) continue;
+          b[(y / BLK | 0) * bw + (x / BLK | 0)] = 1;
+        }
+      }
+      const g = new Uint8Array(bw * bh);
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) {
+          if (!b[y * bw + x]) continue;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= bw || yy >= bh) continue;
+            g[yy * bw + xx] = 1;
+          }
+        }
+      }
+      this.blocks = g;
+      this.bw = bw;
+      this.bh = bh;
+    }
+    // =========================================================================
+    // ВЫПЕЧКА
+    // =========================================================================
+    _bake(sim2) {
+      if (typeof document === "undefined") return;
+      const W = this.W, H = this.H, S = this.S;
+      const mw = W * S, mh = H * S;
+      const pal = TERRAIN[sim2.seasonIdx] || TERRAIN[0];
+      const wCol = hex2rgb(pal[TILE.WATER].base);
+      const dCol = hex2rgb(pal[TILE.DEEP].base);
+      const sCol = hex2rgb(pal[TILE.SAND].base);
+      const shallow = [
+        lerp3(wCol[0], sCol[0], 0.46),
+        lerp3(wCol[1], sCol[1], 0.42),
+        lerp3(wCol[2], sCol[2], 0.3)
+      ];
+      const midC = [wCol[0] * 0.96, wCol[1] * 0.97, wCol[2] * 1];
+      const deepC = [dCol[0] * 0.88, dCol[1] * 0.9, dCol[2] * 0.96];
+      const wetSand = [sCol[0] * 0.62, sCol[1] * 0.6, sCol[2] * 0.58];
+      const gw = W * 2 + 1, gh = H * 2 + 1;
+      const wob = new Float32Array(gw * gh);
+      const so = this.seed % 997 * 0.37;
+      for (let y = 0; y < gh; y++) {
+        for (let x = 0; x < gw; x++) {
+          const wx = x * 0.5 + so, wy = y * 0.5 + so;
+          wob[y * gw + x] = (fbm2(wx * 0.9, wy * 0.9) - 0.5) * 1.25 + (fbm2(wx * 3.1 + 40, wy * 3.1 + 40) - 0.5) * 0.75;
+        }
+      }
+      const base = document.createElement("canvas");
+      base.width = mw;
+      base.height = mh;
+      const foamA = document.createElement("canvas");
+      foamA.width = mw;
+      foamA.height = mh;
+      const foamB = document.createElement("canvas");
+      foamB.width = mw;
+      foamB.height = mh;
+      const bc = base.getContext("2d"), fa = foamA.getContext("2d"), fb = foamB.getContext("2d");
+      const iBase = bc.createImageData(mw, mh);
+      const iA = fa.createImageData(mw, mh);
+      const iB = fb.createImageData(mw, mh);
+      const pB = iBase.data, pA = iA.data, pC = iB.data;
+      const inv = 1 / S;
+      const SUNX = 0.7071, SUNY = 0.7071;
+      const detail = this.q.detail;
+      for (let py = 0; py < mh; py++) {
+        const wy = (py + 0.5) * inv;
+        for (let px = 0; px < mw; px++) {
+          const wx = (px + 0.5) * inv;
+          const o = (py * mw + px) * 4;
+          const d0 = this._sample(this.sd, wx, wy);
+          if (d0 < -1.4) continue;
+          const wb = this._grid(wob, gw, gh, wx * 2, wy * 2);
+          const d = d0 + wb * 0.34;
+          if (d < 0) {
+            const k = smooth2(1 + d / 0.42);
+            if (k > 0.01) {
+              pB[o] = wetSand[0];
+              pB[o + 1] = wetSand[1];
+              pB[o + 2] = wetSand[2];
+              pB[o + 3] = k * 88;
+            }
+            continue;
+          }
+          const dp = this._sample(this.deepK, wx, wy);
+          const shelf = smooth2(d / 1.15);
+          const abyss = smooth2((d - 1.6) / 3.4) * 0.62 + dp * 0.38;
+          let r = lerp3(shallow[0], midC[0], shelf);
+          let g = lerp3(shallow[1], midC[1], shelf);
+          let b = lerp3(shallow[2], midC[2], shelf);
+          r = lerp3(r, deepC[0], abyss);
+          g = lerp3(g, deepC[1], abyss);
+          b = lerp3(b, deepC[2], abyss);
+          if (detail >= 1 && shelf < 0.85) {
+            const bot = this._grid(wob, gw, gh, wx * 2 + 13, wy * 2 + 7) * 0.5 + 0.5;
+            const k = (1 - shelf) * 0.2 * bot;
+            r = lerp3(r, sCol[0], k);
+            g = lerp3(g, sCol[1], k);
+            b = lerp3(b, sCol[2], k);
+          }
+          if (d < 1.6) {
+            const nx = this._sample(this.gx, wx, wy), ny = this._sample(this.gy, wx, wy);
+            const face = nx * SUNX + ny * SUNY;
+            if (face > 0) {
+              const sh = face * (1 - smooth2(d / 1.6)) * 0.34;
+              r *= 1 - sh;
+              g *= 1 - sh;
+              b *= 1 - sh * 0.86;
+            }
+          }
+          const edge = clamp012(d / (0.9 * inv + 1e-3));
+          const alpha = (0.6 + 0.4 * smooth2(d / 1)) * Math.min(1, edge);
+          pB[o] = r;
+          pB[o + 1] = g;
+          pB[o + 2] = b;
+          pB[o + 3] = alpha * 255;
+          if (d < 1.25) {
+            const scal = this._grid(wob, gw, gh, wx * 2 + 61, wy * 2 + 29);
+            const aA = foamBand(d, 0.1 + scal * 0.1, 0.3);
+            const aB = foamBand(d, 0.34 + scal * 0.16, 0.4);
+            if (aA > 0.01) {
+              pA[o] = 236;
+              pA[o + 1] = 246;
+              pA[o + 2] = 255;
+              pA[o + 3] = aA * 210;
+            }
+            if (aB > 0.01) {
+              pC[o] = 226;
+              pC[o + 1] = 240;
+              pC[o + 2] = 252;
+              pC[o + 3] = aB * 170;
+            }
+          }
+        }
+      }
+      bc.putImageData(iBase, 0, 0);
+      fa.putImageData(iA, 0, 0);
+      fb.putImageData(iB, 0, 0);
+      this.base = base;
+      this.foamA = foamA;
+      this.foamB = foamB;
+      const dirs = [[1, 4], [2, 5], [-1, 4], [-2, 5], [1, 3], [-1, 3]];
+      this.waveDir = dirs[(this.seed >>> 3) % dirs.length];
+      this._wave = null;
+      this._chop = null;
+      this._drops = null;
+      this._patW = null;
+      this._patC = null;
+      this._patD = null;
+    }
+    // ---- лёд --------------------------------------------------------------
+    _bakeIce(sim2) {
+      if (typeof document === "undefined" || !this.base) return;
+      const W = this.W, H = this.H, S = this.S;
+      const mw = W * S, mh = H * S;
+      const cv = document.createElement("canvas");
+      cv.width = mw;
+      cv.height = mh;
+      const c = cv.getContext("2d");
+      const img = c.createImageData(mw, mh);
+      const p = img.data;
+      const gw = W * 2 + 1, gh = H * 2 + 1;
+      const inv = 1 / S;
+      const rnd = makeRnd2(this.seed ^ 462);
+      for (let py = 0; py < mh; py++) {
+        const wy = (py + 0.5) * inv;
+        for (let px = 0; px < mw; px++) {
+          const wx = (px + 0.5) * inv;
+          const d = this._sample(this.sd, wx, wy);
+          if (d < 0.02) continue;
+          const o = (py * mw + px) * 4;
+          const n = fbm2(wx * 1.3 + 300, wy * 1.3 + 300);
+          const open = clamp012((d - 3.2) / 3) * clamp012((n - 0.42) * 4.5);
+          const near = 1 - smooth2((d - 0.3) / 4);
+          const r = lerp3(176, 226, near), g = lerp3(200, 238, near), b = lerp3(216, 246, near);
+          const a = (0.86 - open * 0.8) * Math.min(1, d / (0.7 * inv + 1e-3));
+          if (a <= 0.01) continue;
+          const gr = 0.94 + fbm2(wx * 5.5 + 90, wy * 5.5 + 90) * 0.12;
+          p[o] = r * gr;
+          p[o + 1] = g * gr;
+          p[o + 2] = b * gr;
+          p[o + 3] = a * 255;
+        }
+      }
+      c.putImageData(img, 0, 0);
+      c.save();
+      c.globalCompositeOperation = "source-atop";
+      c.lineCap = "round";
+      const tries = Math.round(W * H / 90);
+      for (let t = 0; t < tries; t++) {
+        let x = rnd() * W, y = rnd() * H;
+        if (this._sample(this.sd, x, y) < 1.2) continue;
+        let ang = rnd() * 6.283;
+        const segs = 3 + (rnd() * 5 | 0);
+        c.strokeStyle = `rgba(250,253,255,${0.2 + rnd() * 0.24})`;
+        c.lineWidth = Math.max(1, S * (0.05 + rnd() * 0.06));
+        c.beginPath();
+        c.moveTo(x * S, y * S);
+        for (let i = 0; i < segs; i++) {
+          ang += (rnd() - 0.5) * 1.1;
+          const len = 0.7 + rnd() * 1.8;
+          x += Math.cos(ang) * len;
+          y += Math.sin(ang) * len;
+          c.lineTo(x * S, y * S);
+        }
+        c.stroke();
+        c.strokeStyle = "rgba(96,130,160,0.20)";
+        c.lineWidth = Math.max(1, S * 0.04);
+        c.stroke();
+      }
+      c.restore();
+      this.ice = cv;
+    }
+    // =========================================================================
+    // КАДР
+    // =========================================================================
+    // Полосы блоков с водой в видимом прямоугольнике. Одна полоса на ряд
+    // блоков — это максимум 12 блитов на слой вместо 144 и без единого
+    // полноэкранного прохода там, где воды нет.
+    _collectSpans(ox, oy, z, cw, ch) {
+      const W = this.W, H = this.H;
+      const tx0 = Math.max(0, Math.floor(-ox / z) - 1);
+      const tx1 = Math.min(W - 1, Math.ceil((cw - ox) / z) + 1);
+      const ty0 = Math.max(0, Math.floor(-oy / z) - 1);
+      const ty1 = Math.min(H - 1, Math.ceil((ch - oy) / z) + 1);
+      this._nSpans = 0;
+      if (tx1 < tx0 || ty1 < ty0) return 0;
+      const b0x = tx0 / BLK | 0, b1x = tx1 / BLK | 0;
+      const b0y = ty0 / BLK | 0, b1y = ty1 / BLK | 0;
+      let n = 0;
+      for (let by = b0y; by <= b1y; by++) {
+        let lo = -1, hi = -1;
+        for (let bx = b0x; bx <= b1x; bx++) {
+          if (!this.blocks[by * this.bw + bx]) continue;
+          if (lo < 0) lo = bx;
+          hi = bx;
+        }
+        if (lo < 0) continue;
+        const s = this._spans[n] || (this._spans[n] = { x0: 0, y0: 0, x1: 0, y1: 0 });
+        s.x0 = Math.max(tx0, lo * BLK);
+        s.x1 = Math.min(tx1, (hi + 1) * BLK - 1);
+        s.y0 = Math.max(ty0, by * BLK);
+        s.y1 = Math.min(ty1, (by + 1) * BLK - 1);
+        n++;
+      }
+      this._nSpans = n;
+      return n;
+    }
+    // Блит полос из карты воды на экран. Границы округляются к целым: соседние
+    // полосы делят один и тот же край, поэтому между ними нет ни щели, ни
+    // двойного наложения полупрозрачной воды.
+    _blit(ctx, src, ox, oy, z, S, alpha) {
+      if (!src || alpha <= 4e-3) return;
+      const prev = ctx.globalAlpha;
+      ctx.globalAlpha = prev * Math.min(1, alpha);
+      for (let i = 0; i < this._nSpans; i++) {
+        const s = this._spans[i];
+        const dx = Math.round(ox + s.x0 * z), dx2 = Math.round(ox + (s.x1 + 1) * z);
+        const dy = Math.round(oy + s.y0 * z), dy2 = Math.round(oy + (s.y1 + 1) * z);
+        if (dx2 <= dx || dy2 <= dy) continue;
+        ctx.drawImage(
+          src,
+          s.x0 * S,
+          s.y0 * S,
+          (s.x1 + 1 - s.x0) * S,
+          (s.y1 + 1 - s.y0) * S,
+          dx,
+          dy,
+          dx2 - dx,
+          dy2 - dy
+        );
+      }
+      ctx.globalAlpha = prev;
+    }
+    // ---- поверхность: небо, гребни, дождь, отражения, течение -------------
+    _surface(sim2, ctx, ox, oy, z, L) {
+      const S = this.S;
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      for (let i = 0; i < this._nSpans; i++) {
+        const s2 = this._spans[i];
+        if (s2.x0 < x0) x0 = s2.x0;
+        if (s2.y0 < y0) y0 = s2.y0;
+        if (s2.x1 > x1) x1 = s2.x1;
+        if (s2.y1 > y1) y1 = s2.y1;
+      }
+      const rx = x0 * S, ry = y0 * S, rw = (x1 + 1 - x0) * S, rh = (y1 + 1 - y0) * S;
+      if (rw <= 0 || rh <= 0) return;
+      if (rw * rh > SURF_CAP) return;
+      const sc = this._scratch();
+      if (!sc) return;
+      const s = this._scx;
+      s.save();
+      s.beginPath();
+      s.rect(rx, ry, rw, rh);
+      s.clip();
+      s.clearRect(rx, ry, rw, rh);
+      const night = clamp012((1 - L.mul) / 0.58);
+      const sky = hex2rgb(L.sky);
+      s.globalCompositeOperation = "source-over";
+      s.globalAlpha = 0.3 + 0.16 * (1 - night);
+      s.fillStyle = `rgb(${sky[0] | 0},${sky[1] | 0},${sky[2] | 0})`;
+      s.fillRect(rx, ry, rw, rh);
+      this._reflections(sim2, s, rx, ry, rw, rh, L);
+      this._crests(s, rx, ry, rw, rh, L, night);
+      if (this.hasFlow) this._flowDashes(s, x0, y0, x1, y1, L);
+      s.globalCompositeOperation = "destination-in";
+      s.globalAlpha = 1;
+      s.drawImage(this.base, rx, ry, rw, rh, rx, ry, rw, rh);
+      s.restore();
+      this._blit(ctx, sc, ox, oy, z, S, 1);
+    }
+    _crests(s, rx, ry, rw, rh, L, night) {
+      const m = this._mixer();
+      if (!m) return;
+      const mc = this._mxx;
+      const t = this.time;
+      const [ax, ay] = this.waveDir;
+      const al = Math.hypot(ax, ay) || 1;
+      const S = this.S;
+      mc.save();
+      mc.beginPath();
+      mc.rect(rx, ry, rw, rh);
+      mc.clip();
+      mc.clearRect(rx, ry, rw, rh);
+      this._pattern(
+        mc,
+        this._patW || (this._patW = mc.createPattern(this._waveTex(), "repeat")),
+        rx,
+        ry,
+        rw,
+        rh,
+        -ax / al * t * S * 0.34,
+        -ay / al * t * S * 0.34,
+        "source-over",
+        1
+      );
+      this._pattern(
+        mc,
+        this._patC || (this._patC = mc.createPattern(this._chopTex(), "repeat")),
+        rx,
+        ry,
+        rw,
+        rh,
+        -ay / al * t * S * 0.62,
+        ax / al * t * S * 0.62,
+        "lighter",
+        1
+      );
+      if (this.rain > 0.02) {
+        this._pattern(
+          mc,
+          this._patD || (this._patD = mc.createPattern(this._dropTex(), "repeat")),
+          rx,
+          ry,
+          rw,
+          rh,
+          t * 13 % 64,
+          t * 7 % 64,
+          "lighter",
+          this.rain * 0.85
+        );
+      }
+      const warm = clamp012(L.tint[0] - L.tint[2]) > 0 ? L.tint : null;
+      let cr = 244, cg = 250, cb = 255;
+      if (warm && warm[3] > 0.05 && night < 0.6) {
+        cr = lerp3(244, warm[0], 0.55);
+        cg = lerp3(250, warm[1], 0.5);
+        cb = lerp3(255, warm[2], 0.45);
+      } else if (night > 0.4) {
+        cr = 168;
+        cg = 196;
+        cb = 236;
+      }
+      mc.globalCompositeOperation = "source-in";
+      mc.globalAlpha = 1;
+      mc.fillStyle = `rgb(${cr | 0},${cg | 0},${cb | 0})`;
+      mc.fillRect(rx, ry, rw, rh);
+      mc.restore();
+      s.globalCompositeOperation = "lighter";
+      s.globalAlpha = (0.62 - 0.2 * this.rain) * (1 - this.freeze) * (0.55 + 0.45 * L.mul);
+      s.drawImage(m, rx, ry, rw, rh, rx, ry, rw, rh);
+      s.globalCompositeOperation = "source-over";
+      s.globalAlpha = 1;
+    }
+    _pattern(c, pat, rx, ry, rw, rh, offx, offy, op, alpha) {
+      if (!pat) return;
+      const N = WAVE_TEX;
+      const dx = (offx % N + N) % N, dy = (offy % N + N) % N;
+      c.save();
+      c.globalCompositeOperation = op;
+      c.globalAlpha = alpha;
+      c.translate(dx, dy);
+      c.fillStyle = pat;
+      c.fillRect(rx - dx, ry - dy, rw, rh);
+      c.restore();
+    }
+    // Отражение построек: перевёрнутое, вдвое сплющенное, разрезанное на
+    // горизонтальные ломти, которые слегка расходятся по времени — вода
+    // качается. Отражается только то, у чего вода СНИЗУ: здание рисуется
+    // стоящим, и отражение может идти лишь вниз по экрану.
+    _reflections(sim2, s, rx, ry, rw, rh, L) {
+      const S = this.S;
+      const buildings = sim2.buildings;
+      if (!buildings || !buildings.length) return;
+      const x0 = rx / S, y0 = ry / S, x1 = (rx + rw) / S, y1 = (ry + rh) / S;
+      let drawn = 0;
+      const cap = this.q.detail >= 2 ? 14 : 8;
+      s.globalCompositeOperation = "source-over";
+      for (let i = 0; i < buildings.length && drawn < cap; i++) {
+        const b = buildings[i];
+        if (b.destroyed || !b.done) continue;
+        const size = b.size || 1;
+        const cx = b.x + size * 0.5, foot = b.y + size;
+        if (cx < x0 - 2 || cx > x1 + 2 || foot < y0 - 2 || foot > y1 + 3) continue;
+        if (this._sample(this.sd, cx, foot + 0.55) < 0.15) continue;
+        drawn++;
+        const era = Math.min(9, Math.max(0, BUILDING_ERA_IDX[b.id] ?? sim2.eraIndex | 0));
+        const pal = ERA_PALETTE[era];
+        const w = size * S, h = size * S * 1.15;
+        const px = b.x * S, py = foot * S;
+        const wob = Math.sin(this.time * 1.3 + b.x * 0.7 + b.y * 0.4);
+        const cols = [pal.roof, pal.wall, pal.wall];
+        for (let k = 0; k < 3; k++) {
+          const t0 = k / 3, t1 = (k + 1) / 3;
+          const sy = py + h * t0 * 0.5, sh = h * (t1 - t0) * 0.5;
+          const shift = Math.sin(this.time * 1.6 + k * 1.7 + b.y) * S * 0.12 + wob * S * 0.06;
+          s.globalAlpha = 0.26 * (1 - t0 * 0.55);
+          s.fillStyle = cols[k];
+          s.fillRect(px + shift, sy, w, sh + 0.6);
+        }
+        if (L.glow > 0.12) {
+          s.globalAlpha = 0.34 * L.glow;
+          s.fillStyle = pal.glow;
+          s.fillRect(px + w * 0.3 + wob * S * 0.1, py, w * 0.4, h * 0.55);
+        }
+      }
+      s.globalAlpha = 1;
+    }
+    // Штрихи течения: короткие светлые чёрточки, сносимые вдоль русла. Все
+    // рисуются одним путём на три уровня прозрачности — три вызова stroke
+    // на всю реку, а не по вызову на клетку.
+    _flowDashes(s, tx0, ty0, tx1, ty1, L) {
+      const S = this.S, W = this.W;
+      const fx = this.fx, fy = this.fy;
+      const t = this.time;
+      const lvl = [[0.3, 0.34], [0.65, 0.5], [1, 0.28]];
+      s.lineCap = "round";
+      s.lineWidth = Math.max(1, S * 0.16);
+      s.globalCompositeOperation = "lighter";
+      for (let l = 0; l < 3; l++) {
+        s.strokeStyle = `rgba(226,242,255,${lvl[l][1] * (0.4 + 0.6 * L.mul)})`;
+        s.beginPath();
+        let any = false;
+        for (let y = ty0; y <= ty1; y++) {
+          for (let x = tx0; x <= tx1; x++) {
+            const i = y * W + x;
+            const vx = fx[i], vy = fy[i];
+            const m = Math.hypot(vx, vy);
+            if (m < 0.18) continue;
+            const h = hash2(x, y);
+            const ph = (t * (0.35 + m * 0.5) + h) % 1;
+            if (ph > lvl[l][0] || l > 0 && ph <= lvl[l - 1][0]) continue;
+            const ux = vx / m, uy = vy / m;
+            const cx = (x + 0.5 + (ph - 0.5) * 1.5 * ux) * S;
+            const cy = (y + 0.5 + (ph - 0.5) * 1.5 * uy) * S;
+            const len = S * (0.22 + m * 0.3);
+            s.moveTo(cx - ux * len, cy - uy * len);
+            s.lineTo(cx + ux * len, cy + uy * len);
+            any = true;
+          }
+        }
+        if (any) s.stroke();
+      }
+      s.globalCompositeOperation = "source-over";
+    }
+    // =========================================================================
+    // ТЕКСТУРЫ И ХОЛСТЫ
+    // =========================================================================
+    _scratch() {
+      if (this._sc) return this._sc;
+      if (typeof document === "undefined" || !this.W) return null;
+      const cv = document.createElement("canvas");
+      cv.width = this.W * this.S;
+      cv.height = this.H * this.S;
+      this._sc = cv;
+      this._scx = cv.getContext("2d");
+      return cv;
+    }
+    _mixer() {
+      if (this._mx) return this._mx;
+      if (typeof document === "undefined" || !this.W) return null;
+      const cv = document.createElement("canvas");
+      cv.width = this.W * this.S;
+      cv.height = this.H * this.S;
+      this._mx = cv;
+      this._mxx = cv.getContext("2d");
+      return cv;
+    }
+    // Плитка длинной зыби. Гребни — линии постоянной фазы a·x + b·y, где a и b
+    // ЦЕЛЫЕ: только тогда рисунок сходится сам с собой на границе плитки и по
+    // воде не бегут швы. «Шум» тоже собран из периодических синусов — по той же
+    // причине: обычный fbm2 на краю плитки разрывается.
+    _waveTex() {
+      if (this._wave) return this._wave;
+      const N = WAVE_TEX;
+      const cv = document.createElement("canvas");
+      cv.width = N;
+      cv.height = N;
+      const c = cv.getContext("2d");
+      const img = c.createImageData(N, N);
+      const p = img.data;
+      const [a, b] = this.waveDir;
+      const k = 6.283185 / N;
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          const warp = Math.sin(k * (2 * x + 1 * y) + 1.7) * 5.5 + Math.sin(k * (1 * x - 3 * y) + 0.4) * 3.5;
+          const v = Math.sin(k * (a * x + b * y) + warp * k * 3);
+          const crest = v > 0 ? Math.pow(v, 4) : 0;
+          const o = (y * N + x) * 4;
+          p[o] = 255;
+          p[o + 1] = 255;
+          p[o + 2] = 255;
+          p[o + 3] = crest * 150;
+        }
+      }
+      c.putImageData(img, 0, 0);
+      this._wave = cv;
+      return cv;
+    }
+    _chopTex() {
+      if (this._chop) return this._chop;
+      const N = WAVE_TEX;
+      const cv = document.createElement("canvas");
+      cv.width = N;
+      cv.height = N;
+      const c = cv.getContext("2d");
+      const img = c.createImageData(N, N);
+      const p = img.data;
+      const k = 6.283185 / N;
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          const v = Math.sin(k * (5 * x + 7 * y) + Math.sin(k * (3 * x - 2 * y)) * 2.2) * Math.sin(k * (7 * x - 4 * y) + 1.1);
+          const o = (y * N + x) * 4;
+          const crest = v > 0.25 ? (v - 0.25) / 0.75 : 0;
+          p[o] = 255;
+          p[o + 1] = 255;
+          p[o + 2] = 255;
+          p[o + 3] = crest * crest * 96;
+        }
+      }
+      c.putImageData(img, 0, 0);
+      this._chop = cv;
+      return cv;
+    }
+    // Рябь дождя: сыпь мелких колец на решётке с дрожанием. Кольца у краёв
+    // плитки дублируются на противоположную сторону, иначе на стыке видна сетка.
+    _dropTex() {
+      if (this._drops) return this._drops;
+      const N = WAVE_TEX;
+      const cv = document.createElement("canvas");
+      cv.width = N;
+      cv.height = N;
+      const c = cv.getContext("2d");
+      const rnd = makeRnd2(this.seed ^ 53771);
+      c.strokeStyle = "rgba(255,255,255,0.5)";
+      const G = 8, step = N / G;
+      for (let gy = 0; gy < G; gy++) {
+        for (let gx = 0; gx < G; gx++) {
+          const x = (gx + 0.15 + rnd() * 0.7) * step;
+          const y = (gy + 0.15 + rnd() * 0.7) * step;
+          const r = step * (0.16 + rnd() * 0.26);
+          c.lineWidth = Math.max(1, r * 0.3);
+          for (const [wx, wy] of [[0, 0], [N, 0], [-N, 0], [0, N], [0, -N]]) {
+            const px = x + wx, py = y + wy;
+            if (px < -r || py < -r || px > N + r || py > N + r) continue;
+            c.beginPath();
+            c.arc(px, py, r, 0, 6.283);
+            c.stroke();
+          }
+        }
+      }
+      this._drops = cv;
+      return cv;
+    }
+    // =========================================================================
+    // Билинейные выборки полей. Центры клеток лежат в (x+0.5, y+0.5).
+    // =========================================================================
+    _sample(field, wx, wy) {
+      const W = this.W, H = this.H;
+      let u = wx - 0.5, v = wy - 0.5;
+      if (u < 0) u = 0;
+      else if (u > W - 1) u = W - 1;
+      if (v < 0) v = 0;
+      else if (v > H - 1) v = H - 1;
+      const xi = u | 0, yi = v | 0;
+      const xj = xi + 1 < W ? xi + 1 : xi, yj = yi + 1 < H ? yi + 1 : yi;
+      const fx = u - xi, fy = v - yi;
+      const a = field[yi * W + xi], b = field[yi * W + xj];
+      const c = field[yj * W + xi], d = field[yj * W + xj];
+      return a + (b - a) * fx + (c + (d - c) * fx - (a + (b - a) * fx)) * fy;
+    }
+    _grid(g, gw, gh, u, v) {
+      if (u < 0) u = 0;
+      else if (u > gw - 1) u = gw - 1;
+      if (v < 0) v = 0;
+      else if (v > gh - 1) v = gh - 1;
+      const xi = u | 0, yi = v | 0;
+      const xj = xi + 1 < gw ? xi + 1 : xi, yj = yi + 1 < gh ? yi + 1 : yi;
+      const fx = u - xi, fy = v - yi;
+      const a = g[yi * gw + xi], b = g[yi * gw + xj];
+      const c = g[yj * gw + xi], d = g[yj * gw + xj];
+      const t = a + (b - a) * fx, bt = c + (d - c) * fx;
+      return t + (bt - t) * fy;
+    }
+  };
+  function foamBand(d, center, width) {
+    const k = Math.abs(d - center) / width;
+    if (k >= 1) return 0;
+    const v = 1 - k;
+    return v * v * (3 - 2 * v);
+  }
+
+  // app/src/render/vegetation.js
+  var TILE_PX = 32;
+  var VEG_CHUNK = 8;
+  var VEG_LIMITS = {
+    items: { eco: 0, medium: 150, high: 260, ultra: 400 },
+    // растений в кадре
+    chunks: 120,
+    // кварталов раскладки в кэше (8×8 клеток каждый)
+    sprites: 72,
+    // испечённых спрайтов
+    spriteMB: 8
+  };
+  var SPECIES = [
+    { id: "spruce", ru: "ель", bark: "#3f3227", acc: ["#2c5a3e", "#24513a", "#25523c", "#2a5240"], sz: [1.5, 2.2], flex: 0.35, bare: false },
+    { id: "pine", ru: "сосна", bark: "#7a5230", acc: ["#43703f", "#3a6a3c", "#3d6b3e", "#3c6440"], sz: [1.5, 2.1], flex: 0.55, bare: false },
+    { id: "birch", ru: "берёза", bark: "#dfe0d6", acc: ["#9ccc5c", "#7fbb4e", "#e6bb46", "#8fb060"], sz: [1.3, 1.8], flex: 1, bare: true },
+    { id: "oak", ru: "дуб", bark: "#5a4530", acc: ["#5f9a45", "#417f36", "#b07a2e", "#4a7a44"], sz: [1.6, 2.3], flex: 0.3, bare: true },
+    { id: "maple", ru: "клён", bark: "#54402e", acc: ["#74ab4e", "#589a40", "#c8482e", "#5a8a4a"], sz: [1.4, 1.9], flex: 0.7, bare: true },
+    { id: "poplar", ru: "тополь", bark: "#6b5a43", acc: ["#7ab04e", "#619c42", "#d8b24a", "#5f9450"], sz: [1.7, 2.4], flex: 1.1, bare: true },
+    { id: "willow", ru: "ива", bark: "#4f4433", acc: ["#94bc63", "#7cae55", "#c9b258", "#7a9a5c"], sz: [1.3, 1.8], flex: 1.25, bare: true },
+    { id: "palm", ru: "пальма", bark: "#8a6a44", acc: ["#4f9a5c", "#489256", "#4a8f56", "#478a54"], sz: [1.5, 2], flex: 0.95, bare: false },
+    { id: "acacia", ru: "акация", bark: "#6b5a42", acc: ["#8aa055", "#7d964c", "#94914a", "#7f8f52"], sz: [1.4, 1.9], flex: 0.5, bare: false },
+    { id: "junip", ru: "можжевельник", bark: "#4a3f30", acc: ["#4f6b4a", "#456245", "#4a6446", "#4c6a52"], sz: [0.7, 1.05], flex: 0.45, bare: false },
+    { id: "fruit", ru: "яблоня", bark: "#5f4a34", acc: ["#e8cdd8", "#5f9a45", "#b0913a", "#54804a"], sz: [0.95, 1.3], flex: 0.8, bare: true },
+    { id: "dead", ru: "сухостой", bark: "#8a8073", acc: ["#8a8073", "#8a8073", "#8a8073", "#9aa0a4"], sz: [1.2, 1.8], flex: 0.6, bare: true }
+  ];
+  var SP = {};
+  for (let i = 0; i < SPECIES.length; i++) SP[SPECIES[i].id] = i;
+  var U = { BUSH: 0, FERN: 1, REED: 2, FLOWER: 3, GRASS: 4, STUMP: 5, LOG: 6, SAPLING: 7, LITTER: 8 };
+  var UNDER_SZ = [
+    [0.5, 0.8],
+    // куст
+    [0.4, 0.58],
+    // папоротник
+    [0.7, 0.95],
+    // тростник
+    [0.34, 0.5],
+    // цветы
+    [0.4, 0.62],
+    // высокая трава
+    [0.34, 0.5],
+    // пень
+    [0.75, 1.05],
+    // валежник
+    [0.28, 0.44],
+    // поросль
+    [0.6, 0.95]
+    // опад
+  ];
+  var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
+  var KIND_TREE = 0;
+  var KIND_UNDER = 1;
+  var clamp2 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  function makeRnd3(seed) {
+    let s = seed | 0 || 625341585;
+    return () => {
+      s ^= s << 13;
+      s |= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      s |= 0;
+      return (s >>> 0) / 4294967296;
+    };
+  }
+  function foliage(spec, season, tone) {
+    const base = TERRAIN[season][TILE.FOREST].det;
+    const mid = mixHex(base, spec.acc[season], 0.74);
+    const k = [-0.11, 0, 0.08][tone];
+    return {
+      lo: shade(mixHex(mid, "#111d15", 0.3), k),
+      mid: shade(mid, k),
+      hi: shade(mixHex(mid, "#eef3c4", 0.28), k + 0.05)
+    };
+  }
+  function barkOf(spec, season) {
+    return season === 3 ? mixHex(spec.bark, "#3a4048", 0.32) : spec.bark;
+  }
+  var SNOW = "rgba(240,246,252,0.86)";
+  var SNOW_SOFT = "rgba(236,244,252,0.55)";
+  function limb(c, x, y, ang, len, w, col) {
+    const ex = x + Math.cos(ang) * len, ey = y + Math.sin(ang) * len;
+    c.strokeStyle = col;
+    c.lineWidth = w;
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(x, y);
+    c.quadraticCurveTo(
+      x + Math.cos(ang) * len * 0.55 + Math.sin(ang) * len * 0.12,
+      y + Math.sin(ang) * len * 0.55 - Math.cos(ang) * len * 0.12,
+      ex,
+      ey
+    );
+    c.stroke();
+    return [ex, ey];
+  }
+  function trunk(c, S, col, topY, wBot, wTop, lean) {
+    const bx = S / 2, by = S * 0.9;
+    const tx = bx + lean;
+    c.fillStyle = col;
+    c.beginPath();
+    c.moveTo(bx - wBot, by);
+    c.quadraticCurveTo(bx - wTop * 1.2, (by + topY) * 0.5, tx - wTop, topY);
+    c.lineTo(tx + wTop, topY);
+    c.quadraticCurveTo(bx + wTop * 1.2, (by + topY) * 0.5, bx + wBot, by);
+    c.closePath();
+    c.fill();
+  }
+  function groundShadow(c, S, w) {
+    c.fillStyle = "rgba(18,26,16,0.28)";
+    c.beginPath();
+    c.ellipse(S * 0.54, S * 0.9, S * w, S * w * 0.34, 0, 0, 7);
+    c.fill();
+  }
+  function bareCrown(c, S, col, cx, cy, r, form) {
+    const n = 5 + (form & 1);
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI * 0.5 + (i - (n - 1) / 2) * (0.62 + form * 0.06);
+      const len = r * (0.78 + (i * 7 + form * 3) % 5 * 0.06);
+      const [ex, ey] = limb(c, cx, cy, a, len, Math.max(1, S * 0.022), col);
+      limb(c, ex, ey, a - 0.5, len * 0.5, Math.max(1, S * 0.013), col);
+      limb(c, ex, ey, a + 0.45, len * 0.44, Math.max(1, S * 0.012), col);
+    }
+    c.globalAlpha = 0.8;
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI * 0.5 + (i - (n - 1) / 2) * (0.62 + form * 0.06);
+      const len = r * (0.7 + (i * 7 + form * 3) % 5 * 0.05);
+      limb(c, cx, cy - S * 0.012, a, len, Math.max(1, S * 0.016), SNOW_SOFT);
+    }
+    c.globalAlpha = 1;
+  }
+  function leafClump(c, x, y, r, F) {
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.arc(x + r * 0.22, y + r * 0.2, r * 0.86, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.arc(x - r * 0.1, y - r * 0.04, r * 0.82, 0, 7);
+    c.fill();
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.arc(x - r * 0.34, y - r * 0.34, r * 0.46, 0, 7);
+    c.fill();
+  }
+  function paintSpruce(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.19);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.42, S * 0.035, S * 0.022, 0);
+    const tiers = 5 + (form & 1);
+    const top = S * 0.1, bot = S * 0.86;
+    for (let i = tiers - 1; i >= 0; i--) {
+      const k = i / (tiers - 1);
+      const w = S * (0.075 + k * 0.2);
+      const yb = top + (bot - top) * k;
+      const yt = yb - S * (0.16 + k * 0.05);
+      c.fillStyle = F.lo;
+      c.beginPath();
+      c.moveTo(S / 2, yt);
+      c.lineTo(S / 2 + w, yb);
+      c.lineTo(S / 2 - w, yb);
+      c.closePath();
+      c.fill();
+      c.fillStyle = i <= 1 ? F.hi : F.mid;
+      c.beginPath();
+      c.moveTo(S / 2, yt);
+      c.lineTo(S / 2 - w, yb);
+      c.lineTo(S / 2 - w * 0.14, yb);
+      c.closePath();
+      c.fill();
+      if (season === 3) {
+        c.fillStyle = SNOW;
+        c.beginPath();
+        c.moveTo(S / 2, yt + S * 6e-3);
+        c.lineTo(S / 2 + w * 0.52, yt + S * 0.075);
+        c.lineTo(S / 2 - w * 0.52, yt + S * 0.075);
+        c.closePath();
+        c.fill();
+      }
+    }
+  }
+  function paintPine(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.17);
+    const bark = barkOf(spec, season);
+    const lean = (form ? 1 : -1) * S * 0.05;
+    trunk(c, S, bark, S * 0.36, S * 0.04, S * 0.026, lean);
+    const cx = S / 2 + lean, cy = S * 0.34;
+    for (let i = 0; i < 2; i++) {
+      const w = S * (0.34 - i * 0.1), h = S * (0.12 - i * 0.02);
+      const y = cy - i * S * 0.15;
+      c.fillStyle = i ? F.mid : F.lo;
+      c.beginPath();
+      c.ellipse(cx, y, w, h, 0, 0, 7);
+      c.fill();
+      c.fillStyle = F.hi;
+      c.beginPath();
+      c.ellipse(cx - w * 0.28, y - h * 0.42, w * 0.42, h * 0.52, -0.2, 0, 7);
+      c.fill();
+    }
+    if (season === 3) {
+      c.fillStyle = SNOW_SOFT;
+      c.beginPath();
+      c.ellipse(cx - S * 0.05, S * 0.16, S * 0.17, S * 0.045, -0.12, 0, 7);
+      c.fill();
+    }
+  }
+  function paintBirch(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.16);
+    const bark = barkOf(spec, season);
+    const lean = (form ? 1 : -1) * S * 0.035;
+    trunk(c, S, bark, S * 0.3, S * 0.028, S * 0.017, lean);
+    c.fillStyle = "rgba(46,44,40,0.7)";
+    for (let i = 0; i < 5; i++) {
+      const y = S * (0.36 + i * 0.1), w = S * (0.02 + i % 2 * 0.012);
+      c.fillRect(S / 2 + lean * (1 - i * 0.2) - w / 2, y, w, Math.max(1, S * 0.012));
+    }
+    const cx = S / 2 + lean, cy = S * 0.3;
+    if (season === 3) {
+      bareCrown(c, S, bark, cx, cy + S * 0.04, S * 0.26, form);
+      return;
+    }
+    leafClump(c, cx, cy, S * 0.19, F);
+    leafClump(c, cx - S * 0.15, cy + S * 0.1, S * 0.15, F);
+    leafClump(c, cx + S * 0.15, cy + S * 0.12, S * 0.14, F);
+    leafClump(c, cx + S * 0.02, cy - S * 0.13, S * 0.13, F);
+  }
+  function paintOak(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.22);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.46, S * 0.075, S * 0.045, 0);
+    limb(c, S / 2, S * 0.52, -Math.PI * 0.72, S * 0.2, S * 0.035, bark);
+    limb(c, S / 2, S * 0.52, -Math.PI * 0.28, S * 0.19, S * 0.033, bark);
+    const cx = S / 2, cy = S * 0.36;
+    if (season === 3) {
+      bareCrown(c, S, bark, cx, cy + S * 0.08, S * 0.3, form);
+      return;
+    }
+    const w = S * (0.3 + form * 0.02);
+    leafClump(c, cx - w * 0.55, cy + S * 0.06, w * 0.62, F);
+    leafClump(c, cx + w * 0.58, cy + S * 0.05, w * 0.6, F);
+    leafClump(c, cx + w * 0.05, cy + S * 0.12, w * 0.58, F);
+    leafClump(c, cx - w * 0.12, cy - S * 0.09, w * 0.66, F);
+  }
+  function paintMaple(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.19);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.44, S * 0.05, S * 0.03, 0);
+    const cx = S / 2, cy = S * 0.34;
+    if (season === 3) {
+      bareCrown(c, S, bark, cx, cy + S * 0.08, S * 0.27, form);
+      return;
+    }
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.ellipse(cx + S * 0.02, cy + S * 0.03, S * 0.27, S * 0.25, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.ellipse(cx - S * 0.03, cy - S * 0.01, S * 0.24, S * 0.22, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(cx - S * 0.1, cy - S * 0.09, S * 0.13, S * 0.11, -0.4, 0, 7);
+    c.fill();
+    if (season === 2) {
+      c.fillStyle = "rgba(214,92,44,0.30)";
+      c.beginPath();
+      c.ellipse(cx + S * 0.06, cy + S * 0.02, S * 0.21, S * 0.19, 0, 0, 7);
+      c.fill();
+    }
+  }
+  function paintPoplar(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.13);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.2, S * 0.032, S * 0.018, 0);
+    const cx = S / 2, cy = S * 0.44;
+    if (season === 3) {
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI * 0.5 + (i - 2.5) * 0.16;
+        limb(c, cx, S * 0.72, a, S * (0.4 + i % 3 * 0.04), S * 0.016, bark);
+      }
+      c.globalAlpha = 0.7;
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI * 0.5 + (i - 2.5) * 0.16;
+        limb(c, cx, S * 0.7, a, S * 0.34, S * 0.012, SNOW_SOFT);
+      }
+      c.globalAlpha = 1;
+      return;
+    }
+    const w = S * (0.135 + form * 0.012);
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.ellipse(cx + S * 0.012, cy, w, S * 0.36, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.ellipse(cx - S * 0.012, cy - S * 0.01, w * 0.82, S * 0.33, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(cx - w * 0.42, cy - S * 0.12, w * 0.42, S * 0.16, 0, 0, 7);
+    c.fill();
+  }
+  function paintWillow(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.2);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.52, S * 0.055, S * 0.038, 0);
+    const cx = S / 2, cy = S * 0.44;
+    if (season === 3) {
+      bareCrown(c, S, bark, cx, cy + S * 0.06, S * 0.24, form);
+      return;
+    }
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.ellipse(cx, cy, S * 0.28, S * 0.16, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.ellipse(cx - S * 0.02, cy - S * 0.03, S * 0.25, S * 0.14, 0, 0, 7);
+    c.fill();
+    c.lineCap = "round";
+    for (let i = 0; i < 7; i++) {
+      const t = (i - 3) / 3;
+      const x = cx + t * S * 0.26;
+      const len = S * (0.2 + (1 - Math.abs(t)) * 0.16 + (i * 5 + form) % 3 * 0.015);
+      c.strokeStyle = i % 2 ? F.mid : F.hi;
+      c.lineWidth = Math.max(1, S * 0.018);
+      c.beginPath();
+      c.moveTo(x, cy + S * 0.06);
+      c.quadraticCurveTo(x + t * S * 0.05, cy + len * 0.6, x + t * S * 0.09, cy + len);
+      c.stroke();
+    }
+  }
+  function paintPalm(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.17);
+    const bark = barkOf(spec, season);
+    const dir = form ? 1 : -1;
+    c.strokeStyle = bark;
+    c.lineWidth = S * 0.055;
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(S / 2, S * 0.9);
+    c.quadraticCurveTo(S / 2 + dir * S * 0.1, S * 0.6, S / 2 + dir * S * 0.09, S * 0.34);
+    c.stroke();
+    c.strokeStyle = "rgba(60,44,28,0.35)";
+    c.lineWidth = Math.max(1, S * 0.012);
+    for (let i = 0; i < 5; i++) {
+      const t = 0.25 + i * 0.14;
+      const x = S / 2 + dir * S * 0.1 * (1 - (1 - t) * (1 - t)), y = S * (0.9 - t * 0.52);
+      c.beginPath();
+      c.moveTo(x - S * 0.028, y);
+      c.lineTo(x + S * 0.028, y);
+      c.stroke();
+    }
+    const cx = S / 2 + dir * S * 0.09, cy = S * 0.32;
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI * 0.5 + (i - 2.5) * 0.55 + dir * 0.1;
+      const len = S * (0.28 + i % 2 * 0.05);
+      c.fillStyle = i % 2 ? F.mid : F.lo;
+      c.beginPath();
+      c.moveTo(cx, cy);
+      c.quadraticCurveTo(
+        cx + Math.cos(a) * len * 0.6 - Math.sin(a) * S * 0.08,
+        cy + Math.sin(a) * len * 0.6 + Math.cos(a) * S * 0.08,
+        cx + Math.cos(a) * len,
+        cy + Math.sin(a) * len + S * 0.05
+      );
+      c.quadraticCurveTo(
+        cx + Math.cos(a) * len * 0.55 + Math.sin(a) * S * 0.05,
+        cy + Math.sin(a) * len * 0.55 - Math.cos(a) * S * 0.05,
+        cx,
+        cy
+      );
+      c.fill();
+    }
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.arc(cx, cy, S * 0.045, 0, 7);
+    c.fill();
+  }
+  function paintAcacia(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.22);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.5, S * 0.048, S * 0.026, 0);
+    limb(c, S / 2, S * 0.56, -Math.PI * 0.78, S * 0.22, S * 0.024, bark);
+    limb(c, S / 2, S * 0.56, -Math.PI * 0.22, S * 0.22, S * 0.024, bark);
+    const cy = S * 0.34 + form * S * 0.01;
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.ellipse(S / 2, cy + S * 0.03, S * 0.36, S * 0.085, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.ellipse(S / 2, cy, S * 0.33, S * 0.07, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(S / 2 - S * 0.09, cy - S * 0.025, S * 0.14, S * 0.035, 0, 0, 7);
+    c.fill();
+  }
+  function paintJuniper(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.2);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.62, S * 0.035, S * 0.024, 0);
+    const cy = S * 0.58;
+    for (let i = 0; i < 4; i++) {
+      const a = -Math.PI * 0.5 + (i - 1.5) * (0.52 + form * 0.05);
+      const len = S * (0.24 + i % 2 * 0.05);
+      c.fillStyle = i % 2 ? F.mid : F.lo;
+      c.beginPath();
+      c.ellipse(
+        S / 2 + Math.cos(a) * len * 0.6,
+        cy + Math.sin(a) * len * 0.6,
+        len * 0.44,
+        len * 0.3,
+        a,
+        0,
+        7
+      );
+      c.fill();
+    }
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(S / 2 - S * 0.06, cy - S * 0.14, S * 0.1, S * 0.07, -0.3, 0, 7);
+    c.fill();
+    if (season === 3) {
+      c.fillStyle = SNOW_SOFT;
+      c.beginPath();
+      c.ellipse(S / 2 - S * 0.02, cy - S * 0.16, S * 0.16, S * 0.045, -0.1, 0, 7);
+      c.fill();
+    }
+  }
+  function paintFruit(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.17);
+    const bark = barkOf(spec, season);
+    trunk(c, S, bark, S * 0.52, S * 0.045, S * 0.028, 0);
+    const cx = S / 2, cy = S * 0.42;
+    if (season === 3) {
+      bareCrown(c, S, bark, cx, cy + S * 0.08, S * 0.22, form);
+      return;
+    }
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.ellipse(cx + S * 0.02, cy + S * 0.03, S * 0.24, S * 0.21, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.ellipse(cx - S * 0.02, cy, S * 0.21, S * 0.19, 0, 0, 7);
+    c.fill();
+    if (season === 0) {
+      c.fillStyle = "rgba(246,214,226,0.85)";
+      for (let i = 0; i < 9; i++) {
+        const a = i * 0.7 + form, rr = S * (0.06 + i % 3 * 0.05);
+        c.beginPath();
+        c.arc(cx + Math.cos(a) * rr * 2.4, cy + Math.sin(a) * rr * 2, S * 0.03, 0, 7);
+        c.fill();
+      }
+    } else if (season === 2) {
+      c.fillStyle = "#c34a32";
+      for (let i = 0; i < 5; i++) {
+        const a = i * 1.25 + form;
+        c.beginPath();
+        c.arc(cx + Math.cos(a) * S * 0.13, cy + Math.sin(a) * S * 0.11, S * 0.026, 0, 7);
+        c.fill();
+      }
+    }
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(cx - S * 0.09, cy - S * 0.08, S * 0.09, S * 0.07, -0.4, 0, 7);
+    c.fill();
+  }
+  function paintDead(c, S, F, spec, season, form) {
+    groundShadow(c, S, 0.14);
+    const bark = season === 3 ? "#9aa0a4" : "#8a8073";
+    trunk(c, S, bark, S * 0.24, S * 0.038, S * 0.016, form ? S * 0.03 : -S * 0.03);
+    for (let i = 0; i < 4; i++) {
+      const a = -Math.PI * 0.5 + (i - 1.5) * 0.85;
+      const y = S * (0.36 + i * 0.1);
+      const [ex, ey] = limb(c, S / 2, y, a, S * (0.16 + i % 2 * 0.05), S * 0.018, bark);
+      limb(c, ex, ey, a - 0.6, S * 0.07, S * 0.011, bark);
+    }
+    if (season === 3) {
+      c.globalAlpha = 0.7;
+      for (let i = 0; i < 4; i++) {
+        const a = -Math.PI * 0.5 + (i - 1.5) * 0.85;
+        limb(c, S / 2, S * (0.36 + i * 0.1) - S * 0.01, a, S * 0.13, S * 0.012, SNOW_SOFT);
+      }
+      c.globalAlpha = 1;
+    }
+  }
+  var PAINT = [
+    paintSpruce,
+    paintPine,
+    paintBirch,
+    paintOak,
+    paintMaple,
+    paintPoplar,
+    paintWillow,
+    paintPalm,
+    paintAcacia,
+    paintJuniper,
+    paintFruit,
+    paintDead
+  ];
+  function paintBush(c, S, F, season, form) {
+    c.fillStyle = "rgba(18,26,16,0.24)";
+    c.beginPath();
+    c.ellipse(S * 0.54, S * 0.88, S * 0.26, S * 0.08, 0, 0, 7);
+    c.fill();
+    if (season === 3) {
+      for (let i = 0; i < 6; i++) {
+        const a = -Math.PI * 0.5 + (i - 2.5) * 0.28;
+        limb(c, S / 2, S * 0.88, a, S * 0.26, Math.max(1, S * 0.022), "#6b6055");
+      }
+      c.fillStyle = SNOW;
+      c.beginPath();
+      c.ellipse(S / 2, S * 0.68, S * 0.24, S * 0.08, 0, 0, 7);
+      c.fill();
+      return;
+    }
+    const cy = S * 0.68;
+    c.fillStyle = F.lo;
+    c.beginPath();
+    c.ellipse(S / 2 + S * 0.04, cy + S * 0.06, S * 0.28, S * 0.2, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.mid;
+    c.beginPath();
+    c.ellipse(S / 2 - S * 0.1, cy, S * 0.2, S * 0.17, 0, 0, 7);
+    c.fill();
+    c.beginPath();
+    c.ellipse(S / 2 + S * 0.13, cy - S * 0.02, S * 0.17, S * 0.15, 0, 0, 7);
+    c.fill();
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(S / 2 - S * 0.14, cy - S * 0.09, S * 0.1, S * 0.08, -0.4, 0, 7);
+    c.fill();
+    if (form && season >= 1 && season <= 2) {
+      c.fillStyle = season === 2 ? "#b8342c" : "#8e2f3c";
+      for (let i = 0; i < 5; i++) {
+        const a = i * 1.3;
+        c.beginPath();
+        c.arc(S / 2 + Math.cos(a) * S * 0.16, cy + Math.sin(a) * S * 0.12, S * 0.026, 0, 7);
+        c.fill();
+      }
+    }
+  }
+  function paintFern(c, S, F, season, form) {
+    const cy = S * 0.86;
+    const n = 5 + (form & 1);
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI * 0.5 + (i - (n - 1) / 2) * 0.42;
+      const len = S * (0.34 + i % 2 * 0.06);
+      c.strokeStyle = i % 2 ? F.mid : F.lo;
+      c.lineWidth = Math.max(1, S * 0.034);
+      c.lineCap = "round";
+      c.beginPath();
+      c.moveTo(S / 2, cy);
+      c.quadraticCurveTo(
+        S / 2 + Math.cos(a) * len * 0.5,
+        cy + Math.sin(a) * len * 0.75,
+        S / 2 + Math.cos(a) * len * 1.05,
+        cy + Math.sin(a) * len * 0.72
+      );
+      c.stroke();
+    }
+    if (season === 3) {
+      c.fillStyle = SNOW_SOFT;
+      c.beginPath();
+      c.ellipse(S / 2, cy - S * 0.16, S * 0.22, S * 0.06, 0, 0, 7);
+      c.fill();
+    }
+  }
+  function paintReed(c, S, F, season, form) {
+    const cy = S * 0.92;
+    const dry = season >= 2;
+    const stalk = dry ? "#b39a5e" : F.mid;
+    const head2 = dry ? "#7a5a34" : "#6b5a3a";
+    c.lineCap = "round";
+    for (let i = 0; i < 6; i++) {
+      const t = (i - 2.5) / 2.5;
+      const x = S / 2 + t * S * 0.22;
+      const h = S * (0.52 + (1 - Math.abs(t)) * 0.22 + (i * 3 + form) % 3 * 0.03);
+      c.strokeStyle = stalk;
+      c.lineWidth = Math.max(1, S * 0.026);
+      c.beginPath();
+      c.moveTo(x, cy);
+      c.quadraticCurveTo(x + t * S * 0.05, cy - h * 0.6, x + t * S * 0.1, cy - h);
+      c.stroke();
+      if (i % 2 === 0) {
+        c.strokeStyle = head2;
+        c.lineWidth = S * 0.05;
+        c.beginPath();
+        c.moveTo(x + t * S * 0.1, cy - h);
+        c.lineTo(x + t * S * 0.11, cy - h + S * 0.12);
+        c.stroke();
+      }
+    }
+  }
+  function paintFlower(c, S, F, season, form) {
+    const cy = S * 0.88;
+    c.strokeStyle = F.mid;
+    c.lineWidth = Math.max(1, S * 0.022);
+    c.lineCap = "round";
+    const cols = season === 0 ? ["#f2e58c", "#f7f4ea", "#e8a8c4", "#b9a8e0"] : ["#f0dc72", "#f2efdf", "#d99ab4"];
+    const n = 5 + (form & 1) * 2;
+    for (let i = 0; i < n; i++) {
+      const t = (i - (n - 1) / 2) / ((n - 1) / 2);
+      const x = S / 2 + t * S * 0.3;
+      const h = S * (0.22 + (1 - Math.abs(t)) * 0.14);
+      c.beginPath();
+      c.moveTo(x, cy);
+      c.quadraticCurveTo(x + t * S * 0.03, cy - h * 0.6, x + t * S * 0.05, cy - h);
+      c.stroke();
+      const col = cols[(i + form) % cols.length];
+      c.fillStyle = col;
+      const fx = x + t * S * 0.05, fy = cy - h;
+      for (let k = 0; k < 4; k++) {
+        const a = k * Math.PI / 2 + 0.4;
+        c.beginPath();
+        c.arc(fx + Math.cos(a) * S * 0.03, fy + Math.sin(a) * S * 0.03, S * 0.03, 0, 7);
+        c.fill();
+      }
+      c.fillStyle = "#e0b23c";
+      c.beginPath();
+      c.arc(fx, fy, S * 0.022, 0, 7);
+      c.fill();
+    }
+  }
+  function paintGrassTuft(c, S, F, season, form) {
+    const cy = S * 0.9;
+    const dry = season === 2;
+    c.lineCap = "round";
+    const n = 7 + (form & 1) * 2;
+    for (let i = 0; i < n; i++) {
+      const t = (i - (n - 1) / 2) / ((n - 1) / 2);
+      const h = S * (0.34 + (1 - Math.abs(t)) * 0.22);
+      c.strokeStyle = season === 3 ? "#c8d2cc" : dry ? i % 2 ? "#c2a655" : "#a88c44" : i % 2 ? F.hi : F.mid;
+      c.lineWidth = Math.max(1, S * 0.03);
+      c.beginPath();
+      c.moveTo(S / 2 + t * S * 0.06, cy);
+      c.quadraticCurveTo(S / 2 + t * S * 0.2, cy - h * 0.65, S / 2 + t * S * 0.36, cy - h);
+      c.stroke();
+    }
+  }
+  function paintStump(c, S, F, season, form) {
+    c.fillStyle = "rgba(18,26,16,0.26)";
+    c.beginPath();
+    c.ellipse(S * 0.56, S * 0.9, S * 0.24, S * 0.07, 0, 0, 7);
+    c.fill();
+    const side = "#54402c", top = "#a88254", ring = "#7d5f3c";
+    const w = S * 0.2, h = S * 0.2, cy = S * 0.86;
+    c.fillStyle = side;
+    c.beginPath();
+    c.moveTo(S / 2 - w, cy - h);
+    c.lineTo(S / 2 - w, cy);
+    c.lineTo(S / 2 + w, cy);
+    c.lineTo(S / 2 + w, cy - h);
+    c.closePath();
+    c.fill();
+    c.fillStyle = top;
+    c.beginPath();
+    c.ellipse(S / 2, cy - h, w, w * 0.42, 0, 0, 7);
+    c.fill();
+    c.strokeStyle = ring;
+    c.lineWidth = Math.max(1, S * 0.018);
+    for (let i = 1; i <= 2; i++) {
+      c.beginPath();
+      c.ellipse(S / 2, cy - h, w * (i / 3), w * 0.42 * (i / 3), 0, 0, 7);
+      c.stroke();
+    }
+    c.fillStyle = "rgba(160,124,74,0.75)";
+    for (let i = 0; i < 4; i++) {
+      const a = i * 1.6 + form;
+      c.save();
+      c.translate(S / 2 + Math.cos(a) * S * 0.3, cy + Math.sin(a) * S * 0.05 + S * 0.02);
+      c.rotate(a);
+      c.fillRect(-S * 0.045, -S * 0.012, S * 0.09, S * 0.024);
+      c.restore();
+    }
+    if (season === 3) {
+      c.fillStyle = SNOW;
+      c.beginPath();
+      c.ellipse(S / 2, cy - h - S * 0.012, w * 0.92, w * 0.38, 0, 0, 7);
+      c.fill();
+    }
+  }
+  function paintLog(c, S, F, season, form) {
+    c.fillStyle = "rgba(18,26,16,0.22)";
+    c.beginPath();
+    c.ellipse(S * 0.52, S * 0.9, S * 0.34, S * 0.07, 0, 0, 7);
+    c.fill();
+    const cy = S * 0.82, len = S * 0.66, r = S * 0.085;
+    c.fillStyle = "#5c4630";
+    c.beginPath();
+    c.moveTo(S / 2 - len / 2, cy - r);
+    c.lineTo(S / 2 + len / 2, cy - r);
+    c.lineTo(S / 2 + len / 2, cy + r);
+    c.lineTo(S / 2 - len / 2, cy + r);
+    c.closePath();
+    c.fill();
+    c.fillStyle = "#6f5539";
+    c.fillRect(S / 2 - len / 2, cy - r, len, r * 0.7);
+    c.fillStyle = "#a88254";
+    c.beginPath();
+    c.ellipse(S / 2 + len / 2, cy, r * 0.38, r, 0, 0, 7);
+    c.fill();
+    if (form) {
+      c.fillStyle = season === 3 ? SNOW_SOFT : "rgba(96,132,72,0.55)";
+      c.beginPath();
+      c.ellipse(S / 2 - len * 0.15, cy - r * 0.7, len * 0.22, r * 0.34, 0, 0, 7);
+      c.fill();
+    }
+  }
+  function paintSapling(c, S, F, season, form) {
+    const cy = S * 0.9;
+    c.strokeStyle = season === 3 ? "#6b6055" : "#6f5a3c";
+    c.lineWidth = Math.max(1, S * 0.03);
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(S / 2, cy);
+    c.lineTo(S / 2 + (form ? S * 0.02 : -S * 0.02), cy - S * 0.34);
+    c.stroke();
+    if (season === 3) return;
+    c.fillStyle = F.mid;
+    for (let i = 0; i < 4; i++) {
+      const a = -Math.PI * 0.5 + (i - 1.5) * 0.7;
+      c.beginPath();
+      c.ellipse(
+        S / 2 + Math.cos(a) * S * 0.11,
+        cy - S * 0.28 + Math.sin(a) * S * 0.06,
+        S * 0.075,
+        S * 0.035,
+        a,
+        0,
+        7
+      );
+      c.fill();
+    }
+    c.fillStyle = F.hi;
+    c.beginPath();
+    c.ellipse(S / 2 - S * 0.05, cy - S * 0.33, S * 0.045, S * 0.022, -0.5, 0, 7);
+    c.fill();
+  }
+  function paintLitter(c, S, F, season, form) {
+    const cols = season === 2 ? ["rgba(198,132,42,0.55)", "rgba(168,84,40,0.50)", "rgba(214,168,60,0.45)"] : ["rgba(120,96,58,0.35)", "rgba(96,84,52,0.30)"];
+    for (let i = 0; i < 12; i++) {
+      const a = i * 2.39 + form;
+      const rr = S * 0.06 * Math.sqrt(i + 1);
+      c.fillStyle = cols[i % cols.length];
+      c.beginPath();
+      c.ellipse(
+        S / 2 + Math.cos(a) * rr,
+        S * 0.84 + Math.sin(a) * rr * 0.42,
+        S * 0.045,
+        S * 0.026,
+        a,
+        0,
+        7
+      );
+      c.fill();
+    }
+  }
+  var PAINT_U = [
+    paintBush,
+    paintFern,
+    paintReed,
+    paintFlower,
+    paintGrassTuft,
+    paintStump,
+    paintLog,
+    paintSapling,
+    paintLitter
+  ];
+  function warmthAt(world, x, y, tile) {
+    const lat = y / Math.max(1, world.h - 1);
+    const n = noise2(x * 0.055 + 13.7, y * 0.055 + 41.3);
+    const hi = tile === TILE.MOUNTAIN ? 0.34 : tile === TILE.HILL ? 0.13 : 0;
+    return clamp013(lat * 0.86 + (n - 0.5) * 0.62 + 0.07 - hi);
+  }
+  function moistAt(x, y) {
+    return noise2(x * 0.07 + 77.3, y * 0.07 + 31.9);
+  }
+  function pick(r, weights) {
+    let sum = 0;
+    for (let i = 1; i < weights.length; i += 2) sum += weights[i];
+    let t = r * sum;
+    for (let i = 0; i < weights.length; i += 2) {
+      t -= weights[i + 1];
+      if (t <= 0) return weights[i];
+    }
+    return weights[0];
+  }
+  var Vegetation = class {
+    constructor(quality) {
+      this.q = quality || { id: "high", detail: 2, ambientProps: true, lod: { propsMinZoom: 0.8 }, caps: { chunksPerFrame: 12 } };
+      this.off = this.q.id === "eco";
+      this.time = 0;
+      this.wind = -0.3;
+      this.gust = 0;
+      this.rnd = makeRnd3(2135587861);
+      this.seeded = false;
+      this.forestFill = 0.55;
+      this.edgeFill = 0.82;
+      this.chunks = /* @__PURE__ */ new Map();
+      this.sprites = /* @__PURE__ */ new Map();
+      this.key = null;
+      this.block = null;
+      this.roads = null;
+      this.press = null;
+      this.pw = 0;
+      this.ph = 0;
+      this._vis = [];
+      this._m = null;
+      this.drawn = 0;
+    }
+    setQuality(q) {
+      this.q = q;
+      this.off = q.id === "eco";
+      this.sprites.clear();
+      this.chunks.clear();
+    }
+    clear() {
+      this.chunks.clear();
+      this.key = null;
+      this.block = null;
+      this.press = null;
+    }
+    invalidate() {
+      this.chunks.clear();
+      this.key = null;
+    }
+    // ---- сторона выпечки спрайта ------------------------------------------
+    get treePx() {
+      return this.q.detail >= 2 ? 96 : 72;
+    }
+    get underPx() {
+      return this.q.detail >= 2 ? 48 : 36;
+    }
+    // =========================================================================
+    // ОБНОВЛЕНИЕ. Один вызов за кадр, до отрисовки. Здесь только ветер и
+    // проверка «не изменился ли мир»; раскладка растений строится лениво.
+    //
+    // opts.wind  — ветер из погоды (renderer.atmo.wind). Если не передан,
+    //              считается тем же правилом, что в weather.js: одни сутки —
+    //              одно направление. Так модуль работает и в одиночку.
+    // opts.roads — множество клеток дороги (renderer.terrain.road.tiles):
+    //              на полотне дороги ничего не растёт.
+    // =========================================================================
+    update(sim2, dt, ox, oy, z, cw, ch, opts) {
+      if (!sim2 || !sim2.world) return;
+      if (!this.seeded) {
+        this.rnd = makeRnd3(sim2.world.seed | 0 || 20250808);
+        this.seeded = true;
+      }
+      dt = Math.min(0.05, Math.max(0, dt || 0));
+      this.time += dt;
+      const wantWind = opts && typeof opts.wind === "number" ? opts.wind : -0.72 + hash2(sim2.day | 0, sim2.seasonIdx | 0) * 1.16;
+      this.wind += (wantWind - this.wind) * Math.min(1, dt * 0.6);
+      this.gust = 0.62 + 0.26 * Math.sin(this.time * 0.41) + 0.12 * Math.sin(this.time * 1.07 + 1.3);
+      const roads = opts && opts.roads ? opts.roads : null;
+      if (roads !== this.roads) {
+        this.roads = roads;
+        this.chunks.clear();
+      }
+      if (this.off) return;
+      const nb = sim2.buildings ? sim2.buildings.length : 0;
+      const key = `${sim2.world.seed}|${sim2.seasonIdx}|${sim2.eraIndex}|${nb}`;
+      if (key !== this.key) {
+        this.key = key;
+        this.buildPressure(sim2);
+        this.chunks.clear();
+      }
+    }
+    // ---- давление цивилизации ---------------------------------------------
+    // Грубая сетка 4×4 клетки. Считается только при смене подписи мира, то есть
+    // на постройке здания или на новом сезоне, — в кадре не стоит ничего.
+    //
+    // Смысл поля: где человек уже забрал лес. Лесопилка сводит лес вокруг себя,
+    // ферма расчищает поле, фабрика травит копотью, жильё просто вытаптывает.
+    // Эпоха задаёт общий множитель: в каменном веке следов почти нет, пик — на
+    // индустрии, а к цифровой и будущему город снова зарастает (art-direction.md
+    // §4, эпоха 9: «вокруг города возвращается лес»).
+    buildPressure(sim2) {
+      const W = sim2.world.w, H = sim2.world.h;
+      const S = 4;
+      this.pw = Math.ceil(W / S);
+      this.ph = Math.ceil(H / S);
+      const g = new Float32Array(this.pw * this.ph);
+      const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
+      const em = eraMul[clamp2(sim2.eraIndex | 0, 0, 9)];
+      const weightOf = (id) => {
+        if (id === "lumber") return 1.25;
+        if (id === "farm" || id === "pasture") return 0.85;
+        if (id === "factory" || id === "workshop" || id === "foundry" || id === "power_plant" || id === "npp") return 0.95;
+        if (id === "quarry" || id === "mine") return 0.55;
+        return 0.45;
+      };
+      const blk = /* @__PURE__ */ new Set();
+      for (const b of sim2.buildings || []) {
+        if (b.destroyed) continue;
+        const sz = b.size || 1;
+        for (let dy = 0; dy < sz; dy++) {
+          for (let dx = 0; dx < sz; dx++) {
+            const xx = (b.x | 0) + dx, yy = (b.y | 0) + dy;
+            if (xx >= 0 && yy >= 0 && xx < W && yy < H) blk.add(yy * W + xx);
+          }
+        }
+        const w = weightOf(b.id) * em;
+        const R = 6;
+        const gx = (b.x + sz * 0.5) / S, gy = (b.y + sz * 0.5) / S;
+        const gr = R / S;
+        const x0 = Math.max(0, Math.floor(gx - gr)), x1 = Math.min(this.pw - 1, Math.ceil(gx + gr));
+        const y0 = Math.max(0, Math.floor(gy - gr)), y1 = Math.min(this.ph - 1, Math.ceil(gy + gr));
+        for (let y = y0; y <= y1; y++) {
+          for (let x = x0; x <= x1; x++) {
+            const d = Math.hypot(x + 0.5 - gx, y + 0.5 - gy) / gr;
+            if (d >= 1) continue;
+            g[y * this.pw + x] += w * (1 - d) * (1 - d);
+          }
+        }
+      }
+      this.press = g;
+      this.block = blk;
+    }
+    pressureAt(x, y) {
+      if (!this.press) return 0;
+      const gx = clamp2(x >> 2, 0, this.pw - 1), gy = clamp2(y >> 2, 0, this.ph - 1);
+      return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
+    }
+    // =========================================================================
+    // РАСКЛАДКА КВАРТАЛА 8×8. Считается один раз и живёт в кэше. Всё, что здесь
+    // выбирается, — чистая функция координат: одинаковый мир у всех игроков и
+    // на всех перезапусках.
+    // =========================================================================
+    chunkAt(sim2, cx, cy) {
+      const k = cx + "," + cy;
+      const got = this.chunks.get(k);
+      if (got) {
+        touch(this.chunks, k);
+        return got;
+      }
+      return null;
+    }
+    buildChunk(sim2, cx, cy) {
+      const world = sim2.world, W = world.w, H = world.h;
+      const season = sim2.seasonIdx | 0, era = clamp2(sim2.eraIndex | 0, 0, 9);
+      const D = this.q.detail;
+      const items = [];
+      const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
+      const nearWater = (x, y) => {
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const t = tile(x + dx, y + dy);
+          if (t === TILE.WATER || t === TILE.DEEP) return true;
+        }
+        return false;
+      };
+      const x0 = cx * VEG_CHUNK, y0 = cy * VEG_CHUNK;
+      for (let ty = y0; ty < y0 + VEG_CHUNK; ty++) {
+        if (ty < 0 || ty >= H) continue;
+        for (let tx = x0; tx < x0 + VEG_CHUNK; tx++) {
+          if (tx < 0 || tx >= W) continue;
+          const idx = ty * W + tx;
+          if (this.block && this.block.has(idx)) continue;
+          if (this.roads && this.roads.has(idx)) continue;
+          const t = world.tiles[idx];
+          if (t === TILE.WATER || t === TILE.DEEP) continue;
+          const p = this.pressureAt(tx, ty);
+          const warm = warmthAt(world, tx, ty, t);
+          const wet = moistAt(tx, ty);
+          const water = nearWater(tx, ty);
+          this.tileItems(items, sim2, world, tx, ty, t, season, era, D, p, warm, wet, water, tile);
+        }
+      }
+      items.sort((a, b) => a.y + (a.k === KIND_TREE ? 0.02 : 0) - (b.y + (b.k === KIND_TREE ? 0.02 : 0)));
+      const key = cx + "," + cy;
+      this.chunks.set(key, items);
+      prune(this.chunks, { maxEntries: VEG_LIMITS.chunks });
+      return items;
+    }
+    // ---- что растёт на одной клетке ---------------------------------------
+    tileItems(out, sim2, world, x, y, t, season, era, D, p, warm, wet, water, tile) {
+      const r1 = hash2(x * 7 + 1, y * 11 + 3);
+      const r2 = hash2(x * 13 + 91, y * 5 + 47);
+      const r3 = hash2(x * 3 + 511, y * 29 + 17);
+      const r4 = hash2(x * 23 + 7, y * 19 + 331);
+      if (t === TILE.FOREST) {
+        const edge = tile(x + 1, y) !== TILE.FOREST || tile(x - 1, y) !== TILE.FOREST || tile(x, y + 1) !== TILE.FOREST || tile(x, y - 1) !== TILE.FOREST;
+        const want = (edge ? this.edgeFill : this.forestFill) * (1 - 0.72 * p);
+        if (r1 < want) {
+          this.addTree(out, x, y, this.forestSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r3);
+          if (edge && D >= 2 && r4 < 0.34) {
+            this.addTree(out, x + 0.42, y + 0.3, this.forestSpecies(r4, warm, wet, water, era, p), season, era, p, r4, r1);
+          }
+        } else if (r3 < 0.14 + 0.55 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r3, r1);
+          if (r4 < 0.35 && p > 0.28) this.addUnder(out, x + 0.3, y + 0.22, U.SAPLING, season, r4, r2);
+        }
+        if (D >= 1 && r2 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r2, r3);
+        if (D >= 1 && r4 < 0.22) this.addUnder(out, x + 0.62, y + 0.26, U.BUSH, season, r4, r1);
+        if (D >= 2 && season !== 3 && r3 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r3, r4);
+        if (D >= 2 && r1 > 0.94) this.addUnder(out, x + 0.55, y + 0.7, U.LOG, season, r1, r2);
+        return;
+      }
+      if (t === TILE.GRASS) {
+        const want = (0.05 + wet * 0.12) * (1 - 0.82 * p);
+        if (r1 < want) {
+          this.addTree(out, x, y, this.openSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r3);
+        } else if (p > 0.3 && r3 < 0.1 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r3, r1);
+        }
+        if (water && r2 < 0.42) this.addUnder(out, x + 0.3, y + 0.55, U.REED, season, r2, r4);
+        if (D >= 1 && r4 < 0.15) this.addUnder(out, x + 0.55, y + 0.35, U.BUSH, season, r4, r1);
+        if (D >= 2 && r3 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r3, r2);
+        if (season < 2 && D >= 1) {
+          const fl = 0.16 + wet * 0.14 + (era >= 8 ? p * 0.3 : -p * 0.1);
+          if (r2 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r2, r3);
+        }
+        return;
+      }
+      if (t === TILE.HILL) {
+        const want = 0.1 * (1 - 0.6 * p);
+        if (r1 < want) {
+          const sp = warm < 0.42 ? r2 < 0.6 ? SP.spruce : SP.pine : r2 < 0.5 ? SP.junip : SP.pine;
+          this.addTree(out, x, y, sp, season, era, p, r2, r3);
+        }
+        if (D >= 1 && r3 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r3, r1);
+        if (D >= 2 && r4 < 0.22) this.addUnder(out, x + 0.25, y + 0.66, U.GRASS, season, r4, r2);
+        if (D >= 2 && season < 2 && r2 > 0.9) this.addUnder(out, x + 0.6, y + 0.3, U.FLOWER, season, r2, r4);
+        return;
+      }
+      if (t === TILE.SAND) {
+        if (water && warm > 0.55 && r1 < 0.14) {
+          this.addTree(out, x, y, SP.palm, season, era, p, r2, r3);
+        } else if (water && warm <= 0.55 && r1 < 0.06) {
+          this.addTree(out, x, y, SP.willow, season, era, p, r2, r3);
+        }
+        if (water && r2 < 0.28) this.addUnder(out, x + 0.4, y + 0.55, U.REED, season, r2, r4);
+        if (D >= 2 && r3 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r3, r1);
+        return;
+      }
+      if (t === TILE.MOUNTAIN) {
+        const foot = tile(x, y + 1) === TILE.HILL || tile(x - 1, y) === TILE.HILL || tile(x + 1, y) === TILE.HILL;
+        if (foot && r1 < 0.07) this.addTree(out, x, y, r2 < 0.5 ? SP.dead : SP.junip, season, era, p, r2, r3);
+      }
+    }
+    // ---- выбор породы ------------------------------------------------------
+    forestSpecies(r, warm, wet, water, era, p) {
+      if (water && wet > 0.5) return r < 0.6 ? SP.willow : SP.poplar;
+      if (era >= 6 && era <= 7 && p > 0.55 && r > 0.88) return SP.dead;
+      if (warm < 0.3) return pick(r, [SP.spruce, 0.62, SP.pine, 0.38]);
+      if (warm < 0.54) return pick(r, [SP.spruce, 0.26, SP.birch, 0.3, SP.pine, 0.16, SP.oak, 0.16, SP.maple, 0.12]);
+      if (warm < 0.78) return pick(r, [SP.oak, 0.34, SP.maple, 0.24, SP.birch, 0.16, SP.poplar, 0.16, SP.pine, 0.1]);
+      return pick(r, [SP.acacia, 0.46, SP.oak, 0.26, SP.palm, wet > 0.55 ? 0.18 : 0.06, SP.maple, 0.12]);
+    }
+    openSpecies(r, warm, wet, water, era, p) {
+      if (era >= 3 && p > 0.34 && r < 0.42) return SP.fruit;
+      if (water) return r < 0.55 ? SP.willow : SP.poplar;
+      if (warm < 0.32) return r < 0.6 ? SP.spruce : SP.birch;
+      if (warm < 0.6) return pick(r, [SP.oak, 0.34, SP.birch, 0.28, SP.maple, 0.2, SP.poplar, 0.18]);
+      return pick(r, [SP.acacia, 0.44, SP.oak, 0.28, SP.poplar, 0.16, SP.palm, warm > 0.82 ? 0.12 : 0.02]);
+    }
+    // ---- заведение растения ------------------------------------------------
+    addTree(out, x, y, sp, season, era, p, ra, rb) {
+      const spec = SPECIES[sp];
+      const sz = spec.sz[0] + (spec.sz[1] - spec.sz[0]) * ra;
+      let tone = rb < 0.34 ? 0 : rb < 0.74 ? 1 : 2;
+      if (era >= 6 && era <= 7 && p > 0.42) tone = 0;
+      else if (era >= 8 && p > 0.3 && tone < 2) tone = Math.min(2, tone + 1);
+      out.push({
+        x: x + 0.16 + ra * 0.66,
+        y: y + 0.22 + rb * 0.56,
+        k: KIND_TREE,
+        s: sp,
+        sz,
+        tone,
+        form: rb < 0.5 ? 0 : 1,
+        flip: ra < 0.5 ? 0 : 1,
+        flex: spec.flex,
+        ph: ra * 6.283,
+        // Приоритет прореживания: деревья держатся до последнего, поэтому их
+        // ключ вдвое «дешевле» — крупный ярус исчезает последним.
+        pri: (ra * 0.6 + rb * 0.4) * 0.55
+      });
+    }
+    addUnder(out, x, y, kind, season, ra, rb) {
+      const s = UNDER_SZ[kind];
+      out.push({
+        x: x + 0.1 + ra * 0.72,
+        y: y + 0.2 + rb * 0.6,
+        k: KIND_UNDER,
+        s: kind,
+        sz: s[0] + (s[1] - s[0]) * ra,
+        tone: rb < 0.4 ? 0 : rb < 0.8 ? 1 : 2,
+        form: ra < 0.5 ? 0 : 1,
+        flip: 0,
+        flex: UNDER_FLEX[kind],
+        ph: rb * 6.283,
+        pri: ra * 0.5 + rb * 0.5
+      });
+    }
+    // =========================================================================
+    // СПРАЙТЫ
+    // =========================================================================
+    treeSprite(sp, season, tone, form) {
+      const key = `t${sp}|${season}|${tone}|${form}`;
+      let cv = this.sprites.get(key);
+      if (cv) {
+        touch(this.sprites, key);
+        return cv;
+      }
+      const S = this.treePx;
+      cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const spec = SPECIES[sp];
+      PAINT[sp](c, S, foliage(spec, season, tone), spec, season, form);
+      this.sprites.set(key, cv);
+      prune(this.sprites, { maxEntries: VEG_LIMITS.sprites, maxBytes: VEG_LIMITS.spriteMB * 1048576, bytesOf: canvasBytes });
+      return cv;
+    }
+    underSprite(kind, season, tone, form) {
+      const key = `u${kind}|${season}|${tone}|${form}`;
+      let cv = this.sprites.get(key);
+      if (cv) {
+        touch(this.sprites, key);
+        return cv;
+      }
+      const S = this.underPx;
+      cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const F = foliage(SPECIES[SP.oak], season, tone);
+      PAINT_U[kind](c, S, F, season, form);
+      this.sprites.set(key, cv);
+      prune(this.sprites, { maxEntries: VEG_LIMITS.sprites, maxBytes: VEG_LIMITS.spriteMB * 1048576, bytesOf: canvasBytes });
+      return cv;
+    }
+    // =========================================================================
+    // ОТРИСОВКА. Ставится после земли и ДО зданий и жителей: растительность —
+    // часть ландшафта, а не декорация поверх города.
+    // =========================================================================
+    draw(sim2, ctx, ox, oy, z, cw, ch) {
+      this.drawn = 0;
+      if (this.off || !sim2 || !sim2.world) return;
+      if (!this.q.ambientProps) return;
+      if (z / TILE_PX < this.q.lod.propsMinZoom) return;
+      const cap = VEG_LIMITS.items[this.q.id] ?? VEG_LIMITS.items.high;
+      if (cap <= 0) return;
+      const W = sim2.world.w, H = sim2.world.h;
+      const wx0 = Math.floor(-ox / z) - 2, wx1 = Math.ceil((cw - ox) / z) + 2;
+      const wy0 = Math.floor(-oy / z) - 3, wy1 = Math.ceil((ch - oy) / z) + 2;
+      const cx0 = Math.max(0, Math.floor(wx0 / VEG_CHUNK)), cx1 = Math.min(Math.ceil(W / VEG_CHUNK) - 1, Math.floor(wx1 / VEG_CHUNK));
+      const cy0 = Math.max(0, Math.floor(wy0 / VEG_CHUNK)), cy1 = Math.min(Math.ceil(H / VEG_CHUNK) - 1, Math.floor(wy1 / VEG_CHUNK));
+      if (cx1 < cx0 || cy1 < cy0) return;
+      let budget = Math.max(2, (this.q.caps && this.q.caps.chunksPerFrame ? this.q.caps.chunksPerFrame : 8) >> 1);
+      const vis = this._vis;
+      vis.length = 0;
+      let total = 0;
+      for (let cy = cy0; cy <= cy1; cy++) {
+        for (let cx = cx0; cx <= cx1; cx++) {
+          let list = this.chunkAt(sim2, cx, cy);
+          if (!list) {
+            if (budget <= 0) continue;
+            budget--;
+            list = this.buildChunk(sim2, cx, cy);
+          }
+          if (!list.length) continue;
+          vis.push(list);
+          total += list.length;
+        }
+      }
+      if (!total) return;
+      const cut = total > cap ? cap / total : 1;
+      const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp2(this.gust, 0.2, 1.2) * stormK;
+      const dir = this.wind < 0 ? -1 : 1;
+      const t = this.time;
+      const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
+      const m0 = m ? m.a : 0, m1 = m ? m.b : 0, m2 = m ? m.c : 0, m3 = m ? m.d : 0, m4 = m ? m.e : 0, m5 = m ? m.f : 0;
+      let skewed = false;
+      let drawn = 0;
+      for (let i = 0; i < vis.length; i++) {
+        const list = vis[i];
+        for (let j = 0; j < list.length; j++) {
+          const it = list[j];
+          if (it.pri > cut) continue;
+          const d = it.sz * z;
+          const sx = ox + it.x * z, sy = oy + it.y * z;
+          if (sx + d < 0 || sy + d * 0.14 < 0 || sx - d > cw || sy - d > ch) continue;
+          if (drawn >= cap) break;
+          drawn++;
+          const sw = amp * it.flex * dir * Math.sin(t * 1.35 + it.ph - it.x * 0.55 - it.y * 0.18);
+          if (it.k === KIND_TREE) {
+            const cv = this.treeSprite(it.s, sim2.seasonIdx, it.tone, it.form);
+            if (m && (sw > 4e-3 || sw < -4e-3 || it.flip)) {
+              const a2 = it.flip ? -1 : 1;
+              const e2 = (it.flip ? 2 * sx : 0) - sw * sy;
+              ctx.setTransform(m0 * a2, m1 * a2, m0 * sw + m2, m1 * sw + m3, m0 * e2 + m4, m1 * e2 + m5);
+              skewed = true;
+              ctx.drawImage(cv, sx - d * 0.5, sy - d * 0.88, d, d);
+            } else {
+              if (skewed) {
+                ctx.setTransform(m0, m1, m2, m3, m4, m5);
+                skewed = false;
+              }
+              ctx.drawImage(cv, sx - d * 0.5, sy - d * 0.88, d, d);
+            }
+          } else {
+            if (skewed) {
+              ctx.setTransform(m0, m1, m2, m3, m4, m5);
+              skewed = false;
+            }
+            const cv = this.underSprite(it.s, sim2.seasonIdx, it.tone, it.form);
+            ctx.drawImage(cv, sx - d * 0.5 + sw * d * 0.55, sy - d * 0.88, d, d);
+          }
+        }
+        if (drawn >= cap) break;
+      }
+      if (skewed) ctx.setTransform(m0, m1, m2, m3, m4, m5);
+      this.drawn = drawn;
+    }
+  };
+
   // app/src/render/fx.js
   var FX_LIMITS = {
     puff: 240,
@@ -9428,9 +11659,9 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp2 = (v, a, b) => v < a ? a : v > b ? b : v;
-  var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
-  function makeRnd2(seed) {
+  var clamp3 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  function makeRnd4(seed) {
     let s = seed | 0 || 1831565813;
     return () => {
       s ^= s << 13;
@@ -9510,7 +11741,7 @@ ${s}`, "console");
       this.time = 0;
       this.night = 0;
       this.wind = -0.3;
-      this.rnd = makeRnd2(528734635);
+      this.rnd = makeRnd4(528734635);
       this.seeded = false;
       this.cw = 0;
       this.ch = 0;
@@ -9726,7 +11957,7 @@ ${s}`, "console");
     update(sim2, dt, ox, oy, z, cw, ch) {
       if (!sim2) return;
       if (!this.seeded) {
-        this.rnd = makeRnd2((sim2.world && sim2.world.seed) | 0 || 20250808);
+        this.rnd = makeRnd4((sim2.world && sim2.world.seed) | 0 || 20250808);
         this.seeded = true;
       }
       dt = Math.min(0.05, Math.max(0, dt || 0));
@@ -9815,7 +12046,7 @@ ${s}`, "console");
           this.em.splice(i, 1);
           continue;
         }
-        const k = clamp012(e.ttl / Math.max(1e-3, e.life));
+        const k = clamp014(e.ttl / Math.max(1e-3, e.life));
         switch (e.kind) {
           case "fire":
             this._tickFire(e, dt, dens);
@@ -9944,7 +12175,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp2(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp3(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -10046,7 +12277,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp2(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp3(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -10115,7 +12346,7 @@ ${s}`, "console");
         const top = this._roofY(b);
         const maxHp = def.wall || 100;
         if (b.hp != null && b.hp < maxHp * 0.6) {
-          const k = 1 - clamp012(b.hp / (maxHp * 0.6));
+          const k = 1 - clamp014(b.hp / (maxHp * 0.6));
           st.acc += (3 + 7 * k) * dens * dt;
           while (st.acc >= 1) {
             st.acc--;
@@ -10419,7 +12650,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp2(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp3(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -10503,7 +12734,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp2(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp3(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -10550,7 +12781,7 @@ ${s}`, "console");
   };
 
   // app/src/render/renderer.js
-  var TILE_PX = 32;
+  var TILE_PX2 = 32;
   var Renderer = class {
     constructor(canvas2) {
       this.canvas = canvas2;
@@ -10576,6 +12807,8 @@ ${s}`, "console");
       this.art = new ArtPack();
       this.art.preload();
       this.atmo = new Atmosphere(this.quality);
+      this.water = new WaterLayer(this.quality);
+      this.veg = new Vegetation(this.quality);
       this.fx = new FxLayer(this.quality);
     }
     // id ∈ QUALITY_ORDER или 'auto'
@@ -10594,6 +12827,8 @@ ${s}`, "console");
       this.people.setQuality(this.quality);
       this.beasts.setQuality(this.quality);
       this.atmo.setQuality(this.quality);
+      this.water.setQuality(this.quality);
+      this.veg.setQuality(this.quality);
       this.fx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
@@ -10607,14 +12842,14 @@ ${s}`, "console");
     }
     screenToWorld(sx, sy) {
       return {
-        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX * this.cam.zoom),
-        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX * this.cam.zoom)
+        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX2 * this.cam.zoom),
+        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX2 * this.cam.zoom)
       };
     }
     worldToScreen(wx, wy) {
       return {
-        x: (wx - this.cam.x) * TILE_PX * this.cam.zoom + this.canvas.width / this.dpr / 2,
-        y: (wy - this.cam.y) * TILE_PX * this.cam.zoom + this.canvas.height / this.dpr / 2
+        x: (wx - this.cam.x) * TILE_PX2 * this.cam.zoom + this.canvas.width / this.dpr / 2,
+        y: (wy - this.cam.y) * TILE_PX2 * this.cam.zoom + this.canvas.height / this.dpr / 2
       };
     }
     // ---------------------------------------------------------------------
@@ -10628,10 +12863,11 @@ ${s}`, "console");
       const L = lightAt(sim2.dayTime);
       ctx.fillStyle = L.sky;
       ctx.fillRect(0, 0, cw, ch);
-      const z = TILE_PX * this.cam.zoom;
+      const z = TILE_PX2 * this.cam.zoom;
       const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
       this.terrain.draw(ctx, sim2, ox, oy, z, cw, ch);
-      if (this.quality.water) this.terrain.drawWater(ctx, sim2, ox, oy, z, cw, ch, this.time);
+      if (this.quality.richWater) this.water.draw(sim2, ctx, ox, oy, z, cw, ch, dtReal, L);
+      else if (this.quality.water) this.terrain.drawWater(ctx, sim2, ox, oy, z, cw, ch, this.time);
       this.atmo.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.fx.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
@@ -10716,6 +12952,8 @@ ${s}`, "console");
         this.people.setQuality(this.quality);
         this.beasts.setQuality(this.quality);
         this.atmo.setQuality(this.quality);
+        this.water.setQuality(this.quality);
+        this.veg.setQuality(this.quality);
         this.fx.setQuality(this.quality);
         this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
         this.resize();
@@ -11482,10 +13720,10 @@ ${s}`, "console");
           ctx.fill();
         }
       }
-      const vx = mx + (this.cam.x - this.canvas.width / this.dpr / 2 / (TILE_PX * this.cam.zoom)) * scale;
-      const vy = my + (this.cam.y - this.canvas.height / this.dpr / 2 / (TILE_PX * this.cam.zoom)) * scale;
-      const vw = this.canvas.width / this.dpr / (TILE_PX * this.cam.zoom) * scale;
-      const vh = this.canvas.height / this.dpr / (TILE_PX * this.cam.zoom) * scale;
+      const vx = mx + (this.cam.x - this.canvas.width / this.dpr / 2 / (TILE_PX2 * this.cam.zoom)) * scale;
+      const vy = my + (this.cam.y - this.canvas.height / this.dpr / 2 / (TILE_PX2 * this.cam.zoom)) * scale;
+      const vw = this.canvas.width / this.dpr / (TILE_PX2 * this.cam.zoom) * scale;
+      const vh = this.canvas.height / this.dpr / (TILE_PX2 * this.cam.zoom) * scale;
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
       ctx.strokeRect(vx, vy, vw, vh);

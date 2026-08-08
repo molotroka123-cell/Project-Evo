@@ -57,6 +57,7 @@ export const QUALITY = {
   // блита, здесь нет: ни рельефа, ни воды, ни теней, ни единого пост-эффекта.
   eco: preset({
     id: 'eco', ru: 'Экономия',
+    richWater: false,   // богатая вода: см. замер в renderer.draw
     tilePx: 16, tilePxFar: 8,
     dprCap: 1, maxCanvasPx: 1.6e6,
     relief: false, shoreFoam: false, water: false, clouds: false, shadows: false,
@@ -86,6 +87,7 @@ export const QUALITY = {
   // нет свечения, лучей и зерна — три самых дорогих слоя.
   medium: preset({
     id: 'medium', ru: 'Средне',
+    richWater: false,   // богатая вода: см. замер в renderer.draw
     tilePx: 24, tilePxFar: 12,
     dprCap: 1.5, maxCanvasPx: 2.5e6,
     relief: true, shoreFoam: true, water: true, clouds: true, shadows: true,
@@ -112,6 +114,7 @@ export const QUALITY = {
   // зерна. Это пресет по умолчанию для десктопа и потолок авто-тюнера.
   high: preset({
     id: 'high', ru: 'Высоко',
+    richWater: false,  // богатая вода: см. замер в renderer.draw
     tilePx: 32, tilePxFar: 16,
     dprCap: 2, maxCanvasPx: 4.5e6,
     relief: true, shoreFoam: true, water: true, clouds: true, shadows: true,
@@ -149,6 +152,7 @@ export const QUALITY = {
   // мягкий свет, вдвое больше потолки кэшей и разрешена вторая выпечка за кадр.
   ultra: preset({
     id: 'ultra', ru: 'Ультра',
+    richWater: true,  // богатая вода: см. замер в renderer.draw
     tilePx: 32, tilePxFar: 16,
     dprCap: 2, maxCanvasPx: 6.5e6,
     relief: true, shoreFoam: true, water: true, clouds: true, shadows: true,

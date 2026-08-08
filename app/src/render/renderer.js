@@ -9,6 +9,8 @@ import { PeopleSprites, AnimalSprites, professionOf, lookOf } from './people.js'
 import { ArtPack } from './artpack.js';
 import { QUALITY, guessQuality, loadQualityId, saveQualityId, makeAutoTuner } from './quality.js';
 import { Atmosphere } from './weather.js';
+import { WaterLayer } from './water.js';
+import { Vegetation } from './vegetation.js';
 import { FxLayer } from './fx.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 
@@ -44,6 +46,8 @@ export class Renderer {
     this.art = new ArtPack();
     this.art.preload();
     this.atmo = new Atmosphere(this.quality);
+    this.water = new WaterLayer(this.quality);
+    this.veg = new Vegetation(this.quality);
     this.fx = new FxLayer(this.quality);
   }
 
@@ -63,6 +67,8 @@ export class Renderer {
     this.people.setQuality(this.quality);
     this.beasts.setQuality(this.quality);
     this.atmo.setQuality(this.quality);
+    this.water.setQuality(this.quality);
+    this.veg.setQuality(this.quality);
     this.fx.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
@@ -108,7 +114,13 @@ export class Renderer {
 
     // --- местность (чанками, рельефное освещение, береговая линия) ---
     this.terrain.draw(ctx, sim, ox, oy, z, cw, ch);
-    if (this.quality.water) this.terrain.drawWater(ctx, sim, ox, oy, z, cw, ch, this.time);
+    // Богатая вода (отражения, гребни, прибой, лёд) только там, где есть запас
+    // производительности. Замер на программном растеризаторе: 62 -> 26 FPS,
+    // то есть модуль съедает больше половины кадра. На настоящем GPU он
+    // наверняка дешевле, но проверить это здесь нечем, поэтому по умолчанию
+    // включаем только на верхних пресетах, а ниже оставляем прежнюю заливку.
+    if (this.quality.richWater) this.water.draw(sim, ctx, ox, oy, z, cw, ch, dtReal, L);
+    else if (this.quality.water) this.terrain.drawWater(ctx, sim, ox, oy, z, cw, ch, this.time);
     this.atmo.update(sim, dtReal, ox, oy, z, cw, ch);
     this.fx.update(sim, dtReal, ox, oy, z, cw, ch);
     this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
@@ -217,6 +229,8 @@ export class Renderer {
       this.people.setQuality(this.quality);
       this.beasts.setQuality(this.quality);
     this.atmo.setQuality(this.quality);
+    this.water.setQuality(this.quality);
+    this.veg.setQuality(this.quality);
     this.fx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
