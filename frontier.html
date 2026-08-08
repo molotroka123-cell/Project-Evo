@@ -2727,8 +2727,69 @@
       }
       this.spawnFactions();
       installSystems(this);
+      if (opts.startEra > 0) this.startFromEra(Math.min(9, opts.startEra | 0));
       this.addChronicle(`Основание поселения. ${ERAS[0].ru}, ${ERAS[0].years}.`);
       this.addLog("Поселение основано. Постройте Хижину — цели слева подскажут путь.");
+    }
+    // Разворачивает партию в указанной эпохе: технологии, ресурсы, население
+    // и опорные постройки. Числа подобраны так, чтобы старт был играбельным,
+    // а не «всё уже построено»: даём фундамент, дальше игрок сам.
+    startFromEra(idx) {
+      this.eraIndex = idx;
+      this.eraDay = 0;
+      for (const t of TECHS) {
+        if ((TECH_ERA_IDX[t.id] ?? 0) <= idx) this.techs.add(t.id);
+      }
+      const k = 1 + idx * 0.9;
+      this.res.food = Math.round(120 * k);
+      this.res.wood = Math.round(90 * k);
+      this.res.stone = Math.round(60 * k);
+      this.res.steel = idx >= 6 ? Math.round(40 * (idx - 5)) : 0;
+      this.res.gold = idx >= 2 ? Math.round(80 * (idx - 1)) : 0;
+      this.res.knowledge = 0;
+      this.resCap.food = 200 + idx * 220;
+      this.resCap.wood = 400 + idx * 260;
+      this.resCap.stone = 400 + idx * 260;
+      const CORE = [
+        "hut",
+        "granary",
+        "smithy",
+        "temple",
+        "stone_house",
+        "market",
+        "university",
+        "factory",
+        "lab",
+        "datacenter"
+      ];
+      const cx = this.world.startX, cy = this.world.startY;
+      let ring = 2, slot = 0;
+      for (let e = 0; e <= idx; e++) {
+        const id = CORE[e];
+        if (!id || !BUILDINGS[id]) continue;
+        for (let tries = 0; tries < 24; tries++) {
+          const ang = slot++ / 6 * Math.PI * 2;
+          const x = Math.round(cx + Math.cos(ang) * ring);
+          const y = Math.round(cy + Math.sin(ang) * ring);
+          if (this.canPlace(id, x, y).ok) {
+            const b = this.placeFree(id, x, y);
+            const built = this.buildingAt(x, y);
+            if (built) {
+              built.done = true;
+              built.progress = 1;
+            }
+            void b;
+            break;
+          }
+          if (slot % 6 === 0) ring++;
+        }
+      }
+      const want = Math.min(6 + idx * 3, this.housingCap());
+      while (this.villagers.length < want) {
+        this.spawnVillager(cx + this.rng.range(-3, 3), cy + this.rng.range(-3, 3));
+      }
+      this.addChronicle(`Партия начата в эпоху: ${ERAS[idx].ru} (${ERAS[idx].years}).`);
+      this.addLog(`Начало в эпоху «${ERAS[idx].ru}»: технологии и первые постройки уже есть.`, "good");
     }
     randomLand(minR, maxR) {
       const { startX, startY } = this.world;
@@ -16719,9 +16780,19 @@ ${out}`;
       });
     }
     showNewGame() {
+      this._ngEra = this._ngEra || 0;
+      const eras = ERAS.map((e, i) => `<button class="btn ${i === this._ngEra ? "primary" : ""}" data-era="${i}" style="text-align:left">
+         ${e.ru}<small style="display:block;opacity:.7">${e.years}</small>
+       </button>`).join("");
       this.showModal(`
       <h3>Новая игра</h3>
-      <p>Мир генерируется из сида — один сид = один мир. Соседи-фракции живут своей жизнью.</p>
+      <p>Мир генерируется из сида — один сид даёт один и тот же мир. Соседи живут своей жизнью.</p>
+      <p style="color:var(--accent);margin-bottom:6px">С какой эпохи начать</p>
+      <div class="btns" style="max-height:34vh;overflow-y:auto">${eras}</div>
+      <p style="color:var(--dim);font-size:11px;margin:10px 0 6px">
+        Со старших эпох вы получаете их технологии, запасы и первые постройки.
+      </p>
+      <p style="color:var(--accent);margin-bottom:6px">Сколько соседей</p>
       <div class="btns">
         <button class="btn" data-n="3">🌍 Соседей: 3</button>
         <button class="btn" data-n="4">🌍 Соседей: 4</button>
@@ -16729,9 +16800,16 @@ ${out}`;
         <button class="btn" data-n="0">🏝 Один в мире</button>
         <button class="btn" data-n="cancel">Отмена</button>
       </div>`);
+      this.el.modalBox.querySelectorAll("[data-era]").forEach((b) => {
+        b.onclick = () => {
+          this._ngEra = +b.dataset.era;
+          this.audio.play("click");
+          this.showNewGame();
+        };
+      });
       this.el.modalBox.querySelectorAll("[data-n]").forEach((b) => {
         b.onclick = () => {
-          if (b.dataset.n !== "cancel") this.cb.newGame(+b.dataset.n);
+          if (b.dataset.n !== "cancel") this.cb.newGame(+b.dataset.n, this._ngEra);
           this.closeModal();
         };
       });
@@ -18457,9 +18535,9 @@ ${out}`;
     importSave(json) {
       loadFromJson(json);
     },
-    newGame(factions) {
+    newGame(factions, startEra = 0) {
       saveSys.remove("auto");
-      sim = newSimulation(Date.now() % 1e6, factions);
+      sim = newSimulation(Date.now() % 1e6, factions, startEra);
       document.getElementById("overlay").classList.add("hidden");
       hud.toast("Новый мир создан. Удачи!", "good");
       coach.start();
@@ -18471,8 +18549,8 @@ ${out}`;
       coach.start();
     }
   });
-  function newSimulation(seed, factions) {
-    const s = new Simulation(seed, { factions });
+  function newSimulation(seed, factions, startEra = 0) {
+    const s = new Simulation(seed, { factions, startEra });
     s.sfx = (n) => audio.play(n);
     hud.sim = s;
     sim = s;

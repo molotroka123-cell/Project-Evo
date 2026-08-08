@@ -1067,9 +1067,23 @@ export class Hud {
   }
 
   showNewGame() {
+    // Выбор эпохи старта: партия с античности или с индустриальной эпохи —
+    // это другая игра, а не ускоренная старая. Технологии, ресурсы, население
+    // и опорные постройки выдаются по эпохе (см. Simulation.startFromEra).
+    this._ngEra = this._ngEra || 0;
+    const eras = ERAS.map((e, i) =>
+      `<button class="btn ${i === this._ngEra ? 'primary' : ''}" data-era="${i}" style="text-align:left">
+         ${e.ru}<small style="display:block;opacity:.7">${e.years}</small>
+       </button>`).join('');
     this.showModal(`
       <h3>Новая игра</h3>
-      <p>Мир генерируется из сида — один сид = один мир. Соседи-фракции живут своей жизнью.</p>
+      <p>Мир генерируется из сида — один сид даёт один и тот же мир. Соседи живут своей жизнью.</p>
+      <p style="color:var(--accent);margin-bottom:6px">С какой эпохи начать</p>
+      <div class="btns" style="max-height:34vh;overflow-y:auto">${eras}</div>
+      <p style="color:var(--dim);font-size:11px;margin:10px 0 6px">
+        Со старших эпох вы получаете их технологии, запасы и первые постройки.
+      </p>
+      <p style="color:var(--accent);margin-bottom:6px">Сколько соседей</p>
       <div class="btns">
         <button class="btn" data-n="3">🌍 Соседей: 3</button>
         <button class="btn" data-n="4">🌍 Соседей: 4</button>
@@ -1077,9 +1091,12 @@ export class Hud {
         <button class="btn" data-n="0">🏝 Один в мире</button>
         <button class="btn" data-n="cancel">Отмена</button>
       </div>`);
+    this.el.modalBox.querySelectorAll('[data-era]').forEach(b => {
+      b.onclick = () => { this._ngEra = +b.dataset.era; this.audio.play('click'); this.showNewGame(); };
+    });
     this.el.modalBox.querySelectorAll('[data-n]').forEach(b => {
       b.onclick = () => {
-        if (b.dataset.n !== 'cancel') this.cb.newGame(+b.dataset.n);
+        if (b.dataset.n !== 'cancel') this.cb.newGame(+b.dataset.n, this._ngEra);
         this.closeModal();
       };
     });

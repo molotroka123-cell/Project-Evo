@@ -79,9 +79,9 @@ hud.bind({
     loadFromJson(json);
   },
   importSave(json) { loadFromJson(json); },
-  newGame(factions) {
+  newGame(factions, startEra = 0) {
     saveSys.remove('auto');
-    sim = newSimulation(Date.now() % 1000000, factions);
+    sim = newSimulation(Date.now() % 1000000, factions, startEra);
     document.getElementById('overlay').classList.add('hidden');
     hud.toast('Новый мир создан. Удачи!', 'good');
     coach.start();
@@ -94,8 +94,8 @@ hud.bind({
   },
 });
 
-function newSimulation(seed, factions) {
-  const s = new Simulation(seed, { factions });
+function newSimulation(seed, factions, startEra = 0) {
+  const s = new Simulation(seed, { factions, startEra });
   s.sfx = (n) => audio.play(n);
   hud.sim = s;
   sim = s;

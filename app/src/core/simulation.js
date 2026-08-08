@@ -107,8 +107,72 @@ export class Simulation {
     this.spawnFactions();
     // подсистемы (зима, границы) — ставятся последними: им нужен готовый мир
     installSystems(this);
+    // Старт не с каменного века. Игрок выбирает эпоху на экране новой игры;
+    // мы выдаём ему всё, что народ к этому времени уже знал и построил бы,
+    // иначе «начать с античности» означало бы античный год с каменным топором.
+    if (opts.startEra > 0) this.startFromEra(Math.min(9, opts.startEra | 0));
     this.addChronicle(`Основание поселения. ${ERAS[0].ru}, ${ERAS[0].years}.`);
     this.addLog('Поселение основано. Постройте Хижину — цели слева подскажут путь.');
+  }
+
+  // Разворачивает партию в указанной эпохе: технологии, ресурсы, население
+  // и опорные постройки. Числа подобраны так, чтобы старт был играбельным,
+  // а не «всё уже построено»: даём фундамент, дальше игрок сам.
+  startFromEra(idx) {
+    this.eraIndex = idx;
+    this.eraDay = 0;
+
+    // 1. Технологии: всё, что относится к этой эпохе и более ранним.
+    for (const t of TECHS) {
+      if ((TECH_ERA_IDX[t.id] ?? 0) <= idx) this.techs.add(t.id);
+    }
+
+    // 2. Ресурсы и склады растут с эпохой — иначе первый же день заканчивается
+    //    голодом при населении, которое эпохе положено.
+    const k = 1 + idx * 0.9;
+    this.res.food = Math.round(120 * k);
+    this.res.wood = Math.round(90 * k);
+    this.res.stone = Math.round(60 * k);
+    this.res.steel = idx >= 6 ? Math.round(40 * (idx - 5)) : 0;
+    this.res.gold = idx >= 2 ? Math.round(80 * (idx - 1)) : 0;
+    this.res.knowledge = 0;
+    this.resCap.food = 200 + idx * 220;
+    this.resCap.wood = 400 + idx * 260;
+    this.resCap.stone = 400 + idx * 260;
+
+    // 3. Опорные постройки: по одной ключевой из каждой пройденной эпохи,
+    //    поставленные вокруг кострища. Ставим бесплатно и сразу готовыми.
+    const CORE = ['hut', 'granary', 'smithy', 'temple', 'stone_house', 'market',
+      'university', 'factory', 'lab', 'datacenter'];
+    const cx = this.world.startX, cy = this.world.startY;
+    let ring = 2, slot = 0;
+    for (let e = 0; e <= idx; e++) {
+      const id = CORE[e];
+      if (!id || !BUILDINGS[id]) continue;
+      // По спирали вокруг центра, пропуская занятое и непригодное.
+      for (let tries = 0; tries < 24; tries++) {
+        const ang = (slot++ / 6) * Math.PI * 2;
+        const x = Math.round(cx + Math.cos(ang) * ring);
+        const y = Math.round(cy + Math.sin(ang) * ring);
+        if (this.canPlace(id, x, y).ok) {
+          const b = this.placeFree(id, x, y);
+          const built = this.buildingAt(x, y);
+          if (built) { built.done = true; built.progress = 1; }
+          void b;
+          break;
+        }
+        if (slot % 6 === 0) ring++;
+      }
+    }
+
+    // 4. Население под эпоху, но не больше, чем есть жильё.
+    const want = Math.min(6 + idx * 3, this.housingCap());
+    while (this.villagers.length < want) {
+      this.spawnVillager(cx + this.rng.range(-3, 3), cy + this.rng.range(-3, 3));
+    }
+
+    this.addChronicle(`Партия начата в эпоху: ${ERAS[idx].ru} (${ERAS[idx].years}).`);
+    this.addLog(`Начало в эпоху «${ERAS[idx].ru}»: технологии и первые постройки уже есть.`, 'good');
   }
 
   randomLand(minR, maxR) {
