@@ -12,18 +12,22 @@
 // нулевого числа ошибок в консоли.
 import { AVAILABLE } from './artpack_list.js';
 
-// 42 здания, для которых заказчик сгенерировал арт (см. tools/art/raw_map.tsv).
-// Остальные 16 (campfire, quarry, story_fire, склады, shipyard, sewers, lab,
-// apartment, airport, npp, robo_factory, biolab, skyscraper, ai_core) рисуются
-// процедурно, пока не появится их арт — тогда просто дописать id сюда.
+// 39 зданий с проверенным артом. Проверка не на слово: каждый файл прогнан
+// через cutout.mjs и затем через тест «все четыре угла прозрачны» — генератор
+// охотно рисует траву и небо вместо ровного хромакея, и такие кадры вырезаются
+// с розовой каймой вокруг постройки. Из первых 42 картинок этот тест прошли
+// только 10; после перегенерации с ужесточённым промтом — 39 из 39.
+// Оставшиеся 19 построек (campfire, quarry, story_fire, склады, shipyard,
+// sewers, lab, apartment, airport, npp, robo_factory, biolab, skyscraper,
+// ai_core и др.) рисуются процедурно — дописать id сюда, когда появится арт.
 export const MANIFEST = [
-  'academy', 'amphitheater', 'aqueduct', 'armory', 'bank', 'barracks', 'castle',
-  'clinic', 'datacenter', 'factory', 'farm', 'forager', 'foundry', 'fusion_reactor',
-  'granary', 'guild_hall', 'hospital', 'hunter_lodge', 'hut', 'lumber', 'market',
-  'media_tower', 'mill', 'mine', 'observatory', 'palisade', 'pasture', 'port',
-  'power_plant', 'press', 'smithy', 'solar', 'spaceport', 'spire', 'stock_exchange',
-  'stone_house', 'stone_walls', 'temple', 'train_station', 'treasury', 'university',
-  'workshop',
+  'academy', 'amphitheater', 'aqueduct', 'armory', 'bank', 'barracks',
+  'castle', 'clinic', 'datacenter', 'factory', 'farm', 'forager',
+  'foundry', 'granary', 'guild_hall', 'hospital', 'hunter_lodge', 'hut',
+  'lumber', 'market', 'media_tower', 'mill', 'mine', 'observatory',
+  'palisade', 'pasture', 'port', 'power_plant', 'press', 'smithy',
+  'solar', 'spaceport', 'spire', 'stock_exchange', 'stone_walls', 'temple',
+  'treasury', 'university', 'workshop',
 ];
 
 const BASE = 'assets/sprites/';
