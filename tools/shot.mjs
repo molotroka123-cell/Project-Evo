@@ -179,6 +179,30 @@ for (const name of names) {
   const file = join(OUTDIR, `${name}.png`);
   await page.screenshot({ path: file });
 
+  // FPS меряется ПОСЛЕ того, как сцена устоялась. Сразу после смены зума и
+  // съёмки в фоне ещё допекаются чанки местности и карта рельефа: замер в этот
+  // момент показывал 33 FPS там, где установившееся значение 61, и слои
+  // выключались из пресетов по чужой вине. Ждём, пока очереди выпечки опустеют
+  // (не дольше 6 с), и только потом считаем кадры.
+  // Очереди как таковой нет: чанки местности печутся лениво прямо в draw, а
+  // рельеф держит одну задачу. Поэтому «устоялось» определяем по признаку
+  // покоя — карта рельефа собрана и число испечённых чанков не растёт двадцать
+  // кадров подряд.
+  await page.evaluate(() => new Promise(res => {
+    const R = window.__frontier && window.__frontier.renderer;
+    if (!R) return res();
+    const t0 = performance.now();
+    let last = -1, still = 0;
+    const tick = () => {
+      const n = (R.terrain && R.terrain.chunks ? R.terrain.chunks.size : 0);
+      still = (n === last && !(R.relief && R.relief.job)) ? still + 1 : 0;
+      last = n;
+      if (still >= 20 || performance.now() - t0 > 6000) return res();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  })).catch(() => {});
+
   const fps = await page.evaluate(() => new Promise(res => {
     let n = 0; const t0 = performance.now();
     const step = () => { n++; performance.now() - t0 < 1000 ? requestAnimationFrame(step) : res(n); };
@@ -189,8 +213,16 @@ for (const name of names) {
   // арта, их уже посчитал artMiss. Остальное — настоящие ошибки.
   const real = log.filter(l => !(artMiss > 0 && /Failed to load resource/.test(l)));
   errors += real.length;
+  // Какой пресет реально стоял в момент замера. Авто-тюнер снижает ступень
+  // молча, и без этой подписи «61 FPS» читается как «high тянет», хотя тюнер
+  // успел уйти на medium ещё до счётчика кадров. На этой ошибке рельеф один
+  // раз уже признали бесплатным.
+  const qid = await page.evaluate(() => {
+    const R = window.__frontier && window.__frontier.renderer;
+    return R && R.quality ? R.quality.id : '?';
+  }).catch(() => '?');
   const art = artMiss ? `   нет файлов арта: ${artMiss} (норма вне публикации)` : '';
-  console.log(`${name.padEnd(12)} → shots/${name}.png   FPS≈${fps}   ошибок консоли: ${real.length}${art}`);
+  console.log(`${name.padEnd(12)} → shots/${name}.png   FPS≈${fps} (${qid})   ошибок консоли: ${real.length}${art}`);
   for (const l of real.slice(0, 6)) console.log('    ! ' + l.slice(0, 200));
   await ctx.close();
 }

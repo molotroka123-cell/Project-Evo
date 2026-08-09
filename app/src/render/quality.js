@@ -119,7 +119,7 @@ export const QUALITY = {
   high: preset({
     id: 'high', ru: 'Высоко',
     richVeg: true,     // живая растительность: замер в renderer.draw
-    richRelief: false,  // рельефная светотень: замер в renderer.draw
+    richRelief: false,  // рельефная светотень: 39 FPS на общем виде, не лезет
     richWater: false,  // богатая вода: см. замер в renderer.draw
     tilePx: 32, tilePxFar: 16,
     dprCap: 2, maxCanvasPx: 4.5e6,
