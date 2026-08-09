@@ -134,10 +134,12 @@ export class Renderer {
     this.atmo.update(sim, dtReal, ox, oy, z, cw, ch);
     this.fx.update(sim, dtReal, ox, oy, z, cw, ch);
     this.veg.update(sim, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
-    // Новая система теней работает ПОВЕРХ старого кода теней в drawBuilding —
-    // то есть сцена платит дважды. Замер: общий вид карты 61 -> 37 FPS.
-    // До того как старый путь будет убран, новый включаем только на ultra.
-    if (this.quality.richRelief) this.shadows.begin(sim, dtReal, z, { fog: this.atmo.fogK });
+    // Тени: единственный путь в файле. Старый код в drawBuilding (перекос
+    // силуэта прямо в кадре, без кэша и без учёта погоды) заменён вызовами
+    // this.shadows.*; ставить их рядом нельзя — сцена платила бы дважды.
+    // Свой гейт слою не нужен: begin() сам молчит на eco и при quality.shadows
+    // = false, а ниже порога зума не рисует вообще ничего.
+    this.shadows.begin(sim, dtReal, z, { fog: this.atmo.fogK });
     this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
     // Растительность стоит 15 FPS на общем виде карты (58 -> 43). Держим её
     // там, где есть запас: на eco лес остаётся тем, что печёт terrain.js.
@@ -338,6 +340,7 @@ export class Renderer {
     const w = h * (sh.fw / sh.fh);
     const frame = st.still > 2 ? 0 : ((st.walk / 0.7 * 2) | 0) % 2;
     const dir = st.dir === 1 ? 1 : 0;   // спрайт двусторонний: влево / вправо
+    this.shadows.beast(ctx, sx, sy, w, h);
     ctx.drawImage(
       sh.cv, frame * sh.fw, dir * sh.fh, sh.fw, sh.fh,
       Math.round(sx - w / 2), Math.round(sy - h * 0.93), Math.round(w), Math.round(h),
@@ -428,8 +431,11 @@ export class Renderer {
       const dw = size * 1.5;
       const dh = dw * (painted.naturalHeight / painted.naturalWidth);
       const dx = sx + size / 2 - dw / 2, dy = sy + size - dh;
-      // Отдельную тень не рисуем: у нарисованного арта она запечена в спрайт
-      // самим промтом («small dark contact shadow hugging the base»).
+      // Контактную тень арт несёт в себе — её требует промт («small dark
+      // contact shadow hugging the base»), поэтому добавляется только
+      // вытянутая: без неё нарисованные здания стоят при другом солнце, чем
+      // процедурные, и в одном кадре это сразу видно.
+      this.shadows.paintedBuilding(ctx, painted, dx, dy, dw, dh);
       ctx.drawImage(painted, dx, dy, dw, dh);
       return;
     }
@@ -441,17 +447,13 @@ export class Renderer {
     const dx = sx - size * 0.08, dy = sy + size - dh;
 
     // Тень падает по солнцу: утром и вечером длинная, в полдень короткая.
-    if (this.quality.shadows) {
-      const L = lightAt(sim.dayTime);
-      ctx.save();
-      ctx.globalAlpha = 0.3;
-      ctx.translate(sx + size / 2, sy + size * 0.9);
-      ctx.transform(1, 0, Math.cos(L.sunAz) * L.shadowLen * 0.8, 0.34 * L.shadowLen, 0, 0);
-      ctx.drawImage(spr.sil, -size / 2, -dh, dw, dh);
-      ctx.restore();
-    }
+    // Всю геометрию считает shadows.begin() один раз на кадр, здесь остаётся
+    // только положить готовую выпечку в тот же прямоугольник, что и спрайт.
+    this.shadows.building(ctx, spr, dx, dy, dw, dh);
 
     ctx.drawImage(spr.cv, dx, dy, dw, dh);
+    // Самозатенение ложится ПОВЕРХ спрайта и гасит грани, отвёрнутые от света.
+    this.shadows.selfShade(ctx, spr, dx, dy, dw, dh);
     this._pendingGlow.push({ spr, dx, dy, dw, dh });
   }
 
@@ -746,6 +748,7 @@ export class Renderer {
     const w = h * (sh.fw / sh.fh);
     // цикл шага — 0.62 тайла на два шага
     const frame = st.still > 2 ? 0 : ((st.walk / 0.62 * 4) | 0) % 4;
+    this.shadows.unit(ctx, sx, sy, w, h);
     ctx.drawImage(
       sh.cv, frame * sh.fw, st.dir * sh.fh, sh.fw, sh.fh,
       Math.round(sx - w / 2), Math.round(sy - h * 0.955), Math.round(w), Math.round(h),
