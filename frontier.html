@@ -5783,12 +5783,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num5 = 1;
+    let num6 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num5++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num6++}`));
     }
     return out;
   }
@@ -10781,6 +10781,576 @@
     return many;
   }
 
+  // app/src/core/systems/link_economy.js
+  var ESTATES = Object.keys(SOCIAL_FACTIONS);
+  var TAX_FREE = 0.2;
+  var TAX_BITE = {
+    commons: { poll: 1, land: 0.5, trade: 0.25, luxury: -0.2 },
+    merchants: { poll: 0.1, land: 0.1, trade: 1.2, luxury: 0.5 },
+    nobles: { poll: 0.05, land: 1, trade: 0.15, luxury: 0.8 },
+    clergy: { poll: 0.35, land: 0.4, trade: 0.1, luxury: 0.3 },
+    military: { poll: 0.25, land: 0.1, trade: 0.05, luxury: 0 }
+  };
+  var DEBT_BITE = { merchants: 0.6, nobles: 0.35, military: 0.3, clergy: 0.2, commons: 0.1 };
+  var CREDIT_BITE = { merchants: 0.5, nobles: 0.3, clergy: 0.15, military: 0.15, commons: 0.1 };
+  var INFL_BITE = { commons: 1, military: 0.6, clergy: 0.5, merchants: 0.3, nobles: 0.1 };
+  var DEFL_BITE = { merchants: 0.8, nobles: 0.4, commons: -0.15, clergy: 0, military: 0 };
+  var ARREARS_BITE = { military: 1, commons: 0.3, nobles: 0.2, clergy: 0.1, merchants: 0.05 };
+  var DEFAULT_SHOCK = { merchants: -18, nobles: -10, military: -6, clergy: -4, commons: -3 };
+  var DEFAULT_REL = -8;
+  var APPROVAL_SPAN = 36;
+  var APPROVAL_FLOOR = 8;
+  var APPROACH = 0.04;
+  var MAX_STEP = 0.8;
+  var COLLECT_MERCH = 0.45;
+  var COLLECT_COMMONS = 0.28;
+  var COLLECT_NOBLES = 0.18;
+  var COLLECT_POW = 0.7;
+  var COLLECT_FLOOR = 0.5;
+  var COLLECT_BONUS = 0.1;
+  var STAB_WORST = -0.8;
+  var STAB_HEALTHY = 0.15;
+  var HAPPY_WORST = -10;
+  var LAFFER_PEAK2 = (() => {
+    let best = 0, bv = -1;
+    for (let i = 0; i <= 100; i++) {
+      const v = lafferYield(i / 100);
+      if (v > bv) {
+        bv = v;
+        best = i / 100;
+      }
+    }
+    return best;
+  })();
+  var r3 = (v) => Math.round(v * 1e3) / 1e3;
+  var zeroApproval = () => Object.fromEntries(ESTATES.map((f) => [f, 0]));
+  function pickEco(sim2) {
+    if (!sim2) return null;
+    return sim2.industry && sim2.industry.eco || sim2.economy || null;
+  }
+  function pickPolState(sim2) {
+    if (!sim2 || !sim2.politics) return null;
+    return sim2.politics.state || null;
+  }
+  function pickReport(sim2, eco) {
+    if (sim2 && sim2.industry && sim2.industry.ecoReport) return sim2.industry.ecoReport;
+    return eco && typeof eco.report === "function" ? eco.report() : null;
+  }
+  function factionName2(sim2, fid) {
+    if (fid === "merchants") return "Купеческие дома";
+    const f = sim2 && typeof sim2.faction === "function" ? sim2.faction(fid) : null;
+    return f && f.def && f.def.name ? f.def.name : String(fid);
+  }
+  function taxExcess(rate) {
+    const over = clamp2(((rate || 0) - TAX_FREE) / (1 - TAX_FREE), 0, 1);
+    return Math.pow(over, 1.3);
+  }
+  function moneyPressures(sim2) {
+    const eco = pickEco(sim2);
+    if (!eco) return { debt: 0, credit: 0, infl: 0, defl: 0, arrears: 0, debtTotal: 0, debtRatio: 0, priceLevel: 1, arrearsDays: 0, creditVal: 50 };
+    const rep = pickReport(sim2, eco);
+    const dailyTax = rep && rep.taxes && rep.taxes.total ? rep.taxes.total : 0;
+    const debtTotal = typeof eco.debtTotal === "function" ? eco.debtTotal() : 0;
+    const monthly = dailyTax * 30 + 40;
+    const debtRatio = debtTotal / monthly;
+    const debt = clamp2((debtRatio - 1) / 2, 0, 1);
+    const creditVal = typeof eco.credit === "number" ? eco.credit : 50;
+    const credit = clamp2((45 - creditVal) / 45, 0, 1);
+    const priceLevel = typeof eco.priceLevel === "number" ? eco.priceLevel : 1;
+    const infl = clamp2((priceLevel - 1.8) / 1.2, 0, 1);
+    const defl = clamp2((0.85 - priceLevel) / 0.25, 0, 1);
+    const arrearsDays = typeof eco.arrears === "number" ? eco.arrears : 0;
+    const arrears = clamp2(arrearsDays / 10, 0, 1);
+    return { debt, credit, infl, defl, arrears, debtTotal, debtRatio, priceLevel, arrearsDays, creditVal };
+  }
+  function estatePressure(estate, rates, base) {
+    const rows = [];
+    const push = (ru, v) => {
+      if (Math.abs(v) > 5e-3) rows.push({ ru, v: r3(v) });
+    };
+    const bite = TAX_BITE[estate] || {};
+    let tax = 0;
+    for (const k of TAX_KINDS) {
+      const part = bite[k] * taxExcess(rates ? rates[k] : 0);
+      tax += part;
+      if (Math.abs(part) > 5e-3) push(`${TAX_RU[k]} ${Math.round((rates[k] || 0) * 100)}%`, part);
+    }
+    const debt = (DEBT_BITE[estate] || 0) * base.debt;
+    const credit = (CREDIT_BITE[estate] || 0) * base.credit;
+    const infl = (INFL_BITE[estate] || 0) * base.infl;
+    const defl = (DEFL_BITE[estate] || 0) * base.defl;
+    const arrears = (ARREARS_BITE[estate] || 0) * base.arrears;
+    push("Долг казны", debt);
+    push("Слово казны нарушено", credit);
+    push("Дороговизна", infl);
+    push("Застой цен", defl);
+    push("Жалование задержано", arrears);
+    const total = clamp2(tax + debt + credit + infl + defl + arrears, -0.25, 1.4);
+    return { total, rows, tax };
+  }
+  var TAX_RU = { poll: "Подушный", land: "Земельный", trade: "Торговый", luxury: "На роскошь" };
+  function steadyApproval(pressure) {
+    return clamp2(50 - APPROVAL_SPAN * pressure, APPROVAL_FLOOR, 62);
+  }
+  function collectionMult(factions) {
+    const gap = (v) => Math.pow(clamp2((50 - (v == null ? 50 : v)) / 50, 0, 1), COLLECT_POW);
+    const rows = [];
+    let m = 1;
+    const mp = gap(factions.merchants) * COLLECT_MERCH;
+    const cp = gap(factions.commons) * COLLECT_COMMONS;
+    const np = gap(factions.nobles) * COLLECT_NOBLES;
+    if (mp > 1e-3) rows.push({ ru: "Купцы прячут оборот", v: r3(-mp) });
+    if (cp > 1e-3) rows.push({ ru: "Простолюдины уходят от переписи", v: r3(-cp) });
+    if (np > 1e-3) rows.push({ ru: "Знать «забывает» переслать подать", v: r3(-np) });
+    m -= mp + cp + np;
+    const good = clamp2(((factions.merchants == null ? 50 : factions.merchants) - 65) / 35, 0, 1) * COLLECT_BONUS;
+    if (good > 1e-3) rows.push({ ru: "Купцы ведут дела открыто", v: r3(good) });
+    m += good;
+    return { mult: clamp2(r3(m), COLLECT_FLOOR, 1 + COLLECT_BONUS), rows };
+  }
+  function economyLinks(sim2) {
+    const out = {
+      mods: { approval: zeroApproval(), stability: 0, happy: 0, taxMult: 1, gold: 0 },
+      reasons: { approval: {}, stability: [], taxMult: [] },
+      events: [],
+      flags: {
+        quiet: true,
+        defaultToday: false,
+        creditorsAlarmed: [],
+        collectionCrisis: false,
+        healthyTreasury: false,
+        angryByMoney: []
+      }
+    };
+    const eco = pickEco(sim2);
+    const st = pickPolState(sim2);
+    if (!eco || !st || !st.factions) return out;
+    const day = Math.max(0, Math.round(sim2.day || 0));
+    const rates = typeof eco.taxRates === "object" && eco.taxRates ? eco.taxRates : {};
+    const base = moneyPressures(sim2);
+    const rep = pickReport(sim2, eco);
+    const freshReport = rep && (rep.day == null || rep.day === day);
+    const defaulted = !!(freshReport && Array.isArray(rep.events) && rep.events.some((e) => e && typeof e.text === "string" && /дефолт/i.test(e.text)));
+    out.flags.defaultToday = defaulted;
+    for (const fid of ESTATES) {
+      const cur = typeof st.factions[fid] === "number" ? st.factions[fid] : 50;
+      const pr = estatePressure(fid, rates, base);
+      const target = steadyApproval(pr.total);
+      let d = 0;
+      if (pr.total > 0.01) {
+        d = clamp2((target - cur) * APPROACH, -MAX_STEP, 0);
+      } else if (pr.total < -0.01) {
+        d = clamp2((target - cur) * APPROACH, 0, 0.15);
+      }
+      if (defaulted) d += DEFAULT_SHOCK[fid] || 0;
+      out.mods.approval[fid] = r3(d);
+      if (pr.rows.length) out.reasons.approval[fid] = pr.rows;
+      if (pr.total > 0.01) out.flags.quiet = false;
+      if (target < FACTION_ANGRY) out.flags.angryByMoney.push(fid);
+    }
+    if (defaulted) {
+      out.flags.quiet = false;
+      out.events.push({
+        text: "Дефолт казны: вложенное сгорело. Купцы, знать и войско отвернулись от власти.",
+        type: "bad"
+      });
+      const loans = Array.isArray(eco.loans) ? eco.loans : [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const L of loans) {
+        if (!L || L.lender === "merchants" || seen.has(L.lender)) continue;
+        seen.add(L.lender);
+        out.flags.creditorsAlarmed.push({ fid: L.lender, dRel: DEFAULT_REL, name: factionName2(sim2, L.lender) });
+      }
+      if (out.flags.creditorsAlarmed.length) {
+        out.events.push({
+          text: `Остальные кредиторы (${out.flags.creditorsAlarmed.map((c) => c.name).join(", ")}) больше не верят слову казны.`,
+          type: "bad"
+        });
+      }
+    }
+    let stab = 0;
+    const srows = out.reasons.stability;
+    if (base.debt > 0.01) {
+      const v = -0.3 * base.debt;
+      stab += v;
+      srows.push({ ru: `Долг казны (${Math.round(base.debtRatio * 10) / 10} мес. дохода)`, v: r3(v) });
+    }
+    if (base.credit > 0.01) {
+      const v = -0.25 * base.credit;
+      stab += v;
+      srows.push({ ru: `Испорченная кредитная история (${Math.round(base.creditVal)})`, v: r3(v) });
+    }
+    if (base.arrears > 0.01) {
+      const v = -0.35 * base.arrears;
+      stab += v;
+      srows.push({ ru: `Жалование задержано (${base.arrearsDays} дн.)`, v: r3(v) });
+    }
+    const healthy = base.debtTotal <= 0 && base.creditVal >= 70 && base.arrearsDays === 0;
+    if (healthy) {
+      stab += STAB_HEALTHY;
+      srows.push({ ru: "Казна без долгов, долги возвращались вовремя", v: STAB_HEALTHY });
+      out.flags.healthyTreasury = true;
+    }
+    out.mods.stability = r3(clamp2(stab, STAB_WORST, STAB_HEALTHY));
+    if (Math.abs(out.mods.stability) > 1e-3) out.flags.quiet = false;
+    let happy = -6 * base.infl + 2 * base.defl - (defaulted ? 4 : 0);
+    out.mods.happy = Math.round(clamp2(happy, HAPPY_WORST, 2));
+    if (out.mods.happy !== 0) out.flags.quiet = false;
+    const col = collectionMult(st.factions);
+    out.mods.taxMult = col.mult;
+    out.reasons.taxMult = col.rows;
+    out.flags.collectionCrisis = col.mult < 0.75;
+    const dailyTax = freshReport && rep.taxes && rep.taxes.total ? rep.taxes.total : 0;
+    out.mods.gold = r3(dailyTax * (col.mult - 1));
+    if (Math.abs(col.mult - 1) > 1e-3) out.flags.quiet = false;
+    if (day > 0 && day % 10 === 0) {
+      if (col.mult < 0.9) {
+        out.events.push({
+          text: `Мытари возвращаются полупустыми: до казны дошло ${Math.round(col.mult * 100)}% налога — ${col.rows[0] ? col.rows[0].ru.toLowerCase() : "сословия недовольны"}.`,
+          type: "warn"
+        });
+      }
+      if (base.infl > 0.2) {
+        out.events.push({
+          text: `Монета дешевеет: цены ×${Math.round(base.priceLevel * 100) / 100}. Горожане ропщут на дороговизну.`,
+          type: "warn"
+        });
+      }
+      if (base.defl > 0.3) {
+        out.events.push({ text: "Цены стоят на месте: купцы жалуются, что товар не берут, а долги тяжелеют.", type: "warn" });
+      }
+      if (base.debt > 0.3) {
+        out.events.push({
+          text: `Долг казны ${Math.round(base.debtTotal)}🪙 — около ${Math.round(base.debtRatio * 10) / 10} месяцев дохода. Заимодавцы шепчутся.`,
+          type: "warn"
+        });
+      }
+      let worst = null, wv = 0.35;
+      for (const fid of ESTATES) {
+        const p = estatePressure(fid, rates, base).tax;
+        if (p > wv) {
+          wv = p;
+          worst = fid;
+        }
+      }
+      if (worst) {
+        out.events.push({ text: `${SOCIAL_FACTIONS[worst].ru} стонут от поборов: одобрение падает.`, type: "warn" });
+      }
+    }
+    if (base.arrearsDays >= 3 && day % 5 === 0) {
+      out.events.push({
+        text: `Жалование не платят ${base.arrearsDays} дн.: войско и чиновники теряют веру в казну.`,
+        type: "bad"
+      });
+    }
+    if (healthy && day > 0 && day % 20 === 0) {
+      out.events.push({ text: "Казна без долгов, слово держат: доверие к власти крепнет.", type: "good" });
+    }
+    if (out.events.length) out.flags.quiet = false;
+    return out;
+  }
+
+  // app/src/core/systems/link_survival.js
+  var EAT2 = 0.7;
+  var FOOD_ALARM = 5;
+  var FOOD_PLENTY = 12;
+  var HUNGER_STAB = 2.2;
+  var HUNGER_FATIGUE = 0.5;
+  var COLD_STAB = 1.2;
+  var SICK_SHARE_FULL = 0.25;
+  var SICK_STAB = 1;
+  var DEATH_STAB = 0.6;
+  var DEATH_STAB_CAP = 1.8;
+  var STAB_DROP_FLOOR = -4.5;
+  var CALM_STAB_MIN = 70;
+  var CALM_STAB_CEILING = 90;
+  var CALM_STAB_GAIN = 0.8;
+  var CALM_COLD_SHARE = 0.4;
+  var CALM_COLD_CAP = 6;
+  var PANIC_STAB = 25;
+  var PANIC_HAPPY_MAX = 4;
+  var RIOT_DAYS = 8;
+  var REVOLT_DAYS = 16;
+  var REVOLT_STAB = 25;
+  var RIOT_COOLDOWN = 30;
+  var REVOLT_COOLDOWN2 = 45;
+  var RIOT_STAB_SHOCK = -8;
+  var REVOLT_STAB_SHOCK = -15;
+  var RIOT_FOOD_LOSS = -0.12;
+  var HUNGER_HEAL = 2;
+  var CITY_UNREST_PER_DAY = 0.4;
+  var CITY_UNREST_RIOT_KICK = 2;
+  var ESTATE_HUNGER = { commons: 0.6, military: 0.35, merchants: 0.25, nobles: 0.15, clergy: 0 };
+  var ESTATE_COLD = { commons: 0.4, military: 0.1, merchants: 0, nobles: 0, clergy: 0 };
+  var ESTATE_SICK = { commons: 0.25, military: 0, merchants: 0, nobles: 0, clergy: 0.3 };
+  var ESTATE_DROP_CAP = 1.2;
+  function createSurvivalMemory() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного применения в одни сутки
+      hungerDays: 0,
+      // сколько суток подряд запас ниже FOOD_ALARM/2
+      riotCd: 0,
+      // откат после бунта/восстания
+      stage: "ok",
+      // 'ok' | 'tight' | 'crisis' — для событий по смене ступени
+      warned: false,
+      // предупреждение о зреющем бунте уже сказано
+      riots: 0,
+      revolts: 0,
+      happyMod: 0
+      // последняя поправка к счастью — её читает happiness()
+    };
+  }
+  function restoreSurvivalMemory(data) {
+    const m = createSurvivalMemory();
+    if (!data || typeof data !== "object") return m;
+    m.day = num5(data.day, -1);
+    m.hungerDays = Math.max(0, num5(data.hungerDays, 0));
+    m.riotCd = Math.max(0, num5(data.riotCd, 0));
+    m.stage = ["ok", "tight", "crisis"].includes(data.stage) ? data.stage : "ok";
+    m.warned = !!data.warned;
+    m.riots = Math.max(0, num5(data.riots, 0));
+    m.revolts = Math.max(0, num5(data.revolts, 0));
+    m.happyMod = num5(data.happyMod, 0);
+    return m;
+  }
+  function survivalState(sim2) {
+    const pop = aliveCount2(sim2);
+    const food = Math.max(0, numOf(sim2 && sim2.res && sim2.res.food, 0));
+    const foodDays = pop > 0 ? food / (pop * EAT2) : Infinity;
+    const winter = sim2 && sim2.sys && sim2.sys.winter || null;
+    const cold = winter ? Math.max(0, numOf(winter.cold, 0)) : 0;
+    const sick = winter ? Math.max(0, numOf(winter.sick, 0)) : 0;
+    const winterHappy = winter ? Math.min(0, numOf(winter.happy, 0)) : 0;
+    const rep = sim2 && sim2.sys && sim2.sys.winterReport || null;
+    const deaths = rep ? Math.max(0, numOf(rep.deathCount, 0)) : 0;
+    const pol = sim2 && sim2.politics && sim2.politics.state || null;
+    const stability = pol ? clamp6(numOf(pol.stability, 60), 0, 100) : 60;
+    const care = careMult({ buildings: sim2 && sim2.buildings || [], techs: sim2 && sim2.techs });
+    const careSoft = 0.5 + 0.5 * care;
+    return {
+      pop,
+      food,
+      foodDays,
+      hunger: pop > 0 ? clamp6((FOOD_ALARM - foodDays) / FOOD_ALARM, 0, 1) : 0,
+      // Сутки считаются голодными по запасу ИЛИ по похоронам. Одного запаса мало:
+      // амбар за ночь прирастает парой мешков, формально выходит из голода и
+      // сбрасывает счётчик (он тает вдвое быстрее, чем копится) — а люди в это
+      // время мрут. На настоящей голодовке счётчик так и не доходил до бунта:
+      // замер на городе в 18 душ — за десять суток счётчик дошёл до 3 из 8,
+      // население вымерло полностью, и ни бунта, ни восстания не случилось.
+      starving: pop > 0 && (foodDays < FOOD_ALARM / 2 || starvedToday(sim2)),
+      cold,
+      coldPress: clamp6(cold / COLD_DEATH, 0, 1),
+      sick,
+      sickPress: pop > 0 ? clamp6(sick / pop / SICK_SHARE_FULL, 0, 1) : 0,
+      deaths,
+      winterHappy,
+      stability,
+      care,
+      careSoft,
+      day: Math.round(numOf(sim2 && sim2.day, 0))
+    };
+  }
+  function survivalLinks(sim2) {
+    const s = survivalState(sim2);
+    const prev = readMemory(sim2);
+    const mem = { ...prev };
+    const events = [];
+    const sameDay = prev.day === s.day;
+    if (!sameDay) {
+      mem.day = s.day;
+      mem.riotCd = Math.max(0, mem.riotCd - 1);
+      mem.hungerDays = s.starving ? mem.hungerDays + 1 : Math.max(0, mem.hungerDays - HUNGER_HEAL);
+      if (mem.hungerDays === 0) mem.warned = false;
+    }
+    const parts = stabParts(s, mem);
+    const mods = {
+      happy: 0,
+      stability: round24(parts.total),
+      stabilityShock: 0,
+      foodPct: 0,
+      estates: estateShifts(s),
+      cityUnrest: 0
+    };
+    const coldPenalty = -s.winterHappy;
+    if (coldPenalty > 0 && s.stability >= CALM_STAB_MIN && s.foodDays >= FOOD_PLENTY) {
+      mods.happy += round24(Math.min(CALM_COLD_CAP, coldPenalty * CALM_COLD_SHARE * easeOf(s)));
+    }
+    if (s.coldPress > 0 && s.stability < PANIC_STAB) {
+      const panic = (PANIC_STAB - s.stability) / PANIC_STAB;
+      mods.happy -= round24(PANIC_HAPPY_MAX * panic * s.coldPress);
+    }
+    mods.happy = round24(mods.happy);
+    if (s.hunger >= 0.5) mods.cityUnrest = round24(CITY_UNREST_PER_DAY * s.hunger);
+    const flags = {
+      stage: stageOf2(parts.total),
+      starving: s.starving,
+      hungerDays: mem.hungerDays,
+      foodDays: s.foodDays === Infinity ? null : round24(s.foodDays),
+      riot: false,
+      revolt: false,
+      cityLost: null,
+      reasons: survivalBreakdownRows(s, parts),
+      memory: mem
+    };
+    if (!sameDay && mem.riotCd <= 0 && mem.hungerDays >= REVOLT_DAYS && s.stability <= REVOLT_STAB) {
+      const starved = mem.hungerDays;
+      flags.revolt = true;
+      flags.cityLost = weakestCity(sim2);
+      mods.stabilityShock = REVOLT_STAB_SHOCK;
+      mods.cityUnrest = round24(mods.cityUnrest + CITY_UNREST_RIOT_KICK);
+      mem.revolts++;
+      mem.riotCd = REVOLT_COOLDOWN2;
+      mem.hungerDays = 0;
+      mem.warned = false;
+      events.push({
+        text: flags.cityLost ? `🔥 ВОССТАНИЕ ГОЛОДНЫХ: ${starved}-е сутки без хлеба. ${flags.cityLost.name} вышел из-под руки столицы.` : `🔥 ВОССТАНИЕ ГОЛОДНЫХ: ${starved}-е сутки без хлеба — власть держится на штыках.`,
+        type: "bad"
+      });
+    } else if (!sameDay && mem.riotCd <= 0 && mem.hungerDays >= RIOT_DAYS) {
+      flags.riot = true;
+      mods.stabilityShock = RIOT_STAB_SHOCK;
+      mods.foodPct = RIOT_FOOD_LOSS;
+      mods.cityUnrest = round24(mods.cityUnrest + CITY_UNREST_RIOT_KICK);
+      mem.riots++;
+      mem.riotCd = RIOT_COOLDOWN;
+      mem.hungerDays = Math.floor(mem.hungerDays / 2);
+      mem.warned = false;
+      events.push({
+        text: `🥖 Хлебный бунт: ${RIOT_DAYS} суток пустых амбаров. Толпа разбила склады, порядок пошатнулся.`,
+        type: "bad"
+      });
+    } else if (!sameDay && !mem.warned && mem.hungerDays >= Math.ceil(RIOT_DAYS / 2)) {
+      mem.warned = true;
+      const left = RIOT_DAYS - mem.hungerDays;
+      events.push({
+        text: left > 0 ? `⚠ ${mem.hungerDays}-е сутки впроголодь: на площадях ропот. Ещё ${left} дн. без хлеба — и будет бунт.` : `⚠ ${mem.hungerDays}-е сутки впроголодь: город ропщет, но после недавнего взрыва сил на новый нет (${mem.riotCd} дн. затишья).`,
+        type: "warn"
+      });
+    }
+    const stage = flags.stage;
+    if (!sameDay && stage !== mem.stage) {
+      mem.stage = stage;
+      if (stage === "crisis" || stage === "tight") {
+        const why = flags.reasons.filter((r) => r.v < 0).map((r) => `${r.ru} (${f1(r.v)})`).join(", ");
+        events.push({
+          text: (stage === "crisis" ? "‼ Держава расшатывается" : "⚠ Порядок сползает") + ` на ${f1(-parts.total)} в день: ${why || "общее неустройство"}.`,
+          type: stage === "crisis" ? "bad" : "warn"
+        });
+      } else {
+        events.push({ text: "Народ отдышался: голод и стужа больше не давят на порядок.", type: "good" });
+      }
+    }
+    mem.happyMod = mods.happy;
+    flags.hungerDays = mem.hungerDays;
+    return { mods, events, flags };
+  }
+  function survivalHappyMod(sim2) {
+    const mem = sim2 && sim2.linkSurvival;
+    return mem ? Math.round(numOf(mem.happyMod, 0)) : 0;
+  }
+  function stabParts(s, mem) {
+    const out = { hunger: 0, cold: 0, sick: 0, deaths: 0, calm: 0, raw: 0, total: 0 };
+    if (s.pop <= 0) return out;
+    if (s.hunger > 0) {
+      const fatigue = 1 + HUNGER_FATIGUE * Math.min(1, (mem.hungerDays || 0) / RIOT_DAYS);
+      out.hunger = -HUNGER_STAB * s.hunger * fatigue;
+    }
+    if (s.coldPress > 0) out.cold = -COLD_STAB * s.coldPress;
+    if (s.sickPress > 0) out.sick = -SICK_STAB * s.sickPress * s.careSoft;
+    if (s.deaths > 0) out.deaths = -Math.min(DEATH_STAB_CAP, DEATH_STAB * s.deaths) * s.careSoft;
+    if (s.stability >= CALM_STAB_MIN && s.stability < CALM_STAB_CEILING && s.foodDays >= FOOD_PLENTY) {
+      out.calm = CALM_STAB_GAIN * easeOf(s);
+    }
+    out.raw = out.hunger + out.cold + out.sick + out.deaths + out.calm;
+    out.total = Math.max(STAB_DROP_FLOOR, out.raw);
+    return out;
+  }
+  function easeOf(s) {
+    const trust = clamp6((s.stability - CALM_STAB_MIN) / (100 - CALM_STAB_MIN), 0, 1);
+    const larder = clamp6((s.foodDays - FOOD_PLENTY) / FOOD_PLENTY, 0, 1);
+    return clamp6(trust * 0.6 + larder * 0.4, 0, 1);
+  }
+  function estateShifts(s) {
+    const out = {};
+    for (const fid of Object.keys(SOCIAL_FACTIONS)) {
+      let d = 0;
+      d -= (ESTATE_HUNGER[fid] || 0) * s.hunger;
+      d -= (ESTATE_COLD[fid] || 0) * s.coldPress;
+      d -= (ESTATE_SICK[fid] || 0) * s.sickPress * s.careSoft;
+      d = Math.max(-ESTATE_DROP_CAP, d);
+      out[fid] = Math.abs(d) < 0.01 ? 0 : round24(d);
+    }
+    return out;
+  }
+  function survivalBreakdownRows(s, parts) {
+    const rows = [];
+    if (parts.hunger < 0) rows.push({ ru: `Голод: запаса на ${f1(s.foodDays)} дн.`, v: round24(parts.hunger) });
+    if (parts.cold < 0) rows.push({ ru: "Стужа в домах", v: round24(parts.cold) });
+    if (parts.sick < 0) rows.push({ ru: `Больные от холода: ${s.sick} из ${s.pop}`, v: round24(parts.sick) });
+    if (parts.deaths < 0) rows.push({ ru: `Похороны замёрзших: ${s.deaths}`, v: round24(parts.deaths) });
+    if (parts.calm > 0) rows.push({ ru: "Полные амбары и порядок", v: round24(parts.calm) });
+    if (parts.raw < STAB_DROP_FLOOR) {
+      rows.push({ ru: "Предел: глубже за сутки не проседает", v: round24(STAB_DROP_FLOOR - parts.raw) });
+    }
+    return rows;
+  }
+  function stageOf2(total) {
+    if (total <= -1.2) return "crisis";
+    if (total <= -0.3) return "tight";
+    return "ok";
+  }
+  function weakestCity(sim2) {
+    const cities = sim2 && sim2.empire && sim2.empire.state && sim2.empire.state.cities;
+    if (!Array.isArray(cities) || !cities.length) return null;
+    const cx = numOf(sim2.world && sim2.world.startX, 0);
+    const cy = numOf(sim2.world && sim2.world.startY, 0);
+    let best = null, bestKey = -Infinity, bestDist = 0;
+    for (const c of cities) {
+      const dist = Math.hypot(numOf(c.x, 0) - cx, numOf(c.y, 0) - cy);
+      const key = numOf(c.unrest, 0) * 100 + dist;
+      if (key > bestKey) {
+        bestKey = key;
+        best = c;
+        bestDist = dist;
+      }
+    }
+    return best ? { id: best.id, name: best.name, dist: Math.round(bestDist), unrest: round24(numOf(best.unrest, 0)) } : null;
+  }
+  function readMemory(sim2) {
+    const m = sim2 && sim2.linkSurvival;
+    if (!m || typeof m !== "object") return createSurvivalMemory();
+    return { ...createSurvivalMemory(), ...m };
+  }
+  function aliveCount2(sim2) {
+    const list = sim2 && sim2.villagers;
+    if (!Array.isArray(list)) return 0;
+    let n = 0;
+    for (const v of list) if (!v || v.hp === void 0 || v.hp > 0) n++;
+    return n;
+  }
+  function starvedToday(sim2) {
+    return !!sim2 && Number.isFinite(sim2.starvedDay) && sim2.starvedDay === sim2.day;
+  }
+  function clamp6(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function numOf(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function num5(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round24(v) {
+    return Math.round(v * 100) / 100;
+  }
+  function f1(v) {
+    return (Math.round(v * 10) / 10).toFixed(1);
+  }
+
   // app/src/core/systems/integrate.js
   function installSystems(sim2) {
     sim2.sys = {
@@ -10793,6 +11363,7 @@
     install(sim2);
     installPolitics(sim2);
     installEmpire(sim2);
+    sim2.linkSurvival = createSurvivalMemory();
     sim2.sys.winterReport = null;
     sim2.sys.borderStats = null;
   }
@@ -10805,6 +11376,8 @@
     onNewDay(sim2);
     politicsNewDay(sim2);
     empireNewDay(sim2);
+    applyEconomyLinks(sim2);
+    applySurvivalLinks(sim2);
   }
   function systemsFactions(sim2) {
     if (!sim2.sys || !sim2.sys.civ) return false;
@@ -10880,7 +11453,7 @@
   }
   function systemsHappyMod(sim2) {
     if (!sim2.sys) return 0;
-    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2);
+    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2);
   }
   function systemsWorkMult(sim2) {
     if (!sim2.sys) return 1;
@@ -10898,7 +11471,8 @@
       ind: industrySerialize(sim2),
       war: serialize2(sim2),
       pol: politicsSerialize(sim2),
-      emp: empireSerialize(sim2)
+      emp: empireSerialize(sim2),
+      link: sim2.linkSurvival || null
     };
   }
   function systemsRestore(sim2, data) {
@@ -10911,6 +11485,62 @@
     if (data.war) restore(sim2, data.war);
     if (data.pol) politicsRestore(sim2, data.pol);
     if (data.emp) empireRestore(sim2, data.emp);
+    sim2.linkSurvival = restoreSurvivalMemory(data.link);
+  }
+  function applyEconomyLinks(sim2) {
+    if (!sim2.politics || !sim2.industry) return null;
+    const L = economyLinks(sim2);
+    sim2.sys.ecoLinks = L;
+    const F = sim2.politics.state.factions;
+    for (const fid of Object.keys(F)) {
+      F[fid] = Math.max(0, Math.min(100, F[fid] + (L.mods.approval[fid] || 0)));
+    }
+    const P = sim2.politics.state;
+    P.stability = Math.max(0, Math.min(100, P.stability + L.mods.stability));
+    if (L.mods.gold !== 0) sim2.res.gold = Math.max(0, sim2.res.gold + L.mods.gold);
+    for (const c of L.flags.creditorsAlarmed) {
+      if (typeof sim2.adjustRel === "function") sim2.adjustRel(c.fid, c.dRel, "Дефолт казны");
+    }
+    for (const e of L.events) sim2.addLog(e.text, e.type === "good" ? "info" : e.type);
+    if (L.flags.defaultToday) sim2.addChronicle(`Казна объявила дефолт (день ${sim2.day}).`);
+    return L;
+  }
+  function applySurvivalLinks(sim2) {
+    if (!sim2.linkSurvival) sim2.linkSurvival = createSurvivalMemory();
+    const out = survivalLinks(sim2);
+    sim2.linkSurvival = out.flags.memory;
+    const pst = sim2.politics && sim2.politics.state;
+    if (pst) {
+      const dS = out.mods.stability + out.mods.stabilityShock;
+      pst.stability = Math.max(0, Math.min(100, pst.stability + dS));
+      for (const [fid, d] of Object.entries(out.mods.estates)) {
+        if (!d || pst.factions[fid] == null) continue;
+        pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+      }
+    }
+    if (out.mods.foodPct) sim2.res.food = Math.max(0, sim2.res.food * (1 + out.mods.foodPct));
+    if (out.mods.cityUnrest && sim2.empire) {
+      for (const c of sim2.empire.state.cities) {
+        c.unrest = Math.min(12, (c.unrest || 0) + out.mods.cityUnrest);
+      }
+    }
+    const lost = out.flags.cityLost;
+    if (lost && sim2.empire) {
+      const st = sim2.empire.state;
+      const i = st.cities.findIndex((c) => c.id === lost.id);
+      if (i >= 0) {
+        const gone = st.cities[i];
+        st.lost.push({ name: gone.name, day: sim2.day, pop: gone.pop });
+        st.cities.splice(i, 1);
+        sim2.addChronicle(`${gone.name} отложился: столица не смогла его прокормить (день ${sim2.day}).`);
+      }
+    }
+    if (out.flags.revolt || out.flags.riot) sim2.sfx?.("alarm");
+    if (out.flags.revolt && typeof sim2.toast === "function") {
+      sim2.toast("Восстание голодных! Держава теряет провинцию.", "bad");
+    }
+    for (const e of out.events) sim2.addLog(e.text, e.type);
+    return out;
   }
   var PANELS = {
     people: { render: renderPopulationPanel, bind: bindPopulationPanel },
@@ -11825,6 +12455,7 @@
         if (victim) {
           this.addLog(`☠ ${victim.name} умер от голода. Запасайте еду!`, "bad");
           this.villagers.pop();
+          this.starvedDay = this.day;
         }
       }
       this.res.knowledge += pop * 0.05;
@@ -13229,8 +13860,8 @@ ${s}`, "console");
         for (let gx = g0x; gx <= g1x; gx++) {
           const r1 = hash2(gx * 131 + 7, gy * 57 + 3);
           if (r1 < 0.45) continue;
-          const r2 = hash2(gx * 29, gy * 191 + 11), r3 = hash2(gx * 83 + 5, gy * 13);
-          const wx = gx * 3 + r2 * 3, wy = gy * 3 + r3 * 3;
+          const r2 = hash2(gx * 29, gy * 191 + 11), r32 = hash2(gx * 83 + 5, gy * 13);
+          const wx = gx * 3 + r2 * 3, wy = gy * 3 + r32 * 3;
           const tx = Math.floor(wx), ty = Math.floor(wy);
           if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
           const t = world.tiles[ty * W + tx];
@@ -13247,7 +13878,7 @@ ${s}`, "console");
           grad.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
           c.fillStyle = grad;
           c.beginPath();
-          c.ellipse(cx, cy, rad, rad * (0.62 + r3 * 0.4), r1 * 3, 0, 7);
+          c.ellipse(cx, cy, rad, rad * (0.62 + r32 * 0.4), r1 * 3, 0, 7);
           c.fill();
         }
       }
@@ -13259,7 +13890,7 @@ ${s}`, "console");
       const D = this.q.detail;
       if (D < 0) return;
       const onRoad = this.road ? this.road.tiles.has(y * world.w + x) : false;
-      const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r3 = hash2(x * 3 + 7, y * 5 + 13);
+      const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r32 = hash2(x * 3 + 7, y * 5 + 13);
       if (t === TILE.GRASS) {
         if (D === 0) return;
         const n = D >= 2 ? 3 : 2;
@@ -13285,10 +13916,10 @@ ${s}`, "console");
         if (D >= 1 && r2 > 0.9) {
           c.fillStyle = "rgba(122,98,62,0.22)";
           c.beginPath();
-          c.ellipse(px + TP * (0.2 + r1 * 0.6), py + TP * (0.2 + r3 * 0.6), TP * (0.12 + r1 * 0.16), TP * (0.09 + r3 * 0.1), r1 * 3, 0, 7);
+          c.ellipse(px + TP * (0.2 + r1 * 0.6), py + TP * (0.2 + r32 * 0.6), TP * (0.12 + r1 * 0.16), TP * (0.09 + r32 * 0.1), r1 * 3, 0, 7);
           c.fill();
         }
-        if (D >= 2 && season < 2 && r3 > 0.84) {
+        if (D >= 2 && season < 2 && r32 > 0.84) {
           const fc = ["#f0e28a", "#f6f6f2", "#e8a0c0"][r1 * 3 | 0];
           for (let i = 0; i < 3; i++) {
             c.fillStyle = fc;
@@ -13302,7 +13933,7 @@ ${s}`, "console");
       if (t === TILE.FOREST) {
         c.fillStyle = "rgba(38,48,28,0.32)";
         c.beginPath();
-        c.ellipse(px + TP * (0.4 + r1 * 0.2), py + TP * (0.4 + r2 * 0.2), TP * (0.62 + r3 * 0.14), TP * (0.6 + r1 * 0.14), 0, 0, 7);
+        c.ellipse(px + TP * (0.4 + r1 * 0.2), py + TP * (0.4 + r2 * 0.2), TP * (0.62 + r32 * 0.14), TP * (0.6 + r1 * 0.14), 0, 0, 7);
         c.fill();
         if (D >= 1) {
           c.fillStyle = season === 2 ? "rgba(150,96,40,0.35)" : "rgba(60,80,44,0.4)";
@@ -13334,7 +13965,7 @@ ${s}`, "console");
           c.fillStyle = p.det;
           c.globalAlpha = 0.55;
           c.beginPath();
-          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r3 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r3 * 0.03), r1 * 3, 0, 7);
+          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r32 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r32 * 0.03), r1 * 3, 0, 7);
           c.fill();
           c.globalAlpha = 1;
         }
@@ -13342,7 +13973,7 @@ ${s}`, "console");
           c.strokeStyle = p.det2;
           c.globalAlpha = 0.45;
           c.lineWidth = Math.max(1, TP * 0.04);
-          const gx = px + r3 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
+          const gx = px + r32 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
           c.beginPath();
           c.moveTo(gx, gy + TP * 0.06);
           c.lineTo(gx + TP * 0.02, gy - TP * 0.06);
@@ -13359,9 +13990,9 @@ ${s}`, "console");
         c.globalAlpha = 0.16 + Math.abs(nf - 0.5) * 0.5;
         c.beginPath();
         c.moveTo(px - TP * r1 * 0.3, py + TP * (r2 * 0.5 - 0.1));
-        c.lineTo(px + TP * (0.6 + r2 * 0.6), py - TP * r3 * 0.25);
-        c.lineTo(px + TP * (1.1 + r1 * 0.3), py + TP * (0.6 + r3 * 0.5));
-        c.lineTo(px + TP * (0.2 + r3 * 0.4), py + TP * (0.9 + r1 * 0.35));
+        c.lineTo(px + TP * (0.6 + r2 * 0.6), py - TP * r32 * 0.25);
+        c.lineTo(px + TP * (1.1 + r1 * 0.3), py + TP * (0.6 + r32 * 0.5));
+        c.lineTo(px + TP * (0.2 + r32 * 0.4), py + TP * (0.9 + r1 * 0.35));
         c.closePath();
         c.fill();
         c.globalAlpha = 0.3;
@@ -13369,12 +14000,12 @@ ${s}`, "console");
         c.lineWidth = Math.max(1, TP * 0.03);
         c.beginPath();
         c.moveTo(px + TP * r1, py);
-        c.lineTo(px + TP * (0.2 + r2 * 0.6), py + TP * (0.5 + r3 * 0.3));
-        c.lineTo(px + TP * (r3 * 0.5), py + TP);
+        c.lineTo(px + TP * (0.2 + r2 * 0.6), py + TP * (0.5 + r32 * 0.3));
+        c.lineTo(px + TP * (r32 * 0.5), py + TP);
         c.stroke();
         c.globalAlpha = 1;
         if (D >= 1 && r1 > 0.3 && !onRoad) {
-          const ox = px + TP * (0.18 + r2 * 0.5), oy = py + TP * (0.42 + r3 * 0.4);
+          const ox = px + TP * (0.18 + r2 * 0.5), oy = py + TP * (0.42 + r32 * 0.4);
           const rw = TP * (0.16 + r1 * 0.2), rh = rw * (0.7 + r2 * 0.5);
           c.fillStyle = "rgba(0,0,0,0.2)";
           c.beginPath();
@@ -13399,7 +14030,7 @@ ${s}`, "console");
           c.closePath();
           c.fill();
         }
-        if (D >= 1 && r3 > 0.72) {
+        if (D >= 1 && r32 > 0.72) {
           c.fillStyle = p.det2;
           c.globalAlpha = 0.45;
           for (let i = 0; i < 2; i++) {
@@ -13425,9 +14056,9 @@ ${s}`, "console");
         }
         if (!peakHere || onRoad) return;
         const scale = 0.9 + r2 * 0.9;
-        const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1 + r3 * 0.15);
+        const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1 + r32 * 0.15);
         const peak = py + TP * (0.55 - 0.62 * scale);
-        const wdt = TP * (0.5 + r3 * 0.25) * scale;
+        const wdt = TP * (0.5 + r32 * 0.25) * scale;
         c.fillStyle = "rgba(0,0,0,0.24)";
         c.beginPath();
         c.moveTo(cxp, peak);
@@ -13486,7 +14117,7 @@ ${s}`, "console");
           c.stroke();
         }
         c.globalAlpha = 1;
-        if (D >= 2 && r3 > 0.72) {
+        if (D >= 2 && r32 > 0.72) {
           c.fillStyle = p.lo;
           c.globalAlpha = 0.45;
           for (let i = 0; i < 2; i++) {
@@ -13507,7 +14138,7 @@ ${s}`, "console");
         if (D >= 2 && r1 > 0.88) {
           c.strokeStyle = "rgba(150,146,96,0.5)";
           c.lineWidth = Math.max(1, TP * 0.03);
-          const gx = px + TP * (0.25 + r2 * 0.5), gy = py + TP * (0.55 + r3 * 0.3);
+          const gx = px + TP * (0.25 + r2 * 0.5), gy = py + TP * (0.55 + r32 * 0.3);
           for (const k of [-1, 0, 1]) {
             c.beginPath();
             c.moveTo(gx, gy);
@@ -16875,7 +17506,7 @@ ${s}`, "console");
       richVeg: true,
       // живая растительность: замер в renderer.draw
       richRelief: false,
-      // рельефная светотень: замер в renderer.draw
+      // рельефная светотень: 39 FPS на общем виде, не лезет
       richWater: false,
       // богатая вода: см. замер в renderer.draw
       tilePx: 32,
@@ -18773,7 +19404,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp6 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp7 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -19610,7 +20241,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp6(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp7(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -19647,7 +20278,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp6(x >> 2, 0, this.pw - 1), gy = clamp6(y >> 2, 0, this.ph - 1);
+      const gx = clamp7(x >> 2, 0, this.pw - 1), gy = clamp7(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -19666,7 +20297,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp6(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp7(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -19704,39 +20335,39 @@ ${s}`, "console");
     tileItems(out, sim2, world, x, y, t, season, era, D, p, warm, wet, water, tile) {
       const r1 = hash2(x * 7 + 1, y * 11 + 3);
       const r2 = hash2(x * 13 + 91, y * 5 + 47);
-      const r3 = hash2(x * 3 + 511, y * 29 + 17);
+      const r32 = hash2(x * 3 + 511, y * 29 + 17);
       const r4 = hash2(x * 23 + 7, y * 19 + 331);
       if (t === TILE.FOREST) {
         const edge = tile(x + 1, y) !== TILE.FOREST || tile(x - 1, y) !== TILE.FOREST || tile(x, y + 1) !== TILE.FOREST || tile(x, y - 1) !== TILE.FOREST;
         const want = (edge ? this.edgeFill : this.forestFill) * (1 - 0.72 * p);
         if (r1 < want) {
-          this.addTree(out, x, y, this.forestSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r3);
+          this.addTree(out, x, y, this.forestSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r32);
           if (edge && D >= 2 && r4 < 0.34) {
             this.addTree(out, x + 0.42, y + 0.3, this.forestSpecies(r4, warm, wet, water, era, p), season, era, p, r4, r1);
           }
-        } else if (r3 < 0.14 + 0.55 * p) {
-          this.addUnder(out, x, y, U.STUMP, season, r3, r1);
+        } else if (r32 < 0.14 + 0.55 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r32, r1);
           if (r4 < 0.35 && p > 0.28) this.addUnder(out, x + 0.3, y + 0.22, U.SAPLING, season, r4, r2);
         }
-        if (D >= 1 && r2 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r2, r3);
+        if (D >= 1 && r2 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r2, r32);
         if (D >= 1 && r4 < 0.22) this.addUnder(out, x + 0.62, y + 0.26, U.BUSH, season, r4, r1);
-        if (D >= 2 && season !== 3 && r3 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r3, r4);
+        if (D >= 2 && season !== 3 && r32 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r32, r4);
         if (D >= 2 && r1 > 0.94) this.addUnder(out, x + 0.55, y + 0.7, U.LOG, season, r1, r2);
         return;
       }
       if (t === TILE.GRASS) {
         const want = (0.05 + wet * 0.12) * (1 - 0.82 * p);
         if (r1 < want) {
-          this.addTree(out, x, y, this.openSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r3);
-        } else if (p > 0.3 && r3 < 0.1 * p) {
-          this.addUnder(out, x, y, U.STUMP, season, r3, r1);
+          this.addTree(out, x, y, this.openSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r32);
+        } else if (p > 0.3 && r32 < 0.1 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r32, r1);
         }
         if (water && r2 < 0.42) this.addUnder(out, x + 0.3, y + 0.55, U.REED, season, r2, r4);
         if (D >= 1 && r4 < 0.15) this.addUnder(out, x + 0.55, y + 0.35, U.BUSH, season, r4, r1);
-        if (D >= 2 && r3 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r3, r2);
+        if (D >= 2 && r32 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r32, r2);
         if (season < 2 && D >= 1) {
           const fl = 0.16 + wet * 0.14 + (era >= 8 ? p * 0.3 : -p * 0.1);
-          if (r2 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r2, r3);
+          if (r2 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r2, r32);
         }
         return;
       }
@@ -19744,26 +20375,26 @@ ${s}`, "console");
         const want = 0.1 * (1 - 0.6 * p);
         if (r1 < want) {
           const sp = warm < 0.42 ? r2 < 0.6 ? SP.spruce : SP.pine : r2 < 0.5 ? SP.junip : SP.pine;
-          this.addTree(out, x, y, sp, season, era, p, r2, r3);
+          this.addTree(out, x, y, sp, season, era, p, r2, r32);
         }
-        if (D >= 1 && r3 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r3, r1);
+        if (D >= 1 && r32 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r32, r1);
         if (D >= 2 && r4 < 0.22) this.addUnder(out, x + 0.25, y + 0.66, U.GRASS, season, r4, r2);
         if (D >= 2 && season < 2 && r2 > 0.9) this.addUnder(out, x + 0.6, y + 0.3, U.FLOWER, season, r2, r4);
         return;
       }
       if (t === TILE.SAND) {
         if (water && warm > 0.55 && r1 < 0.14) {
-          this.addTree(out, x, y, SP.palm, season, era, p, r2, r3);
+          this.addTree(out, x, y, SP.palm, season, era, p, r2, r32);
         } else if (water && warm <= 0.55 && r1 < 0.06) {
-          this.addTree(out, x, y, SP.willow, season, era, p, r2, r3);
+          this.addTree(out, x, y, SP.willow, season, era, p, r2, r32);
         }
         if (water && r2 < 0.28) this.addUnder(out, x + 0.4, y + 0.55, U.REED, season, r2, r4);
-        if (D >= 2 && r3 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r3, r1);
+        if (D >= 2 && r32 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r32, r1);
         return;
       }
       if (t === TILE.MOUNTAIN) {
         const foot = tile(x, y + 1) === TILE.HILL || tile(x - 1, y) === TILE.HILL || tile(x + 1, y) === TILE.HILL;
-        if (foot && r1 < 0.07) this.addTree(out, x, y, r2 < 0.5 ? SP.dead : SP.junip, season, era, p, r2, r3);
+        if (foot && r1 < 0.07) this.addTree(out, x, y, r2 < 0.5 ? SP.dead : SP.junip, season, era, p, r2, r32);
       }
     }
     // ---- выбор породы ------------------------------------------------------
@@ -19897,7 +20528,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp6(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp7(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -20052,7 +20683,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp7 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp8 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -20389,7 +21020,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp7(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp8(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -20406,10 +21037,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp7(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp7(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp8(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp8(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp7(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp8(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -20421,8 +21052,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp7(
-        nLand ? lapsArr[clamp7(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp8(
+        nLand ? lapsArr[clamp8(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -20433,8 +21064,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp7(i0, 0, w - 1);
-        this.txB[sx] = clamp7(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp8(i0, 0, w - 1);
+        this.txB[sx] = clamp8(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -20442,8 +21073,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp7(i0 - 1, 0, w - 1), b = row + clamp7(i0, 0, w - 1);
-          const c = row + clamp7(i0 + 1, 0, w - 1), d = row + clamp7(i0 + 2, 0, w - 1);
+          const a = row + clamp8(i0 - 1, 0, w - 1), b = row + clamp8(i0, 0, w - 1);
+          const c = row + clamp8(i0 + 1, 0, w - 1), d = row + clamp8(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -20484,12 +21115,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp7(j0 - 1, 0, h - 1) * SW, rb = clamp7(j0, 0, h - 1) * SW;
-        const rc = clamp7(j0 + 1, 0, h - 1) * SW, rd = clamp7(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp8(j0 - 1, 0, h - 1) * SW, rb = clamp8(j0, 0, h - 1) * SW;
+        const rc = clamp8(j0 + 1, 0, h - 1) * SW, rd = clamp8(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp7(jy, 0, h - 1) * w, jB = clamp7(jy + 1, 0, h - 1) * w;
+        const jA = clamp8(jy, 0, h - 1) * w, jB = clamp8(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -20539,9 +21170,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp7(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp7(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp8(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp8(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp7(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp8(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -20654,7 +21285,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp7(j0, 0, h - 1) * w, jB = clamp7(j0 + 1, 0, h - 1) * w;
+      const jA = clamp8(j0, 0, h - 1) * w, jB = clamp8(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -20697,7 +21328,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp7(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp8(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -20719,7 +21350,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp7(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp8(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -20795,28 +21426,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp7(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp7(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp7(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp7(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp8(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp8(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp8(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp8(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp7((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp7(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp8((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp8(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.globalAlpha = clamp7(0.72 + 0.28 * k, 0, 1);
+      ctx.imageSmoothingQuality = "low";
+      ctx.globalAlpha = clamp8(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp7(k, 0, 1);
+        ctx.globalAlpha = clamp8(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -20938,7 +21569,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp8 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp9 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -21114,8 +21745,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp8(L.shadowLen, 0.45, 2.2);
-      const u = clamp8((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp9(L.shadowLen, 0.45, 2.2);
+      const u = clamp9((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -21175,7 +21806,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp8(0.78 / hf, 0.32, 0.6);
+      const band = clamp9(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul = this._checkMul(ctx);
@@ -21281,8 +21912,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp8(Math.round(dw), 12, 256);
-      const h = clamp8(Math.round(dh), 12, 384);
+      const w = clamp9(Math.round(dw), 12, 256);
+      const h = clamp9(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -21292,8 +21923,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp8(Math.round(dw), 12, 256);
-      const h = clamp8(Math.round(dh), 12, 384);
+      const w = clamp9(Math.round(dw), 12, 256);
+      const h = clamp9(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -21454,7 +22085,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp9 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp10 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -21970,7 +22601,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp9(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp10(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -22072,7 +22703,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp9(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp10(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -22445,7 +23076,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp9(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp10(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -22529,7 +23160,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp9(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp10(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -22671,7 +23302,7 @@ ${s}`, "console");
       this.atmo.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.fx.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.veg.update(sim2, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
-      if (this.quality.richRelief) this.shadows.begin(sim2, dtReal, z, { fog: this.atmo.fogK });
+      this.shadows.begin(sim2, dtReal, z, { fog: this.atmo.fogK });
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.richVeg) this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
@@ -22839,6 +23470,7 @@ ${s}`, "console");
       const w = h * (sh.fw / sh.fh);
       const frame2 = st.still > 2 ? 0 : (st.walk / 0.7 * 2 | 0) % 2;
       const dir = st.dir === 1 ? 1 : 0;
+      this.shadows.beast(ctx, sx, sy, w, h);
       ctx.drawImage(
         sh.cv,
         frame2 * sh.fw,
@@ -22936,22 +23568,16 @@ ${s}`, "console");
         const dw2 = size * 1.5;
         const dh2 = dw2 * (painted.naturalHeight / painted.naturalWidth);
         const dx2 = sx + size / 2 - dw2 / 2, dy2 = sy + size - dh2;
+        this.shadows.paintedBuilding(ctx, painted, dx2, dy2, dw2, dh2);
         ctx.drawImage(painted, dx2, dy2, dw2, dh2);
         return;
       }
       const spr = this.sprites.building(b.id, def, e, b.size || 1);
       const dw = size * 1.16, dh = dw * spr.hFact;
       const dx = sx - size * 0.08, dy = sy + size - dh;
-      if (this.quality.shadows) {
-        const L = lightAt(sim2.dayTime);
-        ctx.save();
-        ctx.globalAlpha = 0.3;
-        ctx.translate(sx + size / 2, sy + size * 0.9);
-        ctx.transform(1, 0, Math.cos(L.sunAz) * L.shadowLen * 0.8, 0.34 * L.shadowLen, 0, 0);
-        ctx.drawImage(spr.sil, -size / 2, -dh, dw, dh);
-        ctx.restore();
-      }
+      this.shadows.building(ctx, spr, dx, dy, dw, dh);
       ctx.drawImage(spr.cv, dx, dy, dw, dh);
+      this.shadows.selfShade(ctx, spr, dx, dy, dw, dh);
       this._pendingGlow.push({ spr, dx, dy, dw, dh });
     }
     buildingCategory(id, def) {
@@ -23239,6 +23865,7 @@ ${s}`, "console");
       const h = Math.max(7, z * 0.34);
       const w = h * (sh.fw / sh.fh);
       const frame2 = st.still > 2 ? 0 : (st.walk / 0.62 * 4 | 0) % 4;
+      this.shadows.unit(ctx, sx, sy, w, h);
       ctx.drawImage(
         sh.cv,
         frame2 * sh.fw,
@@ -26515,14 +27142,14 @@ ${out}`;
       flp.frequency.value = 260;
       const ftrim = c.createGain();
       ftrim.gain.value = 0.33;
-      const f1 = mk(47, "sawtooth"), f2 = mk(70.5, "sawtooth"), f3 = mk(23.5, "square");
-      f1.connect(flp);
+      const f12 = mk(47, "sawtooth"), f2 = mk(70.5, "sawtooth"), f3 = mk(23.5, "square");
+      f12.connect(flp);
       f2.connect(flp);
       f3.connect(flp);
       flp.connect(ftrim);
       ftrim.connect(fg);
       fg.connect(this.ambBus);
-      f1.start(0);
+      f12.start(0);
       f2.start(0);
       f3.start(0);
       A.factory = { g: fg };

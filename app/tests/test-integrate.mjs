@@ -82,9 +82,14 @@ console.log('\n--- Мороз без дров бьёт по поселению -
   t('замёрзшие вычищены из списка', s.villagers.every(v => v.hp > 0));
   t('о смертях сказано в журнале',
     s.log.some(l => (l.text || '').includes('замёрз')));
+  // Считаем именно ЗАПИСИ О СМЕРТИ, а не любую строку со словом «замёрз».
+  // Связь выживания называет причину падения стабильности словами, и среди
+  // причин есть «Похороны замёрзших: 2» — по подстроке «замёрз» она попадала
+  // в счёт и делала вид, будто одну смерть записали дважды.
+  const deathLines = s.log.filter(l => (l.text || '').includes('замёрз насмерть'));
   t('каждая смерть записана один раз',
-    s.log.filter(l => (l.text || '').includes('замёрз')).length === s.sys.winter.totals.deaths,
-    `строк ${s.log.filter(l => (l.text || '').includes('замёрз')).length}, смертей ${s.sys.winter.totals.deaths}`);
+    deathLines.length === s.sys.winter.totals.deaths,
+    `строк ${deathLines.length}, смертей ${s.sys.winter.totals.deaths}`);
 }
 
 console.log('\n--- Тёплой зимой ничего не ломается ---');

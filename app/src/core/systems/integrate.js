@@ -16,6 +16,10 @@ import * as IND from './wire_production.js';
 import * as WAR from './wire_army.js';
 import * as POL from './wire_politics.js';
 import * as EMP from './wire_empire.js';
+// Связи между системами. Эти модули НИЧЕГО не меняют — они читают сложившийся
+// день и возвращают отчёт; применяют отчёт функции applyXxxLinks в конце файла.
+import * as LEC from './link_economy.js';
+import * as LS from './link_survival.js';
 
 // ---------- Установка ----------
 
@@ -30,6 +34,8 @@ export function installSystems(sim) {
   WAR.install(sim);
   POL.installPolitics(sim);
   EMP.installEmpire(sim);
+  // Память связи выживания: сколько суток подряд голодаем и когда был бунт.
+  sim.linkSurvival = LS.createSurvivalMemory();
   // Последние отчёты держим для HUD: панель читает готовые числа, а не
   // пересчитывает то, что уже посчитано модулем.
   sim.sys.winterReport = null;
@@ -52,6 +58,11 @@ export function systemsNewDay(sim) {
   WAR.onNewDay(sim);
   POL.politicsNewDay(sim);
   EMP.empireNewDay(sim);
+  // Связи идут последними: они читают уже сложившийся день. Хозяйство раньше
+  // выживания намеренно — налоги и долг это причина, а голод и стужа читают
+  // уже пошатнувшуюся державу, а не вчерашнюю.
+  applyEconomyLinks(sim);
+  applySurvivalLinks(sim);
 }
 
 // ---------- Соседи ----------
@@ -161,7 +172,9 @@ function tickBordersFor(sim) {
 // Штраф к счастью от холода. Ядро прибавляет это в happiness().
 export function systemsHappyMod(sim) {
   if (!sim.sys) return 0;
-  return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim);
+  return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim)
+    + (sim.sys.ecoLinks ? sim.sys.ecoLinks.mods.happy : 0)
+    + LS.survivalHappyMod(sim);
 }
 
 // Больные не работают. Ядро умножает на это выработку.
@@ -185,6 +198,7 @@ export function systemsSerialize(sim) {
     war: WAR.serialize(sim),
     pol: POL.politicsSerialize(sim),
     emp: EMP.empireSerialize(sim),
+    link: sim.linkSurvival || null,
   };
 }
 
@@ -198,6 +212,7 @@ export function systemsRestore(sim, data) {
   if (data.war) WAR.restore(sim, data.war);
   if (data.pol) POL.politicsRestore(sim, data.pol);
   if (data.emp) EMP.empireRestore(sim, data.emp);
+  sim.linkSurvival = LS.restoreSurvivalMemory(data.link);
 }
 
 // ---------- Для HUD ----------
@@ -218,8 +233,86 @@ export function territoryPanel(sim) {
   return sim.sys.borderStats;
 }
 
+// ---------- Применение связей ----------
+// Модули считают, но не трогают мир. Всё, что меняет державу, — здесь.
+
+function applyEconomyLinks(sim) {
+  if (!sim.politics || !sim.industry) return null;
+  const L = LEC.economyLinks(sim);
+  sim.sys.ecoLinks = L;                       // для HUD: панель читает готовый разбор
+
+  // Одобрение сословий: дневной сдвиг от налогов, долга и инфляции.
+  const F = sim.politics.state.factions;
+  for (const fid of Object.keys(F)) {
+    F[fid] = Math.max(0, Math.min(100, F[fid] + (L.mods.approval[fid] || 0)));
+  }
+  // Стабильность: доверие к власти как к плательщику.
+  const P = sim.politics.state;
+  P.stability = Math.max(0, Math.min(100, P.stability + L.mods.stability));
+
+  // Недобор налога: economy.js уже начислил полный сбор, здесь поправка.
+  if (L.mods.gold !== 0) sim.res.gold = Math.max(0, sim.res.gold + L.mods.gold);
+
+  // Дефолт: остальные кредиторы. Тому, кому не заплатили, отношения уронил
+  // сам economy.js — второй раз его здесь нет.
+  for (const c of L.flags.creditorsAlarmed) {
+    if (typeof sim.adjustRel === 'function') sim.adjustRel(c.fid, c.dRel, 'Дефолт казны');
+  }
+  for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'info' : e.type);
+  if (L.flags.defaultToday) sim.addChronicle(`Казна объявила дефолт (день ${sim.day}).`);
+  return L;
+}
+
+// Связь «выживание → держава»: холод, голод и болезни доходят до трона.
+function applySurvivalLinks(sim) {
+  if (!sim.linkSurvival) sim.linkSurvival = LS.createSurvivalMemory();
+  const out = LS.survivalLinks(sim);
+  sim.linkSurvival = out.flags.memory;
+
+  const pst = sim.politics && sim.politics.state;
+  if (pst) {
+    const dS = out.mods.stability + out.mods.stabilityShock;
+    pst.stability = Math.max(0, Math.min(100, pst.stability + dS));
+    for (const [fid, d] of Object.entries(out.mods.estates)) {
+      if (!d || pst.factions[fid] == null) continue;
+      pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+    }
+  }
+
+  // Бунт бьёт амбары. Долей, а не числом: плоская кража добила бы малое
+  // поселение, у которого и так пусто.
+  if (out.mods.foodPct) sim.res.food = Math.max(0, sim.res.food * (1 + out.mods.foodPct));
+
+  // Голод в столице виден из колоний. Потолок 12 — тот же, что в empire.js.
+  if (out.mods.cityUnrest && sim.empire) {
+    for (const c of sim.empire.state.cities) {
+      c.unrest = Math.min(12, (c.unrest || 0) + out.mods.cityUnrest);
+    }
+  }
+
+  // Отпадение города при восстании. Списки lost/cities ведёт empire.js —
+  // повторяем ровно его порядок действий, чтобы панель не разъехалась.
+  const lost = out.flags.cityLost;
+  if (lost && sim.empire) {
+    const st = sim.empire.state;
+    const i = st.cities.findIndex(c => c.id === lost.id);
+    if (i >= 0) {
+      const gone = st.cities[i];
+      st.lost.push({ name: gone.name, day: sim.day, pop: gone.pop });
+      st.cities.splice(i, 1);
+      sim.addChronicle(`${gone.name} отложился: столица не смогла его прокормить (день ${sim.day}).`);
+    }
+  }
+
+  if (out.flags.revolt || out.flags.riot) sim.sfx?.('alarm');
+  if (out.flags.revolt && typeof sim.toast === 'function') {
+    sim.toast('Восстание голодных! Держава теряет провинцию.', 'bad');
+  }
+  for (const e of out.events) sim.addLog(e.text, e.type);
+  return out;
+}
+
 // ---------- Экраны новых систем ----------
-// HUD зовёт их по имени вкладки; сборка HTML живёт в самих модулях.
 export const PANELS = {
   people:   { render: POP.renderPopulationPanel, bind: POP.bindPopulationPanel },
   industry: { render: IND.renderIndustryPanel,   bind: IND.bindIndustryPanel },
