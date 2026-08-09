@@ -4,6 +4,7 @@ import { DAY_SECONDS } from '../core/simulation.js';
 import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
+import { PANELS } from '../core/systems/integrate.js';
 
 // Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
 // разовым событиям дня, а еда вообще списывается одним куском на смене суток.
@@ -19,6 +20,12 @@ const TABS = [
   { id: 'army', ru: 'Армия', ic: '⚔️' },
   { id: 'diplo', ru: 'Дипломатия', ic: '🤝' },
   { id: 'market', ru: 'Рынок', ic: '⚖️' },
+  // Пять систем, которые были написаны и оттестированы, но игра их не звала.
+  { id: 'people', ru: 'Народ', ic: '👥' },
+  { id: 'industry', ru: 'Хозяйство', ic: '🏭' },
+  { id: 'war', ru: 'Война', ic: '🛡' },
+  { id: 'politics', ru: 'Держава', ic: '⚖' },
+  { id: 'empire', ru: 'Города', ic: '🏛' },
   { id: 'labor', ru: 'Труд', ic: '👷' },
   { id: 'goals', ru: 'Цели', ic: '🎯' },
   { id: 'log', ru: 'Журнал', ic: '📖' },
@@ -548,6 +555,15 @@ export class Hud {
       audio: this.audio,
       refresh: () => this.renderPanel(),
     });
+    // Экраны новых систем: у каждого свои data-атрибуты, пересечься не могут.
+    const panelCtx = {
+      toast: (t, k) => this.toast(t, k),
+      audio: this.audio,
+      refresh: () => this.renderPanel(),
+    };
+    for (const p of Object.values(PANELS)) {
+      if (p.bind) { try { p.bind(root, this.sim, panelCtx); } catch { /* панель не активна */ } }
+    }
   }
 
   // ---------- содержимое подсказок ----------
@@ -867,6 +883,11 @@ export class Hud {
   }
 
   panel_market() { return renderMarketPanel(this.sim, this.marketState); }
+  panel_people()   { return PANELS.people.render(this.sim); }
+  panel_industry() { return PANELS.industry.render(this.sim); }
+  panel_war()      { return PANELS.war.render(this.sim); }
+  panel_politics() { return PANELS.politics.render(this.sim); }
+  panel_empire()   { return PANELS.empire.render(this.sim); }
 
   panel_log() {
     const items = [...this.sim.log].reverse();

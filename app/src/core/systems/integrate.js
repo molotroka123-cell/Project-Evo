@@ -11,6 +11,11 @@ import { BUILDINGS, DAYS_PER_SEASON } from '../data.js';
 import * as W from './winter.js';
 import * as B from './borders.js';
 import * as C from './civ_ai.js';
+import * as POP from './wire_population.js';
+import * as IND from './wire_production.js';
+import * as WAR from './wire_army.js';
+import * as POL from './wire_politics.js';
+import * as EMP from './wire_empire.js';
 
 // ---------- Установка ----------
 
@@ -19,11 +24,16 @@ export function installSystems(sim) {
     winter: W.createWinter(),
     borders: B.createBorders(sim.world.w, sim.world.h),
     civ: C.createCivAi(sim.factions),
-    // Последние отчёты держим для HUD: панель читает готовые числа, а не
-    // пересчитывает то, что уже посчитано модулем.
-    winterReport: null,
-    borderStats: null,
   };
+  POP.wirePopulationInstall(sim);
+  IND.installIndustry(sim);
+  WAR.install(sim);
+  POL.installPolitics(sim);
+  EMP.installEmpire(sim);
+  // Последние отчёты держим для HUD: панель читает готовые числа, а не
+  // пересчитывает то, что уже посчитано модулем.
+  sim.sys.winterReport = null;
+  sim.sys.borderStats = null;
 }
 
 // ---------- Раз в сутки ----------
@@ -34,6 +44,14 @@ export function systemsNewDay(sim) {
   if (!sim.sys) return;
   tickWinterFor(sim);
   tickBordersFor(sim);
+  // Порядок важен: сперва люди (кто родился и умер), потом производство
+  // (сколько рук на местах), потом война и политика — они читают уже
+  // сложившееся население и склад, а не вчерашнее.
+  POP.wirePopulationNewDay(sim);
+  IND.industryNewDay(sim);
+  WAR.onNewDay(sim);
+  POL.politicsNewDay(sim);
+  EMP.empireNewDay(sim);
 }
 
 // ---------- Соседи ----------
@@ -143,7 +161,7 @@ function tickBordersFor(sim) {
 // Штраф к счастью от холода. Ядро прибавляет это в happiness().
 export function systemsHappyMod(sim) {
   if (!sim.sys) return 0;
-  return W.happyMod(sim.sys.winter);
+  return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim);
 }
 
 // Больные не работают. Ядро умножает на это выработку.
@@ -162,6 +180,11 @@ export function systemsSerialize(sim) {
     winter: W.serializeWinter(sim.sys.winter),
     borders: B.serializeBorders(sim.sys.borders),
     civ: C.serializeCivAi(sim.sys.civ),
+    pop: POP.populationSerialize ? POP.populationSerialize(sim) : null,
+    ind: IND.industrySerialize(sim),
+    war: WAR.serialize(sim),
+    pol: POL.politicsSerialize(sim),
+    emp: EMP.empireSerialize(sim),
   };
 }
 
@@ -170,6 +193,11 @@ export function systemsRestore(sim, data) {
   if (data.winter) sim.sys.winter = W.deserializeWinter(data.winter);
   if (data.borders) sim.sys.borders = B.deserializeBorders(data.borders);
   if (data.civ) sim.sys.civ = C.deserializeCivAi(data.civ, sim.factions);
+  if (data.pop && POP.populationRestore) POP.populationRestore(sim, data.pop);
+  if (data.ind) IND.industryRestore(sim, data.ind);
+  if (data.war) WAR.restore(sim, data.war);
+  if (data.pol) POL.politicsRestore(sim, data.pol);
+  if (data.emp) EMP.empireRestore(sim, data.emp);
 }
 
 // ---------- Для HUD ----------
@@ -189,3 +217,13 @@ export function territoryPanel(sim) {
   if (!sim.sys) return null;
   return sim.sys.borderStats;
 }
+
+// ---------- Экраны новых систем ----------
+// HUD зовёт их по имени вкладки; сборка HTML живёт в самих модулях.
+export const PANELS = {
+  people:   { render: POP.renderPopulationPanel, bind: POP.bindPopulationPanel },
+  industry: { render: IND.renderIndustryPanel,   bind: IND.bindIndustryPanel },
+  war:      { render: WAR.renderPanel,           bind: WAR.bindPanel },
+  politics: { render: POL.renderPoliticsPanel,   bind: POL.bindPoliticsPanel },
+  empire:   { render: EMP.renderEmpirePanel,     bind: EMP.bindEmpirePanel },
+};
