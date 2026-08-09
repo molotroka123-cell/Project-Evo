@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ФРОНТИР — трёхмерная сцена</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1420; overflow: hidden; }
+  #c { display: block; width: 100vw; height: 100vh; }
+  /* Подпись поверх кадра: что именно на экране и во что оно обходится.
+     Без неё скриншот невозможно принять — красиво, но непонятно, чего стоило. */
+  #hud {
+    position: fixed; left: 12px; top: 12px; z-index: 5;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #dfe8f5; background: rgba(10,16,26,.62); backdrop-filter: blur(6px);
+    padding: 10px 13px; border-radius: 9px; border: 1px solid rgba(255,255,255,.10);
+    white-space: pre; pointer-events: none;
+  }
+  #keys {
+    position: fixed; right: 12px; bottom: 12px; z-index: 5;
+    font: 12px/1.6 ui-sans-serif, system-ui, sans-serif; color: #9fb0c6;
+    background: rgba(10,16,26,.55); padding: 8px 11px; border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">сцена собирается…</div>
+<div id="keys">колесо — приближение · перетаскивание — поворот · ← → — время суток</div>
+
+<!-- Три.js берётся прямо из node_modules: это страница для приёмки, а не
+     сборка для игрока. В игровой сборщик (tools/build.mjs) он попадёт обычным
+     импортом, как и всё остальное. -->
+<script type="importmap">
+{ "imports": { "three": "/node_modules/three/build/three.module.js" } }
+</script>
+<script type="module">
+import { mount } from '/app/src/render3d/demo3d.js';
+
+const canvas = document.getElementById('c');
+const hud = document.getElementById('hud');
+
+const t0 = performance.now();
+const app = mount(canvas, { seed: 4242, era: 4, dayTime: 0.62 });
+const buildMs = Math.round(performance.now() - t0);
+
+// Управление: минимум, нужный чтобы обойти сцену и убедиться, что объём
+// настоящий, а не нарисованный.
+let dist = 34, turn = -0.6, tilt = 0.92, day = 0.62, drag = null;
+const apply = () => app.scene.lookAt(app.cx, app.cy, dist, tilt, turn);
+addEventListener('wheel', e => { dist = Math.max(8, Math.min(120, dist * (1 + Math.sign(e.deltaY) * 0.1))); apply(); }, { passive: true });
+addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; });
+addEventListener('pointerup', () => { drag = null; });
+addEventListener('pointermove', e => {
+  if (!drag) return;
+  turn -= (e.clientX - drag.x) * 0.006;
+  tilt = Math.max(0.22, Math.min(1.45, tilt + (e.clientY - drag.y) * 0.004));
+  drag = { x: e.clientX, y: e.clientY };
+  apply();
+});
+addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') day = (day - 0.02 + 1) % 1;
+  else if (e.key === 'ArrowRight') day = (day + 0.02) % 1;
+  else return;
+  app.scene.setDayTime(day); apply();
+});
+
+let frames = 0, fpsT = performance.now(), fps = 0;
+function loop() {
+  app.scene.render();
+  frames++;
+  const now = performance.now();
+  if (now - fpsT >= 500) {
+    fps = Math.round(frames * 1000 / (now - fpsT));
+    frames = 0; fpsT = now;
+    const s = app.scene.stats();
+    hud.textContent =
+      `построек ${app.counts.buildings}   жителей ${app.counts.people}\n` +
+      `вызовов отрисовки ${s.вызововОтрисовки}   треугольников ${s.треугольников.toLocaleString('ru')}\n` +
+      `сборка сцены ${buildMs} мс   FPS ${fps}   время суток ${day.toFixed(2)}`;
+  }
+  requestAnimationFrame(loop);
+}
+loop();
+
+// Для приёмки из Playwright. setDay идёт через ту же переменную, что и
+// клавиши: если снимок дёргает сцену напрямую, подпись на кадре остаётся от
+// прежнего времени суток и скриншот врёт про то, что на нём изображено.
+window.__scene3d = app;
+window.__scene3d.fps = () => fps;
+window.__scene3d.setDay = (d) => { day = ((d % 1) + 1) % 1; app.scene.setDayTime(day); apply(); };
+window.__scene3d.setView = (d, t, u) => { dist = d; tilt = t; turn = u; apply(); };
+</script>
+</body>
+</html>
