@@ -22,6 +22,7 @@ import * as LEC from './link_economy.js';
 import * as LS from './link_survival.js';
 import * as TER from './link_territory.js';
 import * as LWR from './link_war.js';
+import * as LIND from './link_industry.js';
 
 // ---------- Установка ----------
 
@@ -44,6 +45,8 @@ export function installSystems(sim) {
   // пересчитывает то, что уже посчитано модулем.
   sim.sys.winterReport = null;
   sim.sys.borderStats = null;
+  // Память связи хозяйства: износ, счётчик простоя, эпоха прошлых суток.
+  sim.linkIndustry = LIND.createIndustryMemory();
   // Память связи «территория → отпадение»: снимок городов, дни ультиматумов,
   // затухающий траур по потерянной провинции.
   sim.linkTerritory = TER.createTerritoryMemory();
@@ -70,6 +73,7 @@ export function systemsNewDay(sim) {
   // уже пошатнувшуюся державу, а не вчерашнюю.
   applyEconomyLinks(sim);
   applySurvivalLinks(sim);
+  applyIndustryLinks(sim);
   // Территория идёт ПОСЛЕ выживания: голод может снять город, и его потерю
   // тоже надо разыграть — кому он достался и как это увидели соседи.
   applyTerritoryLinks(sim);
@@ -188,7 +192,7 @@ export function systemsHappyMod(sim) {
   if (!sim.sys) return 0;
   return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim)
     + (sim.sys.ecoLinks ? sim.sys.ecoLinks.mods.happy : 0)
-    + LS.survivalHappyMod(sim)
+    + LS.survivalHappyMod(sim) + LIND.industryLinkHappyMod(sim)
     + TER.territoryHappyMod(sim)
     + (sim.sys.warLinks ? sim.sys.warLinks.mods.happy : 0);
 }
@@ -221,6 +225,7 @@ export function systemsSerialize(sim) {
     pol: POL.politicsSerialize(sim),
     emp: EMP.empireSerialize(sim),
     link: sim.linkSurvival || null,
+    linkInd: sim.linkIndustry || null,
     terr: sim.linkTerritory || null,
     linkWar: sim.linkWar || null,
   };
@@ -237,6 +242,7 @@ export function systemsRestore(sim, data) {
   if (data.pol) POL.politicsRestore(sim, data.pol);
   if (data.emp) EMP.empireRestore(sim, data.emp);
   sim.linkSurvival = LS.restoreSurvivalMemory(data.link);
+  sim.linkIndustry = LIND.restoreIndustryMemory(data.linkInd);
   sim.linkTerritory = TER.restoreTerritoryMemory(data.terr);
   sim.linkWar = LWR.restoreWarMemory(data.linkWar);
 }
@@ -286,6 +292,53 @@ function applyEconomyLinks(sim) {
   }
   for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'info' : e.type);
   if (L.flags.defaultToday) sim.addChronicle(`Казна объявила дефолт (день ${sim.day}).`);
+  return L;
+}
+
+// Связь «цепочки ↔ люди ↔ казна ↔ наука ↔ эпоха».
+function applyIndustryLinks(sim) {
+  if (!sim.industry) return null;
+  const L = LIND.industryLinks(sim);
+  sim.linkIndustry = L.flags.memory;
+  sim.sys.indLinks = L;                   // для HUD: панель читает готовый разбор
+
+  // Обученные руки — прибавка к вчерашнему выпуску цепочек. Множитель внутрь
+  // wire_production не подмешать, поэтому прибавка начисляется здесь, с тем же
+  // потолком склада, что и у самих цепочек.
+  for (const [r, add] of Object.entries(L.mods.output)) {
+    if (!(r in sim.res) || !add) continue;
+    sim.res[r] = Math.min(sim.resCap[r] ?? 99999, sim.res[r] + add);
+  }
+
+  // Недобор ремесла и разбор завала после аварии.
+  if (L.mods.gold) sim.res.gold = Math.max(0, sim.res.gold + L.mods.gold);
+  // Опыты подмастерьев: избыток сырья превращается в знание.
+  if (L.mods.knowledge) sim.res.knowledge += L.mods.knowledge;
+
+  const pst = sim.politics && sim.politics.state;
+  if (pst) {
+    pst.stability = Math.max(0, Math.min(100, pst.stability + L.mods.stability + L.mods.stabilityShock));
+    for (const [fid, d] of Object.entries(L.mods.estates)) {
+      if (!d || pst.factions[fid] == null) continue;
+      pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+    }
+  }
+
+  // Авария: часть промежуточного склада пропала, пострадавшая постройка побита.
+  // Долей, а не числом — плоская потеря добила бы маленькое хозяйство.
+  if (L.mods.stockPct && sim.industry.prod) {
+    const stock = sim.industry.prod.stock;
+    for (const k of Object.keys(stock)) stock[k] = Math.max(0, stock[k] * (1 + L.mods.stockPct));
+  }
+  const acc = L.flags.accident;
+  if (acc && acc.building) {
+    const b = sim.buildings.find(x => x.id === acc.building && x.done && !x.destroyed);
+    if (b) b.hp = Math.max(1, (b.hp || 100) - acc.hpLoss);
+    sim.addChronicle(`Авария на производстве: ${acc.name} (день ${sim.day}).`);
+    sim.sfx?.('alarm');
+  }
+
+  for (const e of L.events) sim.addLog(e.text, e.type === 'warn' ? 'bad' : e.type);
   return L;
 }
 
