@@ -265,6 +265,17 @@
   @media (min-width: 821px) {
     #placeBar { bottom: 24px; }
   }
+
+/* Летопись: сила памяти полосой, чтобы «помнят» имело величину, а не только
+   название. Ширина полосы считается от силы следа, потолок породы — 2.0. */
+.mem-row { padding:8px 10px; margin:6px 0; background:rgba(255,255,255,.04);
+  border:1px solid rgba(255,255,255,.07); border-radius:8px; }
+.mem-head { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; }
+.mem-bar { height:5px; margin:6px 0 5px; background:rgba(255,255,255,.09); border-radius:3px; overflow:hidden; }
+.mem-bar i { display:block; height:100%; border-radius:3px; }
+.mem-txt { font-size:12px; line-height:1.45; color:var(--dim); }
+.mem-eff { font-size:12px; margin:8px 2px 2px; }
+#chronList { font-size:12px; line-height:1.6; max-height:38vh; overflow-y:auto; }
 </style>
 </head>
 <body>

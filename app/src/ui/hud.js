@@ -4,7 +4,7 @@ import { DAY_SECONDS } from '../core/simulation.js';
 import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
-import { PANELS } from '../core/systems/integrate.js';
+import { PANELS, memoryPanel } from '../core/systems/integrate.js';
 
 // Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
 // разовым событиям дня, а еда вообще списывается одним куском на смене суток.
@@ -28,6 +28,10 @@ const TABS = [
   { id: 'empire', ru: 'Города', ic: '🏛' },
   { id: 'labor', ru: 'Труд', ic: '👷' },
   { id: 'goals', ru: 'Цели', ic: '🎯' },
+  // Летопись — не архив, а действующая механика: что народ помнит, тем и
+  // живёт. Вкладка стоит рядом с журналом, но показывает не события, а
+  // их ПОСЛЕДСТВИЯ — иначе игрок не поймёт, почему у него едят меньше.
+  { id: 'memory', ru: 'Летопись', ic: '📜' },
   { id: 'log', ru: 'Журнал', ic: '📖' },
 ];
 
@@ -888,6 +892,44 @@ export class Hud {
   panel_war()      { return PANELS.war.render(this.sim); }
   panel_politics() { return PANELS.politics.render(this.sim); }
   panel_empire()   { return PANELS.empire.render(this.sim); }
+
+  panel_memory() {
+    const s = this.sim;
+    const b = memoryPanel(s);
+    const rows = b.rows.length ? b.rows.map(r => {
+      // Полоса силы: игрок должен видеть не только «помнят», но и насколько.
+      const w = Math.min(100, Math.round(r.v / 2 * 100));
+      const col = r.kind === 'triumph' ? 'var(--good)' : 'var(--bad)';
+      return `<div class="mem-row">
+        <div class="mem-head"><b>${r.ru}</b>
+          <span style="color:var(--dim)">${r.years < 1 ? 'в этом году' : `${Math.floor(r.years)} г. назад`}</span></div>
+        <div class="mem-bar"><i style="width:${w}%;background:${col}"></i></div>
+        <div class="mem-txt">${r.text}</div>
+      </div>`;
+    }).join('') : `<div class="mem-txt">${b.text}</div>`;
+
+    // Во что память обходится прямо сейчас — числами, а не словами: это и есть
+    // ответ на вопрос «почему у меня столько уходит еды».
+    const L = s.sys && s.sys.memLinks;
+    const eff = [];
+    if (L) {
+      if (L.mods.eatMult !== 1) eff.push(`расход еды ×${L.mods.eatMult.toFixed(2)}`);
+      if (L.mods.woodBurnMult !== 1) eff.push(`дрова ×${L.mods.woodBurnMult.toFixed(2)}`);
+      if (Math.abs(L.mods.happy) > 0.05) eff.push(`счастье ${L.mods.happy > 0 ? '+' : ''}${L.mods.happy.toFixed(1)}`);
+      if (Math.abs(L.mods.stability) > 0.005) eff.push(`порядок ${L.mods.stability > 0 ? '+' : ''}${L.mods.stability.toFixed(2)}/день`);
+    }
+
+    const chron = [...s.chronicle].reverse().slice(0, 40).map(c =>
+      `<div><span class="l-day">[год ${Math.floor(c.day / 100) + 1}]</span> ${c.text}</div>`).join('')
+      || '<div style="color:var(--dim)">Пока ничего не записано.</div>';
+
+    return `<div class="sec">Что помнит народ</div>
+      ${rows}
+      ${eff.length ? `<div class="mem-eff">Сегодня это стоит: ${eff.join(' · ')}</div>` : ''}
+      <div class="mem-eff" style="color:var(--dim)">Забывание идёт ×${b.healRate} — сытые и спокойные годы стирают память быстрее.</div>
+      <div class="sec">Летопись</div>
+      <div id="chronList">${chron}</div>`;
+  }
 
   panel_log() {
     const items = [...this.sim.log].reverse();
