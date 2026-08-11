@@ -4,7 +4,7 @@ import { DAY_SECONDS } from '../core/simulation.js';
 import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
-import { PANELS, memoryPanel, mastersPanel, intelOf, intelTrustWord } from '../core/systems/integrate.js';
+import { PANELS, memoryPanel, mastersPanel, ghostPanel, intelOf, intelTrustWord } from '../core/systems/integrate.js';
 
 // Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
 // разовым событиям дня, а еда вообще списывается одним куском на смене суток.
@@ -947,8 +947,39 @@ export class Hud {
       ${rows}
       ${eff.length ? `<div class="mem-eff">Сегодня это стоит: ${eff.join(' · ')}</div>` : ''}
       <div class="mem-eff" style="color:var(--dim)">Забывание идёт ×${b.healRate} — сытые и спокойные годы стирают память быстрее.</div>
+      ${this.ghostBlock()}
       <div class="sec">Летопись</div>
       <div id="chronList">${chron}</div>`;
+  }
+
+  // Тень прошлой партии на этом же сиде. Отдельным блоком в «Летописи»: это
+  // тоже история, только не державы, а игрока.
+  ghostBlock() {
+    const g = ghostPanel(this.sim, 'pop');
+    if (!g.hasPast) {
+      return `<div class="sec">Тень прошлой партии</div>
+        <div class="mem-txt">${g.summary}</div>`;
+    }
+    // Две кривые в одном спрайтлайне: своя сплошная, прошлая пунктиром. Рисуем
+    // прямо в SVG — ради одного графика тащить библиотеку незачем.
+    const rows = g.rows;
+    const W = 260, H = 54;
+    const maxD = Math.max(1, rows[rows.length - 1].d);
+    const maxV = Math.max(1, ...rows.map(r => Math.max(r.now, r.past)));
+    const path = (key) => rows.map((r, i) =>
+      `${i ? 'L' : 'M'}${(r.d / maxD * W).toFixed(1)},${(H - r[key] / maxV * H).toFixed(1)}`).join(' ');
+    const last = rows[rows.length - 1];
+    const better = last.now >= last.past;
+    return `<div class="sec">Тень прошлой партии</div>
+      <div class="mem-row">
+        <div class="mem-head"><b>Жителей по годам</b>
+          <span style="color:${better ? 'var(--good)' : 'var(--bad)'}">${last.now} против ${last.past}</span></div>
+        <svg viewBox="0 0 ${W} ${H}" class="ghost-svg" preserveAspectRatio="none">
+          <path d="${path('past')}" fill="none" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <path d="${path('now')}" fill="none" stroke="${better ? 'var(--good)' : 'var(--bad)'}" stroke-width="2"/>
+        </svg>
+        <div class="mem-txt">Пунктир — прошлая партия на этом же сиде (дошла до дня ${g.pastEnded}).<br>${g.summary}</div>
+      </div>`;
   }
 
   panel_log() {
@@ -1176,8 +1207,14 @@ export class Hud {
       <p style="color:var(--dim);font-size:11px;margin:10px 0 6px">
         Со старших эпох вы получаете их технологии, запасы и первые постройки.
       </p>
+      <p style="color:var(--dim);font-size:11px;margin:0 0 6px">
+        «Тот же мир» перезапускает нынешний сид. Только так работает сравнение с
+        прошлой партией во вкладке «Летопись»: карта, соседи и погоды совпадут,
+        и разойдётся лишь то, что вы сделали иначе.
+      </p>
       <p style="color:var(--accent);margin-bottom:6px">Сколько соседей</p>
       <div class="btns">
+        <button class="btn" data-n="3" data-same="1">👻 Тот же мир (сид ${this.sim.seed}) · соседей 3</button>
         <button class="btn" data-n="3">🌍 Соседей: 3</button>
         <button class="btn" data-n="4">🌍 Соседей: 4</button>
         <button class="btn" data-n="5">🌍 Соседей: 5</button>
@@ -1189,7 +1226,11 @@ export class Hud {
     });
     this.el.modalBox.querySelectorAll('[data-n]').forEach(b => {
       b.onclick = () => {
-        if (b.dataset.n !== 'cancel') this.cb.newGame(+b.dataset.n, this._ngEra);
+        if (b.dataset.n !== 'cancel') {
+          // Тот же мир — значит тот же сид: сравнивать партии можно только на
+          // одинаковой карте.
+          this.cb.newGame(+b.dataset.n, this._ngEra, b.dataset.same ? this.sim.seed : undefined);
+        }
         this.closeModal();
       };
     });

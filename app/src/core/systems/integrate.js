@@ -27,6 +27,7 @@ import * as LN from './link_neighbors.js';
 import * as MEM from './link_memory.js';
 import * as INT from './link_intel.js';
 import * as MAS from './link_masters.js';
+import * as GH from './link_ghost.js';
 
 // С какого уровня отношений война считается ударом в спину. 20 — это уже не
 // «терпим друг друга», а сложившийся лад: договоры, караваны, общие войны.
@@ -72,6 +73,9 @@ export function installSystems(sim) {
   sim.linkIntel = INT.createIntel();
   // Ремесло живёт в людях: у каждого промысла свой мастер и свой ученик.
   sim.linkMasters = MAS.createMasters();
+  // Тень прошлой партии: слепки состояния через равные промежутки.
+  sim.linkGhost = GH.createGhost();
+  sim.linkGhost.seed = sim.seed | 0;
 }
 
 // ---------- Раз в сутки ----------
@@ -99,6 +103,7 @@ export function systemsNewDay(sim) {
   // Мастера идут ПОСЛЕ хозяйства: они поднимают тот выпуск, который оно
   // уже посчитало, а не считают его заново.
   applyMasterLinks(sim);
+  applyGhost(sim);
   // Соседи читают уже сложившийся день: казну после налогов и стабильность
   // после голода. Иначе охрана границ оплачивалась бы из вчерашних денег.
   applyNeighborLinks(sim);
@@ -280,6 +285,7 @@ export function systemsSerialize(sim) {
     mem: sim.linkMemory || null,
     intel: sim.linkIntel || null,
     masters: sim.linkMasters || null,
+    ghost: sim.linkGhost || null,
   };
 }
 
@@ -300,6 +306,7 @@ export function systemsRestore(sim, data) {
   sim.linkMemory = MEM.restoreMemory(data.mem);
   sim.linkIntel = INT.restoreIntel(data.intel);
   sim.linkMasters = MAS.restoreMasters(data.masters);
+  sim.linkGhost = GH.restoreGhost(data.ghost);
 }
 
 // ---------- Для HUD ----------
@@ -435,6 +442,19 @@ function applyMemoryLinks(sim, incoming) {
   for (const e of L.events) sim.addLog(e.text, e.type);
   return L;
 }
+
+// Тень прошлой партии: слепок раз в сезон и рассказ о расхождении.
+function applyGhost(sim) {
+  if (!sim.linkGhost) { sim.linkGhost = GH.createGhost(); sim.linkGhost.seed = sim.seed | 0; }
+  const L = GH.ghostTick(sim);
+  sim.linkGhost = L.flags.memory;
+  for (const e of L.events) sim.addLog(e.text, e.type);
+  return L;
+}
+
+// Для панели и для интерфейса, который хранит тень между партиями.
+export function ghostPanel(sim, key) { return GH.ghostReport(sim, key); }
+export function ghostSeal(sim) { return GH.sealRun(sim); }
 
 // Ремесло живёт в людях: мастер, ученик и то, что уходит вместе с мастером.
 function applyMasterLinks(sim) {

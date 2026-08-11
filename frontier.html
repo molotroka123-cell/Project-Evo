@@ -276,6 +276,7 @@
 .mem-txt { font-size:12px; line-height:1.45; color:var(--dim); }
 .mem-eff { font-size:12px; margin:8px 2px 2px; }
 #chronList { font-size:12px; line-height:1.6; max-height:38vh; overflow-y:auto; }
+.ghost-svg { width:100%; height:54px; display:block; margin:6px 0 8px; }
 </style>
 </head>
 <body>
@@ -5798,12 +5799,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num11 = 1;
+    let num12 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num11++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num12++}`));
     }
     return out;
   }
@@ -14059,6 +14060,176 @@
     return Math.round(v * 100) / 100;
   }
 
+  // app/src/core/systems/link_ghost.js
+  var YEAR4 = DAYS_PER_SEASON * 4;
+  var SNAP_EVERY = DAYS_PER_SEASON;
+  var MAX_SNAPS = 400;
+  var DIVERGE_PCT = 0.25;
+  function createGhost() {
+    return { v: 1, seed: 0, day: -1, snaps: [], past: null };
+  }
+  function snapshotOf(sim2) {
+    const pol = sim2.politics && sim2.politics.state;
+    return {
+      d: sim2.day | 0,
+      pop: sim2.villagers ? sim2.villagers.length : 0,
+      gold: Math.round(num11(sim2.res && sim2.res.gold, 0)),
+      food: Math.round(num11(sim2.res && sim2.res.food, 0)),
+      stab: pol ? Math.round(num11(pol.stability, 0)) : 0,
+      era: sim2.eraIndex | 0,
+      b: sim2.buildings ? sim2.buildings.filter((x) => x.done && !x.destroyed).length : 0,
+      tech: sim2.techs ? sim2.techs.size : 0
+    };
+  }
+  function restoreGhost(data) {
+    const g2 = createGhost();
+    if (!data || typeof data !== "object") return g2;
+    g2.seed = num11(data.seed, 0);
+    g2.day = num11(data.day, -1);
+    g2.snaps = cleanSnaps(data.snaps);
+    g2.past = data.past ? { seed: num11(data.past.seed, 0), snaps: cleanSnaps(data.past.snaps), ended: num11(data.past.ended, 0) } : null;
+    return g2;
+  }
+  function cleanSnaps(arr) {
+    if (!Array.isArray(arr)) return [];
+    const out = [];
+    for (const s of arr) {
+      if (!s || typeof s !== "object") continue;
+      out.push({
+        d: num11(s.d, 0),
+        pop: num11(s.pop, 0),
+        gold: num11(s.gold, 0),
+        food: num11(s.food, 0),
+        stab: num11(s.stab, 0),
+        era: num11(s.era, 0),
+        b: num11(s.b, 0),
+        tech: num11(s.tech, 0)
+      });
+    }
+    out.sort((a, b) => a.d - b.d);
+    return out;
+  }
+  function ghostTick(sim2) {
+    const day = sim2.day | 0;
+    const G = sim2.linkGhost || createGhost();
+    const out = { events: [], flags: { memory: G, snapped: false, diverged: null } };
+    if (G.day === day) return out;
+    const N = { ...G, day, snaps: G.snaps.slice() };
+    N.seed = num11(sim2.seed, N.seed);
+    const last2 = N.snaps.length ? N.snaps[N.snaps.length - 1] : null;
+    if (!last2 || day - last2.d >= SNAP_EVERY) {
+      N.snaps.push(snapshotOf(sim2));
+      out.flags.snapped = true;
+      if (N.snaps.length > MAX_SNAPS) {
+        const thin = [];
+        for (let i = 0; i < N.snaps.length; i++) {
+          if (i % 2 === 0 || i >= N.snaps.length - 40) thin.push(N.snaps[i]);
+        }
+        N.snaps = thin;
+      }
+    }
+    if (out.flags.snapped && N.past && N.past.seed === N.seed) {
+      const now2 = N.snaps[N.snaps.length - 1];
+      const then = atDay(N.past.snaps, now2.d);
+      if (then) {
+        const d = diverge(now2, then);
+        if (d) {
+          out.flags.diverged = d;
+          out.events.push({ text: `👻 ${d.text}`, type: d.better ? "good" : "warn" });
+        }
+      }
+    }
+    out.flags.memory = N;
+    return out;
+  }
+  function atDay(snaps, day) {
+    if (!snaps || !snaps.length) return null;
+    let best = null, bestGap = Infinity;
+    for (const s of snaps) {
+      const gap = Math.abs(s.d - day);
+      if (gap < bestGap) {
+        bestGap = gap;
+        best = s;
+      }
+    }
+    return bestGap <= SNAP_EVERY * 2 ? best : null;
+  }
+  function diverge(now2, then) {
+    const cands = [
+      { k: "pop", ru: "жителей", a: now2.pop, b: then.pop, more: true },
+      { k: "gold", ru: "золота", a: now2.gold, b: then.gold, more: true },
+      { k: "b", ru: "построек", a: now2.b, b: then.b, more: true },
+      { k: "tech", ru: "технологий", a: now2.tech, b: then.tech, more: true },
+      { k: "stab", ru: "порядка", a: now2.stab, b: then.stab, more: true }
+    ];
+    let best = null, bestRel = DIVERGE_PCT;
+    for (const c of cands) {
+      const base = Math.max(1, Math.abs(c.b));
+      const rel = Math.abs(c.a - c.b) / base;
+      if (rel > bestRel) {
+        bestRel = rel;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    const better = best.a > best.b;
+    const year = Math.floor(now2.d / YEAR4) + 1;
+    return {
+      key: best.k,
+      now: best.a,
+      past: best.b,
+      better,
+      text: better ? `Год ${year}: ${best.ru} у нас ${best.a} против ${best.b} в прошлой партии — идём лучше.` : `Год ${year}: ${best.ru} у нас ${best.a} против ${best.b} в прошлой партии — отстаём.`
+    };
+  }
+  function ghostReport(sim2, key = "pop") {
+    const G = sim2 && sim2.linkGhost ? sim2.linkGhost : createGhost();
+    const mine = G.snaps.map((s) => ({ d: s.d, v: s[key] ?? 0 }));
+    const hasPast = !!(G.past && G.past.snaps.length && G.past.seed === G.seed);
+    const past = hasPast ? G.past.snaps.map((s) => ({ d: s.d, v: s[key] ?? 0 })) : [];
+    const rows = [];
+    if (hasPast) {
+      for (const s of G.snaps) {
+        const t = atDay(G.past.snaps, s.d);
+        if (!t) continue;
+        rows.push({ d: s.d, year: Math.floor(s.d / YEAR4) + 1, now: s[key] ?? 0, past: t[key] ?? 0 });
+      }
+    }
+    const now2 = G.snaps.length ? G.snaps[G.snaps.length - 1] : null;
+    const then = hasPast && now2 ? atDay(G.past.snaps, now2.d) : null;
+    return {
+      hasPast,
+      mine,
+      past,
+      rows,
+      pastEnded: hasPast ? G.past.ended : 0,
+      summary: !hasPast ? "Прошлой партии на этом сиде нет — сравнивать не с чем. Доиграйте эту, и следующая пойдёт рядом с ней." : then ? summaryText(now2, then) : "Прошлая партия на этот день ещё не дошла."
+    };
+  }
+  function summaryText(now2, then) {
+    const parts = [];
+    const cmp = (ru, a, b) => {
+      if (a === b) return `${ru}: поровну (${a})`;
+      return `${ru}: ${a} против ${b}`;
+    };
+    parts.push(cmp("жители", now2.pop, then.pop));
+    parts.push(cmp("золото", now2.gold, then.gold));
+    parts.push(cmp("порядок", now2.stab, then.stab));
+    parts.push(cmp("постройки", now2.b, then.b));
+    return parts.join(" · ");
+  }
+  function sealRun(sim2) {
+    const G = sim2 && sim2.linkGhost ? sim2.linkGhost : createGhost();
+    return {
+      seed: G.seed || num11(sim2 && sim2.seed, 0),
+      snaps: G.snaps.slice(),
+      ended: sim2 ? sim2.day | 0 : 0
+    };
+  }
+  function num11(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+
   // app/src/core/systems/integrate.js
   var BETRAYAL_REL_WAS = 20;
   function relValue2(sim2, fid) {
@@ -14086,6 +14257,8 @@
     sim2.linkMemory = createMemory();
     sim2.linkIntel = createIntel();
     sim2.linkMasters = createMasters();
+    sim2.linkGhost = createGhost();
+    sim2.linkGhost.seed = sim2.seed | 0;
   }
   function systemsNewDay(sim2) {
     if (!sim2.sys) return;
@@ -14100,6 +14273,7 @@
     const survOut = applySurvivalLinks(sim2);
     applyIndustryLinks(sim2);
     applyMasterLinks(sim2);
+    applyGhost(sim2);
     applyNeighborLinks(sim2);
     applyTerritoryLinks(sim2);
     applyIntelLinks(sim2);
@@ -14215,7 +14389,8 @@
       linkWar: sim2.linkWar || null,
       mem: sim2.linkMemory || null,
       intel: sim2.linkIntel || null,
-      masters: sim2.linkMasters || null
+      masters: sim2.linkMasters || null,
+      ghost: sim2.linkGhost || null
     };
   }
   function systemsRestore(sim2, data) {
@@ -14235,6 +14410,7 @@
     sim2.linkMemory = restoreMemory(data.mem);
     sim2.linkIntel = restoreIntel(data.intel);
     sim2.linkMasters = restoreMasters(data.masters);
+    sim2.linkGhost = restoreGhost(data.ghost);
   }
   function applyEconomyLinks(sim2) {
     if (!sim2.politics || !sim2.industry) return null;
@@ -14304,6 +14480,22 @@
     }
     for (const e of L.events) sim2.addLog(e.text, e.type);
     return L;
+  }
+  function applyGhost(sim2) {
+    if (!sim2.linkGhost) {
+      sim2.linkGhost = createGhost();
+      sim2.linkGhost.seed = sim2.seed | 0;
+    }
+    const L = ghostTick(sim2);
+    sim2.linkGhost = L.flags.memory;
+    for (const e of L.events) sim2.addLog(e.text, e.type);
+    return L;
+  }
+  function ghostPanel(sim2, key) {
+    return ghostReport(sim2, key);
+  }
+  function ghostSeal(sim2) {
+    return sealRun(sim2);
   }
   function applyMasterLinks(sim2) {
     if (!sim2.linkMasters) sim2.linkMasters = createMasters();
@@ -28513,8 +28705,35 @@ ${out}`;
       ${rows}
       ${eff.length ? `<div class="mem-eff">Сегодня это стоит: ${eff.join(" · ")}</div>` : ""}
       <div class="mem-eff" style="color:var(--dim)">Забывание идёт ×${b.healRate} — сытые и спокойные годы стирают память быстрее.</div>
+      ${this.ghostBlock()}
       <div class="sec">Летопись</div>
       <div id="chronList">${chron}</div>`;
+    }
+    // Тень прошлой партии на этом же сиде. Отдельным блоком в «Летописи»: это
+    // тоже история, только не державы, а игрока.
+    ghostBlock() {
+      const g2 = ghostPanel(this.sim, "pop");
+      if (!g2.hasPast) {
+        return `<div class="sec">Тень прошлой партии</div>
+        <div class="mem-txt">${g2.summary}</div>`;
+      }
+      const rows = g2.rows;
+      const W = 260, H = 54;
+      const maxD = Math.max(1, rows[rows.length - 1].d);
+      const maxV = Math.max(1, ...rows.map((r) => Math.max(r.now, r.past)));
+      const path = (key) => rows.map((r, i) => `${i ? "L" : "M"}${(r.d / maxD * W).toFixed(1)},${(H - r[key] / maxV * H).toFixed(1)}`).join(" ");
+      const last2 = rows[rows.length - 1];
+      const better = last2.now >= last2.past;
+      return `<div class="sec">Тень прошлой партии</div>
+      <div class="mem-row">
+        <div class="mem-head"><b>Жителей по годам</b>
+          <span style="color:${better ? "var(--good)" : "var(--bad)"}">${last2.now} против ${last2.past}</span></div>
+        <svg viewBox="0 0 ${W} ${H}" class="ghost-svg" preserveAspectRatio="none">
+          <path d="${path("past")}" fill="none" stroke="var(--dim)" stroke-width="1.5" stroke-dasharray="4 3"/>
+          <path d="${path("now")}" fill="none" stroke="${better ? "var(--good)" : "var(--bad)"}" stroke-width="2"/>
+        </svg>
+        <div class="mem-txt">Пунктир — прошлая партия на этом же сиде (дошла до дня ${g2.pastEnded}).<br>${g2.summary}</div>
+      </div>`;
     }
     panel_log() {
       const items = [...this.sim.log].reverse();
@@ -28760,8 +28979,14 @@ ${out}`;
       <p style="color:var(--dim);font-size:11px;margin:10px 0 6px">
         Со старших эпох вы получаете их технологии, запасы и первые постройки.
       </p>
+      <p style="color:var(--dim);font-size:11px;margin:0 0 6px">
+        «Тот же мир» перезапускает нынешний сид. Только так работает сравнение с
+        прошлой партией во вкладке «Летопись»: карта, соседи и погоды совпадут,
+        и разойдётся лишь то, что вы сделали иначе.
+      </p>
       <p style="color:var(--accent);margin-bottom:6px">Сколько соседей</p>
       <div class="btns">
+        <button class="btn" data-n="3" data-same="1">👻 Тот же мир (сид ${this.sim.seed}) · соседей 3</button>
         <button class="btn" data-n="3">🌍 Соседей: 3</button>
         <button class="btn" data-n="4">🌍 Соседей: 4</button>
         <button class="btn" data-n="5">🌍 Соседей: 5</button>
@@ -28777,7 +29002,9 @@ ${out}`;
       });
       this.el.modalBox.querySelectorAll("[data-n]").forEach((b) => {
         b.onclick = () => {
-          if (b.dataset.n !== "cancel") this.cb.newGame(+b.dataset.n, this._ngEra);
+          if (b.dataset.n !== "cancel") {
+            this.cb.newGame(+b.dataset.n, this._ngEra, b.dataset.same ? this.sim.seed : void 0);
+          }
           this.closeModal();
         };
       });
@@ -30440,6 +30667,7 @@ ${out}`;
     return m ? +m[1] >>> 0 : Date.now() % 1e5;
   }
   var sim = new Simulation(seedFromHash(), { factions: 3 });
+  attachGhost(sim);
   var renderer = new Renderer(canvas);
   var hud = new Hud(sim, renderer, saveSys, audio);
   var coach = new Coach({ hud, renderer, audio });
@@ -30503,9 +30731,11 @@ ${out}`;
     importSave(json) {
       loadFromJson(json);
     },
-    newGame(factions, startEra = 0) {
+    // seed !== undefined значит «переиграть тот же мир»: только так работает
+    // сравнение с прошлой партией — сид это и есть весь мир целиком.
+    newGame(factions, startEra = 0, seed) {
       saveSys.remove("auto");
-      sim = newSimulation(Date.now() % 1e6, factions, startEra);
+      sim = newSimulation(seed === void 0 ? Date.now() % 1e6 : seed >>> 0, factions, startEra);
       document.getElementById("overlay").classList.add("hidden");
       hud.toast("Новый мир создан. Удачи!", "good");
       coach.start();
@@ -30517,8 +30747,36 @@ ${out}`;
       coach.start();
     }
   });
+  function GHOST_KEY(seed) {
+    return `frontier_ghost_${seed >>> 0}`;
+  }
+  function loadGhost(seed) {
+    try {
+      const raw = localStorage.getItem(GHOST_KEY(seed));
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      return d && Array.isArray(d.snaps) && d.snaps.length ? d : null;
+    } catch {
+      return null;
+    }
+  }
+  function saveGhost(s) {
+    try {
+      const seal = ghostSeal(s);
+      if (!seal.snaps || seal.snaps.length < 2) return;
+      localStorage.setItem(GHOST_KEY(seal.seed), JSON.stringify(seal));
+    } catch {
+    }
+  }
+  function attachGhost(s) {
+    const past = loadGhost(s.seed);
+    if (past && s.linkGhost) s.linkGhost.past = past;
+    return s;
+  }
   function newSimulation(seed, factions, startEra = 0) {
+    if (sim) saveGhost(sim);
     const s = new Simulation(seed, { factions, startEra });
+    attachGhost(s);
     s.sfx = (n) => audio.play(n);
     hud.sim = s;
     sim = s;
@@ -30535,6 +30793,7 @@ ${out}`;
       return;
     }
     r.sim.sfx = (n) => audio.play(n);
+    attachGhost(r.sim);
     hud.sim = r.sim;
     sim = r.sim;
     renderer.cam.x = sim.world.startX;
@@ -30740,7 +30999,10 @@ ${out}`;
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) saveSys.save("auto", JSON.stringify(sim.serialize()));
   });
-  window.addEventListener("beforeunload", () => saveSys.save("auto", JSON.stringify(sim.serialize())));
+  window.addEventListener("beforeunload", () => {
+    saveSys.save("auto", JSON.stringify(sim.serialize()));
+    saveGhost(sim);
+  });
   function onResize() {
     renderer.resize();
   }

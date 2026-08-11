@@ -1,5 +1,6 @@
 // main.js — ввод (Pointer Events: мышь/палец/стилус) и игровой цикл.
 import { Simulation, DAY_SECONDS } from './core/simulation.js';
+import { ghostSeal } from './core/systems/integrate.js';
 import { BUILDINGS, ERAS } from './core/data.js';
 import { Renderer } from './render/renderer.js';
 import { Hud } from './ui/hud.js';
@@ -21,6 +22,10 @@ function seedFromHash() {
 }
 
 let sim = new Simulation(seedFromHash(), { factions: 3 });
+// Стартовая партия создаётся здесь, в обход newSimulation, поэтому тень
+// прошлого прогона ей надо подложить отдельно — иначе игрок, зашедший по
+// ссылке с сидом и переигравший тот же мир, сравнения не увидит.
+attachGhost(sim);
 const renderer = new Renderer(canvas);
 const hud = new Hud(sim, renderer, saveSys, audio);
 const coach = new Coach({ hud, renderer, audio });
@@ -79,9 +84,11 @@ hud.bind({
     loadFromJson(json);
   },
   importSave(json) { loadFromJson(json); },
-  newGame(factions, startEra = 0) {
+  // seed !== undefined значит «переиграть тот же мир»: только так работает
+  // сравнение с прошлой партией — сид это и есть весь мир целиком.
+  newGame(factions, startEra = 0, seed) {
     saveSys.remove('auto');
-    sim = newSimulation(Date.now() % 1000000, factions, startEra);
+    sim = newSimulation(seed === undefined ? Date.now() % 1000000 : (seed >>> 0), factions, startEra);
     document.getElementById('overlay').classList.add('hidden');
     hud.toast('Новый мир создан. Удачи!', 'good');
     coach.start();
@@ -94,8 +101,60 @@ hud.bind({
   },
 });
 
+// ---------- Тень прошлой партии ----------
+//
+// Слепки состояния копит ядро, а хранит их между партиями интерфейс: ядро про
+// localStorage не знает и знать не должно — оно обязано работать в node, где
+// никакого localStorage нет, и там на нём гоняются все проверки.
+//
+// Каждое обращение обёрнуто: Safari в приватном режиме и режим «блокировать все
+// cookie» бросают SecurityError, и на этом игра однажды уже умирала до первого
+// кадра.
+// ОБЪЯВЛЕНИЕ ФУНКЦИИ, А НЕ const СО СТРЕЛКОЙ. Разница здесь не стилистическая:
+// attachGhost вызывается на строке 28, при создании стартовой партии, то есть
+// ВЫШЕ этого места в файле. Объявление функции поднимается и работает оттуда,
+// а `const GHOST_KEY = (seed) => …` до своей строки лежит в мёртвой зоне и
+// бросает ReferenceError.
+//
+// Именно так и было: обращение падало, свой же защитный try/catch в loadGhost
+// его молча съедал, и загрузчик ВСЕГДА возвращал «тени нет». Снаружи это
+// выглядело как «механика не работает», хотя данные лежали в хранилище
+// целыми — 12 слепков с верным сидом.
+function GHOST_KEY(seed) { return `frontier_ghost_${seed >>> 0}`; }
+
+function loadGhost(seed) {
+  try {
+    const raw = localStorage.getItem(GHOST_KEY(seed));
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return d && Array.isArray(d.snaps) && d.snaps.length ? d : null;
+  } catch { return null; }
+}
+
+function saveGhost(s) {
+  try {
+    const seal = ghostSeal(s);
+    // Пустую партию сохранять незачем: следующей она покажет прямую в ноль и
+    // только собьёт с толку.
+    if (!seal.snaps || seal.snaps.length < 2) return;
+    localStorage.setItem(GHOST_KEY(seal.seed), JSON.stringify(seal));
+  } catch { /* приватный режим — играем без тени */ }
+}
+
+// Подложить симуляции тень прошлой партии на этом же сиде, если она есть.
+// Сид — это весь мир целиком: карта, соседи, погоды. Сравнение осмысленно
+// только на одном и том же.
+function attachGhost(s) {
+  const past = loadGhost(s.seed);
+  if (past && s.linkGhost) s.linkGhost.past = past;
+  return s;
+}
+
 function newSimulation(seed, factions, startEra = 0) {
+  // Уходящую партию запечатываем ДО создания новой: иначе её слепки пропадут.
+  if (sim) saveGhost(sim);
   const s = new Simulation(seed, { factions, startEra });
+  attachGhost(s);
   s.sfx = (n) => audio.play(n);
   hud.sim = s;
   sim = s;
@@ -110,6 +169,12 @@ function loadFromJson(json, silent) {
   const r = Simulation.deserialize(json);
   if (!r.ok) { hud.toast(r.reason, 'bad'); return; }
   r.sim.sfx = (n) => audio.play(n);
+  // Тень прошлой партии живёт РЯДОМ с сейвом, а не внутри него: восстановление
+  // создаёт новую симуляцию и перезаписывает linkGhost тем, что лежало в файле,
+  // а там тени нет — она хранится отдельно, по ключу сида. Без этой строки
+  // игрок, у которого есть автосохранение (то есть почти любой), сравнения не
+  // видел никогда: страница молча загружала сейв поверх подложенной тени.
+  attachGhost(r.sim);
   hud.sim = r.sim;
   sim = r.sim;
   renderer.cam.x = sim.world.startX;
@@ -340,7 +405,12 @@ function frame(now) {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) saveSys.save('auto', JSON.stringify(sim.serialize()));
 });
-window.addEventListener('beforeunload', () => saveSys.save('auto', JSON.stringify(sim.serialize())));
+window.addEventListener('beforeunload', () => {
+  saveSys.save('auto', JSON.stringify(sim.serialize()));
+  // Тень запечатываем и здесь: игрок чаще закрывает вкладку, чем начинает
+  // новую партию, и без этого прошлая партия почти никогда не сохранялась бы.
+  saveGhost(sim);
+});
 
 // ---------- resize ----------
 function onResize() { renderer.resize(); }
