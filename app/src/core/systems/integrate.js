@@ -24,6 +24,19 @@ import * as TER from './link_territory.js';
 import * as LWR from './link_war.js';
 import * as LIND from './link_industry.js';
 import * as LN from './link_neighbors.js';
+import * as MEM from './link_memory.js';
+
+// С какого уровня отношений война считается ударом в спину. 20 — это уже не
+// «терпим друг друга», а сложившийся лад: договоры, караваны, общие войны.
+const BETRAYAL_REL_WAS = 20;
+
+// Отношения числом. Ядро держит их то простым числом, то объектом со полем v —
+// читаем обе формы, чтобы связь не зависела от того, как ядро их хранит.
+function relValue(sim, fid) {
+  if (!sim || !sim.relations) return 0;
+  const r = sim.relations[fid];
+  return typeof r === 'number' ? r : (r && typeof r.v === 'number' ? r.v : 0);
+}
 
 // ---------- Установка ----------
 
@@ -51,6 +64,8 @@ export function installSystems(sim) {
   // Память связи «территория → отпадение»: снимок городов, дни ультиматумов,
   // затухающий траур по потерянной провинции.
   sim.linkTerritory = TER.createTerritoryMemory();
+  // Летопись как причина: что пережито, то меняет поведение державы.
+  sim.linkMemory = MEM.createMemory();
 }
 
 // ---------- Раз в сутки ----------
@@ -73,7 +88,7 @@ export function systemsNewDay(sim) {
   // выживания намеренно — налоги и долг это причина, а голод и стужа читают
   // уже пошатнувшуюся державу, а не вчерашнюю.
   applyEconomyLinks(sim);
-  applySurvivalLinks(sim);
+  const survOut = applySurvivalLinks(sim);
   applyIndustryLinks(sim);
   // Соседи читают уже сложившийся день: казну после налогов и стабильность
   // после голода. Иначе охрана границ оплачивалась бы из вчерашних денег.
@@ -81,7 +96,10 @@ export function systemsNewDay(sim) {
   // Территория идёт ПОСЛЕ выживания: голод может снять город, и его потерю
   // тоже надо разыграть — кому он достался и как это увидели соседи.
   applyTerritoryLinks(sim);
-  applyWarLinks(sim);
+  const warOut = applyWarLinks(sim);
+  // Память идёт ПОСЛЕДНЕЙ: она записывает то, что породили остальные связи
+  // за эти же сутки, и уже завтра держава живёт с оглядкой на записанное.
+  applyMemoryLinks(sim, harvestScars(sim, { war: warOut, surv: survOut }));
 }
 
 // ---------- Соседи ----------
@@ -113,7 +131,16 @@ export function systemsFactions(sim) {
   // знает про перемирия, договоры и реакцию интерфейса.
   for (const w of out.warOnPlayer) {
     const f = sim.faction(w.fid || w);
-    if (f && !sim.atPeaceTreaty(f.id)) sim.declareWarOnPlayer(f);
+    if (!f || sim.atPeaceTreaty(f.id)) continue;
+    // Удар в спину — это война от того, с кем мы были в ладу. Отношения
+    // смотрим ДО объявления: declareWarOnPlayer роняет их на 60, и после
+    // вызова отличить друга от старого врага уже нельзя.
+    const relBefore = relValue(sim, f.id);
+    sim.declareWarOnPlayer(f);
+    if (relBefore >= BETRAYAL_REL_WAS) {
+      if (!Array.isArray(sim.sys.betrayals)) sim.sys.betrayals = [];
+      sim.sys.betrayals.push({ fid: f.id, day: sim.day, rel: relBefore });
+    }
   }
   return true;
 }
@@ -132,7 +159,10 @@ function tickWinterFor(sim) {
 
   // Дрова сжигаются реально: это единственный расход дерева, который нельзя
   // отложить, и он и делает зиму зимой.
-  if (rep.burned > 0) sim.res.wood = Math.max(0, sim.res.wood - rep.burned);
+  // Пережившие студёные зимы запасают дрова впрок и жгут скупее. Списываем
+  // не отчётное число, а поправленное — иначе память была бы только словами.
+  const burned = rep.burned * MEM.memoryWoodMult(sim);
+  if (burned > 0) sim.res.wood = Math.max(0, sim.res.wood - burned);
 
   // Имена замёрзших модуль уже положил в rep.events — своего второго списка
   // здесь быть не должно, иначе каждая смерть попадает в журнал дважды.
@@ -198,6 +228,7 @@ export function systemsHappyMod(sim) {
     + (sim.sys.ecoLinks ? sim.sys.ecoLinks.mods.happy : 0)
     + LS.survivalHappyMod(sim) + LIND.industryLinkHappyMod(sim)
     + (sim.sys.nbrLinks ? sim.sys.nbrLinks.mods.happy : 0)
+    + MEM.memoryHappyMod(sim)
     + TER.territoryHappyMod(sim)
     + (sim.sys.warLinks ? sim.sys.warLinks.mods.happy : 0);
 }
@@ -233,6 +264,7 @@ export function systemsSerialize(sim) {
     linkInd: sim.linkIndustry || null,
     terr: sim.linkTerritory || null,
     linkWar: sim.linkWar || null,
+    mem: sim.linkMemory || null,
   };
 }
 
@@ -250,6 +282,7 @@ export function systemsRestore(sim, data) {
   sim.linkIndustry = LIND.restoreIndustryMemory(data.linkInd);
   sim.linkTerritory = TER.restoreTerritoryMemory(data.terr);
   sim.linkWar = LWR.restoreWarMemory(data.linkWar);
+  sim.linkMemory = MEM.restoreMemory(data.mem);
 }
 
 // ---------- Для HUD ----------
@@ -298,6 +331,97 @@ function applyEconomyLinks(sim) {
   for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'info' : e.type);
   if (L.flags.defaultToday) sim.addChronicle(`Казна объявила дефолт (день ${sim.day}).`);
   return L;
+}
+
+// ---------- Летопись как причина ----------
+
+// Что из прожитого дня достойно памяти. Собирается ЗДЕСЬ, а не в модуле памяти:
+// только этот файл видит отчёты всех связей сразу. Разбирать текст летописи
+// строками было бы ошибкой — строка это то, что читает игрок, и связь ломалась
+// бы от любой правки формулировки. Поэтому память получает породы событий, а не
+// слова.
+function harvestScars(sim, ctx) {
+  const out = [];
+  const day = sim.day;
+
+  // Голод. Считаем не «мало еды», а состоявшуюся беду: похороны от голода,
+  // хлебный бунт, восстание. Иначе шрам копился бы каждую тощую неделю.
+  if (sim.starvedDay === day) out.push({ kind: 'famine', scale: 0.55 });
+  const surv = ctx && ctx.surv;
+  if (surv && surv.flags) {
+    if (surv.flags.riot) out.push({ kind: 'famine', scale: 1.0 });
+    if (surv.flags.revolt) out.push({ kind: 'famine', scale: 1.6 });
+  }
+
+  // Стужа и мор — из отчёта зимы за эти же сутки.
+  const rep = sim.sys && sim.sys.winterReport;
+  if (rep) {
+    if (rep.deathCount > 0) out.push({ kind: 'frost', scale: Math.min(2, rep.deathCount * 0.6) });
+    // Мором считаем слёгшую четверть поселения: меньшее — это простуда, а не
+    // событие, которое помнят годами.
+    const pop = Math.max(1, sim.villagers.length);
+    const sick = (sim.sys.winter && sim.sys.winter.sick) || 0;
+    if (sick / pop >= 0.25) out.push({ kind: 'plague', scale: Math.min(2, (sick / pop) / 0.25) });
+  }
+
+  // Позор: потерянная провинция. Списки ведёт empire.js, поэтому смотрим на
+  // свежую запись в нём, а не на собственный счётчик.
+  const emp = sim.empire && sim.empire.state;
+  if (emp && Array.isArray(emp.lost)) {
+    for (const l of emp.lost) if (l && l.day === day) out.push({ kind: 'shame', scale: 1 });
+  }
+
+  // Гордость: взятый город и отбитые набеги.
+  const war = ctx && ctx.war;
+  if (war && war.flags && war.flags.captures) out.push({ kind: 'triumph', scale: 1 });
+  // Отбитый набег. У ядра нет отметки «сегодня отбили» — есть только общий
+  // счётчик repelled. Поэтому ловим его приращение; своё прошлое значение
+  // держим здесь же, чтобы не заводить поле в ядре ради одной связи.
+  const rep0 = sim.sys._repelledSeen ?? sim.repelled ?? 0;
+  if ((sim.repelled ?? 0) > rep0) out.push({ kind: 'triumph', scale: 0.45 });
+  sim.sys._repelledSeen = sim.repelled ?? 0;
+
+  // Предательство. Отдельного поля «нас предали» в ядре нет и заводить его
+  // ради одной связи не стоило: договор о мире ядро и так соблюдает — войну
+  // при действующем договоре объявить нельзя. Настоящее предательство здесь
+  // другое: войну объявляет тот, с кем мы были В ЛАДУ. Такие случаи помечает
+  // systemsFactions в момент объявления (см. sim.sys.betrayals).
+  const bt = sim.sys.betrayals;
+  if (Array.isArray(bt)) {
+    for (const b of bt) if (b && b.day === day) out.push({ kind: 'betrayal', fid: b.fid, scale: 1 });
+    // Список нужен ровно на одни сутки — дальше он живёт шрамом в летописи.
+    sim.sys.betrayals = bt.filter(b => b && day - b.day < 2);
+  }
+  return out;
+}
+
+function applyMemoryLinks(sim, incoming) {
+  if (!sim.linkMemory) sim.linkMemory = MEM.createMemory();
+  const L = MEM.memoryLinks(sim, incoming);
+  sim.linkMemory = L.flags.memory;
+  sim.sys.memLinks = L;                  // для HUD и для множителей расхода
+
+  const pst = sim.politics && sim.politics.state;
+  if (pst) {
+    pst.stability = Math.max(0, Math.min(100, pst.stability + L.mods.stability));
+    for (const [fid, d] of Object.entries(L.mods.estates)) {
+      if (!d || pst.factions[fid] == null) continue;
+      pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+    }
+  }
+
+  // Кому не верят. Отношения ведёт ядро — у него журнал и затухание.
+  for (const [fid, d] of Object.entries(L.mods.relations)) {
+    if (d && typeof sim.adjustRel === 'function') sim.adjustRel(fid, d, 'Старая обида');
+  }
+
+  for (const e of L.events) sim.addLog(e.text, e.type);
+  return L;
+}
+
+// Строки для панели «Летопись»: что помнит народ и во что это обходится.
+export function memoryPanel(sim) {
+  return MEM.memoryBreakdown(sim);
 }
 
 // Связь «соседи ↔ наша держава»: караваны, страх, беженцы, разрыв в науке.

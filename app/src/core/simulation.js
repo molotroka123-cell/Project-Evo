@@ -5,6 +5,7 @@ import * as D from './data.js';
 import { generateWorld, tileAt, isWater, stepToward, findNearestTile, hasNeighborTile, makeAnimal, aStar, findFactionSpawns } from './world.js';
 import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, NICKNAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
 import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
+import { memoryEatMult } from './systems/link_memory.js';
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
@@ -900,7 +901,9 @@ export class Simulation {
       this.addLog(`Наступила пора: ${SEASONS[this.seasonIdx]}.`);
     }
     // еда
-    const eat = pop * EAT_PER_DAY * (this.weather === 'snow' ? 1.25 : 1);
+    // Народ, переживший голод, ест скупее: память о беде — это не только
+    // слова в летописи, но и меньше зерна со склада каждый день.
+    const eat = pop * EAT_PER_DAY * (this.weather === 'snow' ? 1.25 : 1) * memoryEatMult(this);
     this.res.food -= eat;
     // содержание армии
     const upkeep = this.army.soldiers;

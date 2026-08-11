@@ -5787,12 +5787,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num8 = 1;
+    let num9 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num8++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num9++}`));
     }
     return out;
   }
@@ -13345,7 +13345,294 @@
     return many;
   }
 
+  // app/src/core/systems/link_memory.js
+  var YEAR2 = DAYS_PER_SEASON * 4;
+  var HALF_LIFE_YEARS = 6;
+  var FORGET_BELOW = 0.04;
+  var MERGE_DAYS = DAYS_PER_SEASON;
+  var MERGE_ADD = 0.18;
+  var MERGE_CAP = 2.2;
+  var KIND = {
+    famine: { ru: "Голод", weight: 0.55, cap: 1.6 },
+    frost: { ru: "Стужа", weight: 0.4, cap: 1.4 },
+    plague: { ru: "Мор", weight: 0.5, cap: 1.5 },
+    shame: { ru: "Позор", weight: 0.85, cap: 2 },
+    triumph: { ru: "Победа", weight: 0.6, cap: 1.8 },
+    betrayal: { ru: "Предательство", weight: 0.7, cap: 1.8 }
+  };
+  var FAMINE_EAT_CUT = 0.1;
+  var FAMINE_STAB = 0.22;
+  var FAMINE_HAPPY = 3.5;
+  var PLAGUE_CLERGY = 0.1;
+  var PLAGUE_CLERGY_CAP = 78;
+  var PLAGUE_HAPPY = 2;
+  var FROST_WOOD_CUT = 0.12;
+  var FROST_HAPPY = 2;
+  var SHAME_MIL_WAR = 0.14;
+  var SHAME_MIL_PEACE = 0.1;
+  var SHAME_STAB = 0.18;
+  var PRIDE_STAB = 0.2;
+  var PRIDE_HAPPY = 2.5;
+  var PRIDE_STAB_CEILING = 85;
+  var BETRAYAL_REL = 0.35;
+  var BETRAYAL_REL_FLOOR = -40;
+  var HEAL_BONUS = 0.6;
+  function createMemory() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного применения в одни сутки
+      scars: [],
+      // [{kind, day, w, fid?, note}] — w это накопленный вес
+      lastSaid: {}
+      // kind → день последнего рассказа, чтобы не бубнить
+    };
+  }
+  function restoreMemory(data) {
+    const m = createMemory();
+    if (!data || typeof data !== "object") return m;
+    m.day = num8(data.day, -1);
+    m.lastSaid = data.lastSaid && typeof data.lastSaid === "object" ? { ...data.lastSaid } : {};
+    if (Array.isArray(data.scars)) {
+      for (const s of data.scars) {
+        if (!s || !KIND[s.kind]) continue;
+        m.scars.push({
+          kind: s.kind,
+          day: num8(s.day, 0),
+          w: Math.max(0, num8(s.w, 0)),
+          fid: s.fid || null,
+          note: typeof s.note === "string" ? s.note : ""
+        });
+      }
+    }
+    return m;
+  }
+  function strengthOf(scar, day, healK = 1) {
+    const years = Math.max(0, (day - scar.day) / YEAR2) * healK;
+    return scar.w * Math.pow(0.5, years / HALF_LIFE_YEARS);
+  }
+  function forceOf(mem, kind, day, healK = 1) {
+    const cap = KIND[kind] ? KIND[kind].cap : 1;
+    let sum = 0;
+    for (const s of mem.scars) {
+      if (s.kind !== kind) continue;
+      sum += strengthOf(s, day, healK);
+    }
+    return Math.min(cap, sum);
+  }
+  function memoryState(sim2) {
+    const day = sim2 && typeof sim2.day === "number" ? sim2.day : 0;
+    const pol = sim2 && sim2.politics && sim2.politics.state || null;
+    const stability = pol ? clamp10(num8(pol.stability, 60), 0, 100) : 60;
+    const pop = aliveCount3(sim2);
+    const food = Math.max(0, num8(sim2 && sim2.res && sim2.res.food, 0));
+    const foodDays = pop > 0 ? food / (pop * 0.7) : Infinity;
+    const atWar2 = Array.isArray(sim2 && sim2.wars) ? sim2.wars.length > 0 : false;
+    return { day, stability, pop, foodDays, atWar: atWar2 };
+  }
+  function healRate(st) {
+    const fed = clamp10((st.foodDays - 6) / 8, 0, 1);
+    const calm = clamp10((st.stability - 45) / 40, 0, 1);
+    return 1 + HEAL_BONUS * Math.min(fed, calm);
+  }
+  function remember(mem, kind, day, opts = {}) {
+    if (!KIND[kind]) return mem;
+    const w = (opts.weight != null ? opts.weight : KIND[kind].weight) * (opts.scale != null ? opts.scale : 1);
+    if (!(w > 0)) return mem;
+    const recent = lastOf(mem, kind, opts.fid || null);
+    if (recent && day - recent.day < MERGE_DAYS) {
+      recent.w = Math.min(recent.w + w * MERGE_ADD, KIND[kind].weight * MERGE_CAP);
+      return mem;
+    }
+    mem.scars.push({ kind, day, w, fid: opts.fid || null, note: opts.note || "" });
+    return mem;
+  }
+  function lastOf(mem, kind, fid) {
+    let best = null;
+    for (const s of mem.scars) {
+      if (s.kind !== kind || (s.fid || null) !== fid) continue;
+      if (!best || s.day > best.day) best = s;
+    }
+    return best;
+  }
+  function memoryLinks(sim2, incoming = []) {
+    const st = memoryState(sim2);
+    const day = st.day;
+    const M = sim2 && sim2.linkMemory ? sim2.linkMemory : createMemory();
+    const out = {
+      mods: {
+        stability: 0,
+        happy: 0,
+        eatMult: 1,
+        woodBurnMult: 1,
+        estates: { nobles: 0, clergy: 0, merchants: 0, commons: 0, military: 0 },
+        relations: {}
+        // fid → сдвиг отношений за сутки
+      },
+      reasons: { stability: [], happy: [], estates: [], other: [] },
+      events: [],
+      flags: { memory: M, forces: {}, healRate: 1, forgotten: 0 }
+    };
+    const sameDay = M.day === day;
+    const N = { ...M, scars: M.scars.slice(), lastSaid: { ...M.lastSaid } };
+    if (!sameDay) {
+      N.day = day;
+      for (const ev of incoming) {
+        if (!ev || !KIND[ev.kind]) continue;
+        remember(N, ev.kind, day, ev);
+      }
+    }
+    const healK = healRate(st);
+    out.flags.healRate = round26(healK);
+    if (!sameDay) {
+      const before = N.scars.length;
+      N.scars = N.scars.filter((s) => strengthOf(s, day, healK) >= FORGET_BELOW);
+      out.flags.forgotten = before - N.scars.length;
+    }
+    const F = {
+      famine: forceOf(N, "famine", day, healK),
+      frost: forceOf(N, "frost", day, healK),
+      plague: forceOf(N, "plague", day, healK),
+      shame: forceOf(N, "shame", day, healK),
+      triumph: forceOf(N, "triumph", day, healK),
+      betrayal: forceOf(N, "betrayal", day, healK)
+    };
+    for (const k of Object.keys(F)) out.flags.forces[k] = round26(F[k]);
+    const addS = (v, ru) => {
+      if (Math.abs(v) > 5e-4) {
+        out.mods.stability += v;
+        out.reasons.stability.push({ ru, v: round26(v) });
+      }
+    };
+    const addH = (v, ru) => {
+      if (Math.abs(v) > 5e-3) {
+        out.mods.happy += v;
+        out.reasons.happy.push({ ru, v: round26(v) });
+      }
+    };
+    const addE = (fid, v, ru) => {
+      if (Math.abs(v) > 5e-4) {
+        out.mods.estates[fid] += v;
+        out.reasons.estates.push({ fid, ru, v: round26(v) });
+      }
+    };
+    const pol = sim2 && sim2.politics && sim2.politics.state;
+    if (F.famine > 0.01) {
+      out.mods.eatMult = 1 - FAMINE_EAT_CUT * Math.min(1, F.famine);
+      addS(-FAMINE_STAB * F.famine, "Народ помнит голод и не верит казне");
+      addH(-FAMINE_HAPPY * F.famine, "Память о голоде");
+      out.reasons.other.push({
+        ru: `Бережливость: расход еды ниже на ${Math.round((1 - out.mods.eatMult) * 100)}%`,
+        v: round26(out.mods.eatMult)
+      });
+    }
+    if (F.frost > 0.01) {
+      out.mods.woodBurnMult = 1 - FROST_WOOD_CUT * Math.min(1, F.frost);
+      addH(-FROST_HAPPY * F.frost, "Память о студёных зимах");
+      out.reasons.other.push({
+        ru: `Дрова запасают впрок: горит меньше на ${Math.round((1 - out.mods.woodBurnMult) * 100)}%`,
+        v: round26(out.mods.woodBurnMult)
+      });
+    }
+    if (F.plague > 0.01) {
+      const cur = pol && typeof pol.factions.clergy === "number" ? pol.factions.clergy : 50;
+      if (cur < PLAGUE_CLERGY_CAP) addE("clergy", PLAGUE_CLERGY * F.plague, "Народ помнит мор и держится храма");
+      addH(-PLAGUE_HAPPY * F.plague, "Память о море");
+    }
+    if (F.shame > 0.01) {
+      addS(-SHAME_STAB * F.shame, "Позор потерянной провинции ещё не смыт");
+      if (st.atWar) addE("military", SHAME_MIL_WAR * F.shame, "Военные видят случай смыть позор");
+      else addE("military", -SHAME_MIL_PEACE * F.shame, "Военные не простили потери провинции");
+    }
+    if (F.triumph > 0.01 && st.stability < PRIDE_STAB_CEILING) {
+      addS(PRIDE_STAB * F.triumph, "Народ помнит победы");
+      addH(PRIDE_HAPPY * F.triumph, "Гордость за прошлые победы");
+      addE("military", 0.06 * F.triumph, "Военные помнят славу");
+    }
+    if (F.betrayal > 0.01) {
+      const byFid = /* @__PURE__ */ new Map();
+      for (const s of N.scars) {
+        if (s.kind !== "betrayal" || !s.fid) continue;
+        byFid.set(s.fid, (byFid.get(s.fid) || 0) + strengthOf(s, day, healK));
+      }
+      for (const [fid, f] of byFid) {
+        const rel = relOf(sim2, fid);
+        if (rel <= BETRAYAL_REL_FLOOR) continue;
+        out.mods.relations[fid] = -BETRAYAL_REL * Math.min(1.5, f);
+      }
+    }
+    if (!sameDay) {
+      for (const kind of Object.keys(KIND)) {
+        const f = F[kind];
+        if (f < 0.5) continue;
+        if (day - (N.lastSaid[kind] || -9999) < YEAR2 * 2) continue;
+        N.lastSaid[kind] = day;
+        out.events.push({ text: sayFor(kind, f), type: kind === "triumph" ? "good" : "warn" });
+      }
+    }
+    out.flags.memory = N;
+    return out;
+  }
+  function sayFor(kind, f) {
+    const strong = f >= 1;
+    switch (kind) {
+      case "famine":
+        return strong ? "📜 Старики всё ещё считают мешки: голод не забыт. Едят скупо, казне не верят." : "📜 О голодных годах ещё помнят — зерно берегут.";
+      case "frost":
+        return "📜 Память о студёных зимах: дрова запасают вдвое против нужды.";
+      case "plague":
+        return "📜 После мора храмы полны: народ ищет заступничества.";
+      case "shame":
+        return strong ? "📜 Потерю провинции не простили. Военные ждут похода, чтобы смыть позор." : "📜 О потерянной земле ещё говорят вполголоса.";
+      case "triumph":
+        return "📜 Победы отцов помнят: держава держится этой памятью.";
+      case "betrayal":
+        return "📜 Удар в спину не забыт — этому соседу веры нет.";
+      default:
+        return "📜 Летопись помнит.";
+    }
+  }
+  function memoryEatMult(sim2) {
+    const L = sim2 && sim2.sys && sim2.sys.memLinks;
+    return L ? L.mods.eatMult : 1;
+  }
+  function memoryWoodMult(sim2) {
+    const L = sim2 && sim2.sys && sim2.sys.memLinks;
+    return L ? L.mods.woodBurnMult : 1;
+  }
+  function memoryHappyMod(sim2) {
+    const L = sim2 && sim2.sys && sim2.sys.memLinks;
+    return L ? L.mods.happy : 0;
+  }
+  function relOf(sim2, fid) {
+    if (!sim2 || !sim2.relations) return 0;
+    const r = sim2.relations[fid];
+    return typeof r === "number" ? r : r && typeof r.v === "number" ? r.v : 0;
+  }
+  function aliveCount3(sim2) {
+    const list = sim2 && sim2.villagers;
+    if (!Array.isArray(list)) return 0;
+    let n = 0;
+    for (const v of list) if (!v || v.hp === void 0 || v.hp > 0) n++;
+    return n;
+  }
+  function clamp10(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function num8(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round26(v) {
+    return Math.round(v * 100) / 100;
+  }
+
   // app/src/core/systems/integrate.js
+  var BETRAYAL_REL_WAS = 20;
+  function relValue(sim2, fid) {
+    if (!sim2 || !sim2.relations) return 0;
+    const r = sim2.relations[fid];
+    return typeof r === "number" ? r : r && typeof r.v === "number" ? r.v : 0;
+  }
   function installSystems(sim2) {
     sim2.sys = {
       winter: createWinter(),
@@ -13363,6 +13650,7 @@
     sim2.sys.borderStats = null;
     sim2.linkIndustry = createIndustryMemory();
     sim2.linkTerritory = createTerritoryMemory();
+    sim2.linkMemory = createMemory();
   }
   function systemsNewDay(sim2) {
     if (!sim2.sys) return;
@@ -13374,11 +13662,12 @@
     politicsNewDay(sim2);
     empireNewDay(sim2);
     applyEconomyLinks(sim2);
-    applySurvivalLinks(sim2);
+    const survOut = applySurvivalLinks(sim2);
     applyIndustryLinks(sim2);
     applyNeighborLinks(sim2);
     applyTerritoryLinks(sim2);
-    applyWarLinks(sim2);
+    const warOut = applyWarLinks(sim2);
+    applyMemoryLinks(sim2, harvestScars(sim2, { war: warOut, surv: survOut }));
   }
   function systemsFactions(sim2) {
     if (!sim2.sys || !sim2.sys.civ) return false;
@@ -13399,7 +13688,13 @@
     for (const text of out.logs) sim2.addLog(text);
     for (const w of out.warOnPlayer) {
       const f = sim2.faction(w.fid || w);
-      if (f && !sim2.atPeaceTreaty(f.id)) sim2.declareWarOnPlayer(f);
+      if (!f || sim2.atPeaceTreaty(f.id)) continue;
+      const relBefore = relValue(sim2, f.id);
+      sim2.declareWarOnPlayer(f);
+      if (relBefore >= BETRAYAL_REL_WAS) {
+        if (!Array.isArray(sim2.sys.betrayals)) sim2.sys.betrayals = [];
+        sim2.sys.betrayals.push({ fid: f.id, day: sim2.day, rel: relBefore });
+      }
     }
     return true;
   }
@@ -13408,7 +13703,8 @@
     const ctx = winterCtx(sim2);
     const rep = tickWinter(s.winter, ctx, sim2.rng);
     s.winterReport = rep;
-    if (rep.burned > 0) sim2.res.wood = Math.max(0, sim2.res.wood - rep.burned);
+    const burned = rep.burned * memoryWoodMult(sim2);
+    if (burned > 0) sim2.res.wood = Math.max(0, sim2.res.wood - burned);
     if (rep.deathCount > 0) {
       sim2.addChronicle(`Морозы унесли ${rep.deathCount} ${plural(rep.deathCount, "жизнь", "жизни", "жизней")}.`);
     }
@@ -13454,7 +13750,7 @@
   }
   function systemsHappyMod(sim2) {
     if (!sim2.sys) return 0;
-    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + industryLinkHappyMod(sim2) + (sim2.sys.nbrLinks ? sim2.sys.nbrLinks.mods.happy : 0) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0);
+    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + industryLinkHappyMod(sim2) + (sim2.sys.nbrLinks ? sim2.sys.nbrLinks.mods.happy : 0) + memoryHappyMod(sim2) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0);
   }
   function systemsPopCapMod(sim2) {
     return sim2.linkTerritory ? territoryPopCap(sim2) : 0;
@@ -13479,7 +13775,8 @@
       link: sim2.linkSurvival || null,
       linkInd: sim2.linkIndustry || null,
       terr: sim2.linkTerritory || null,
-      linkWar: sim2.linkWar || null
+      linkWar: sim2.linkWar || null,
+      mem: sim2.linkMemory || null
     };
   }
   function systemsRestore(sim2, data) {
@@ -13496,6 +13793,7 @@
     sim2.linkIndustry = restoreIndustryMemory(data.linkInd);
     sim2.linkTerritory = restoreTerritoryMemory(data.terr);
     sim2.linkWar = restoreWarMemory(data.linkWar);
+    sim2.linkMemory = restoreMemory(data.mem);
   }
   function applyEconomyLinks(sim2) {
     if (!sim2.politics || !sim2.industry) return null;
@@ -13513,6 +13811,57 @@
     }
     for (const e of L.events) sim2.addLog(e.text, e.type === "good" ? "info" : e.type);
     if (L.flags.defaultToday) sim2.addChronicle(`Казна объявила дефолт (день ${sim2.day}).`);
+    return L;
+  }
+  function harvestScars(sim2, ctx) {
+    const out = [];
+    const day = sim2.day;
+    if (sim2.starvedDay === day) out.push({ kind: "famine", scale: 0.55 });
+    const surv = ctx && ctx.surv;
+    if (surv && surv.flags) {
+      if (surv.flags.riot) out.push({ kind: "famine", scale: 1 });
+      if (surv.flags.revolt) out.push({ kind: "famine", scale: 1.6 });
+    }
+    const rep = sim2.sys && sim2.sys.winterReport;
+    if (rep) {
+      if (rep.deathCount > 0) out.push({ kind: "frost", scale: Math.min(2, rep.deathCount * 0.6) });
+      const pop = Math.max(1, sim2.villagers.length);
+      const sick = sim2.sys.winter && sim2.sys.winter.sick || 0;
+      if (sick / pop >= 0.25) out.push({ kind: "plague", scale: Math.min(2, sick / pop / 0.25) });
+    }
+    const emp = sim2.empire && sim2.empire.state;
+    if (emp && Array.isArray(emp.lost)) {
+      for (const l of emp.lost) if (l && l.day === day) out.push({ kind: "shame", scale: 1 });
+    }
+    const war = ctx && ctx.war;
+    if (war && war.flags && war.flags.captures) out.push({ kind: "triumph", scale: 1 });
+    const rep0 = sim2.sys._repelledSeen ?? sim2.repelled ?? 0;
+    if ((sim2.repelled ?? 0) > rep0) out.push({ kind: "triumph", scale: 0.45 });
+    sim2.sys._repelledSeen = sim2.repelled ?? 0;
+    const bt = sim2.sys.betrayals;
+    if (Array.isArray(bt)) {
+      for (const b of bt) if (b && b.day === day) out.push({ kind: "betrayal", fid: b.fid, scale: 1 });
+      sim2.sys.betrayals = bt.filter((b) => b && day - b.day < 2);
+    }
+    return out;
+  }
+  function applyMemoryLinks(sim2, incoming) {
+    if (!sim2.linkMemory) sim2.linkMemory = createMemory();
+    const L = memoryLinks(sim2, incoming);
+    sim2.linkMemory = L.flags.memory;
+    sim2.sys.memLinks = L;
+    const pst = sim2.politics && sim2.politics.state;
+    if (pst) {
+      pst.stability = Math.max(0, Math.min(100, pst.stability + L.mods.stability));
+      for (const [fid, d] of Object.entries(L.mods.estates)) {
+        if (!d || pst.factions[fid] == null) continue;
+        pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+      }
+    }
+    for (const [fid, d] of Object.entries(L.mods.relations)) {
+      if (d && typeof sim2.adjustRel === "function") sim2.adjustRel(fid, d, "Старая обида");
+    }
+    for (const e of L.events) sim2.addLog(e.text, e.type);
     return L;
   }
   function applyNeighborLinks(sim2) {
@@ -14598,7 +14947,7 @@
         this.seasonIdx = (this.seasonIdx + 1) % 4;
         this.addLog(`Наступила пора: ${SEASONS[this.seasonIdx]}.`);
       }
-      const eat = pop * EAT_PER_DAY * (this.weather === "snow" ? 1.25 : 1);
+      const eat = pop * EAT_PER_DAY * (this.weather === "snow" ? 1.25 : 1) * memoryEatMult(this);
       this.res.food -= eat;
       const upkeep = this.army.soldiers;
       this.res.food -= upkeep * ARMY_UPKEEP.food;
@@ -21558,7 +21907,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp10 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp11 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -22395,7 +22744,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp10(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp11(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -22432,7 +22781,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp10(x >> 2, 0, this.pw - 1), gy = clamp10(y >> 2, 0, this.ph - 1);
+      const gx = clamp11(x >> 2, 0, this.pw - 1), gy = clamp11(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -22451,7 +22800,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp10(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp11(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -22682,7 +23031,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp10(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp11(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -22837,7 +23186,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp11 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp12 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -23174,7 +23523,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp11(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp12(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -23191,10 +23540,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp11(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp11(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp12(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp12(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp11(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp12(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -23206,8 +23555,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp11(
-        nLand ? lapsArr[clamp11(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp12(
+        nLand ? lapsArr[clamp12(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -23218,8 +23567,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp11(i0, 0, w - 1);
-        this.txB[sx] = clamp11(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp12(i0, 0, w - 1);
+        this.txB[sx] = clamp12(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -23227,8 +23576,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp11(i0 - 1, 0, w - 1), b = row + clamp11(i0, 0, w - 1);
-          const c = row + clamp11(i0 + 1, 0, w - 1), d = row + clamp11(i0 + 2, 0, w - 1);
+          const a = row + clamp12(i0 - 1, 0, w - 1), b = row + clamp12(i0, 0, w - 1);
+          const c = row + clamp12(i0 + 1, 0, w - 1), d = row + clamp12(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -23269,12 +23618,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp11(j0 - 1, 0, h - 1) * SW, rb = clamp11(j0, 0, h - 1) * SW;
-        const rc = clamp11(j0 + 1, 0, h - 1) * SW, rd = clamp11(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp12(j0 - 1, 0, h - 1) * SW, rb = clamp12(j0, 0, h - 1) * SW;
+        const rc = clamp12(j0 + 1, 0, h - 1) * SW, rd = clamp12(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp11(jy, 0, h - 1) * w, jB = clamp11(jy + 1, 0, h - 1) * w;
+        const jA = clamp12(jy, 0, h - 1) * w, jB = clamp12(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -23324,9 +23673,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp11(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp11(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp12(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp12(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp11(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp12(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -23439,7 +23788,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp11(j0, 0, h - 1) * w, jB = clamp11(j0 + 1, 0, h - 1) * w;
+      const jA = clamp12(j0, 0, h - 1) * w, jB = clamp12(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -23482,7 +23831,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp11(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp12(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -23504,7 +23853,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp11(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp12(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -23580,28 +23929,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp11(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp11(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp11(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp11(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp12(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp12(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp12(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp12(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp11((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp11(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp12((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp12(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp11(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp12(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp11(k, 0, 1);
+        ctx.globalAlpha = clamp12(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -23723,7 +24072,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp12 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -23899,8 +24248,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp12(L.shadowLen, 0.45, 2.2);
-      const u = clamp12((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp13(L.shadowLen, 0.45, 2.2);
+      const u = clamp13((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -23960,7 +24309,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp12(0.78 / hf, 0.32, 0.6);
+      const band = clamp13(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul = this._checkMul(ctx);
@@ -24066,8 +24415,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp12(Math.round(dw), 12, 256);
-      const h = clamp12(Math.round(dh), 12, 384);
+      const w = clamp13(Math.round(dw), 12, 256);
+      const h = clamp13(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -24077,8 +24426,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp12(Math.round(dw), 12, 256);
-      const h = clamp12(Math.round(dh), 12, 384);
+      const w = clamp13(Math.round(dw), 12, 256);
+      const h = clamp13(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -24239,7 +24588,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -24755,7 +25104,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp13(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp14(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -24857,7 +25206,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp13(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp14(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -25230,7 +25579,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp13(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp14(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -25314,7 +25663,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp13(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp14(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
