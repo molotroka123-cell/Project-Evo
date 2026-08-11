@@ -1733,14 +1733,14 @@
     for (const s of src) {
       const acc = _acc(state, s.code);
       const r = Math.min(MAX_RADIUS, Math.sqrt(Math.max(0, s.w / INFLUENCE_CUTOFF - 1)));
-      const r2 = r * r;
+      const r23 = r * r;
       const x0 = Math.max(0, Math.ceil(s.x - r)), x1 = Math.min(W - 1, Math.floor(s.x + r));
       const y0 = Math.max(0, Math.ceil(s.y - r)), y1 = Math.min(H - 1, Math.floor(s.y + r));
       for (let y = y0; y <= y1; y++) {
         const dy = y - s.y, dy2 = dy * dy, row = y * W;
         for (let x = x0; x <= x1; x++) {
           const dx = x - s.x, d2 = dx * dx + dy2;
-          if (d2 > r2) continue;
+          if (d2 > r23) continue;
           acc[row + x] += s.w / (1 + d2);
         }
       }
@@ -4956,10 +4956,10 @@
     if (b === 1) return one;
     return many;
   }
-  function _sign(v, fmt2 = _g) {
+  function _sign(v, fmt3 = _g) {
     if (!isFinite(v)) return "—";
     const r = Math.abs(v) < 5e-3 ? 0 : v;
-    return (r > 0 ? "+" : r < 0 ? "−" : "") + fmt2(Math.abs(r));
+    return (r > 0 ? "+" : r < 0 ? "−" : "") + fmt3(Math.abs(r));
   }
   function _tiles(n) {
     const k = Math.round(n);
@@ -5787,12 +5787,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num7 = 1;
+    let num8 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num7++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num8++}`));
     }
     return out;
   }
@@ -10782,10 +10782,10 @@
     if (a >= 1) return (Math.round(v * 10) / 10).toFixed(1);
     return (Math.round(v * 100) / 100).toFixed(2);
   }
-  function _sign3(v, fmt2 = _g2) {
+  function _sign3(v, fmt3 = _g2) {
     if (!isFinite(v)) return "—";
     const r = Math.abs(v) < 5e-3 ? 0 : v;
-    return (r > 0 ? "+" : r < 0 ? "−" : "") + fmt2(Math.abs(r));
+    return (r > 0 ? "+" : r < 0 ? "−" : "") + fmt3(Math.abs(r));
   }
   function _growth(city, cap) {
     const why = [];
@@ -12325,6 +12325,1026 @@
     return many;
   }
 
+  // app/src/core/systems/link_industry.js
+  var ESTATES3 = Object.keys(SOCIAL_FACTIONS);
+  var TECH_UNLOCK_ERA = (() => {
+    const map = {};
+    for (const t of TECHS) map[t.id] = (TECH_ERA_IDX[t.id] ?? 0) + (t.era ? 1 : 0);
+    return map;
+  })();
+  function unlockEra(reqId) {
+    return reqId ? TECH_UNLOCK_ERA[reqId] ?? 0 : 0;
+  }
+  var IDLE_EPS = 0.95;
+  var IDLE_HAPPY_MAX = -6;
+  var IDLE_GOLD_SHARE = 0.5;
+  var CRAFT_GOLD_IDS = ["market", "guild_hall", "shipyard", "airport"];
+  var IDLE_ESTATE = { commons: 0.3, merchants: 0.2, nobles: 0, clergy: 0, military: 0 };
+  var ESTATE_DROP_CAP2 = 1.5;
+  var IDLE_STAB_FROM = 0.35;
+  var IDLE_STAB_DAYS = 5;
+  var IDLE_STAB = 0.5;
+  var STAB_FLOOR2 = -1.2;
+  var IDLE_LOUD = 0.5;
+  var WEAR_LOAD = 0.6;
+  var WEAR_ARREARS = 0.8;
+  var WEAR_AGE = 0.5;
+  var WEAR_ERA_GAP = 2;
+  var WEAR_ARREARS_FULL = 5;
+  var WEAR_DAY_CAP = 1.5;
+  var WEAR_MAX2 = 100;
+  var REPAIR_BASE = 0.65;
+  var REPAIR_SCHOOL = 0.5;
+  var REPAIR_BROKE = 0.4;
+  var WEAR_SCHOOL = 0.35;
+  var WEAR_AFTER = 45;
+  var ACCIDENT_CD = 20;
+  var ACC_STOCK_LOSS = -0.25;
+  var ACC_HAPPY = -5;
+  var ACC_STAB = -3;
+  var ACC_HP = 25;
+  var ACC_GOLD_BASE = 8;
+  var ACC_ESTATE = { commons: 1.2, merchants: 0.6, nobles: 0, clergy: 0, military: 0 };
+  var WEAR_WARN = [60, 85];
+  var KNOW_FROM = 0.5;
+  var KNOW_MAX = 1;
+  var KNOW_BASE_SHARE = 0.4;
+  var SPEED_MAX = 0.25;
+  var SKILL_WEIGHT = 0.75;
+  var SCHOOL_EACH = 0.06;
+  var SCHOOL_CAP = 0.25;
+  var ADULT_AGE2 = 1600;
+  function createIndustryMemory() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного применения в одни сутки
+      wear: 0,
+      // износ хозяйства 0..WEAR_MAX
+      accCd: 0,
+      // откат после аварии
+      accidents: 0,
+      idleDays: 0,
+      // сколько суток подряд простаивает больше IDLE_STAB_FROM
+      idleLoud: false,
+      // о простое уже сказано вслух
+      wearWarn: 0,
+      // сколько порогов износа уже названо
+      knowLoud: false,
+      // о том, что излишки идут в опыты, уже сказано
+      lastEra: -1,
+      // эпоха прошлых суток — для события об открытии звена
+      kinds: {},
+      // chainId -> вид узкого места в прошлые сутки
+      happyMod: 0
+      // последняя поправка к счастью — её читает happiness()
+    };
+  }
+  function restoreIndustryMemory(data) {
+    const m = createIndustryMemory();
+    if (!data || typeof data !== "object") return m;
+    m.day = num7(data.day, -1);
+    m.wear = clamp8(num7(data.wear, 0), 0, WEAR_MAX2);
+    m.accCd = Math.max(0, num7(data.accCd, 0));
+    m.accidents = Math.max(0, num7(data.accidents, 0));
+    m.idleDays = Math.max(0, num7(data.idleDays, 0));
+    m.idleLoud = !!data.idleLoud;
+    m.wearWarn = clamp8(num7(data.wearWarn, 0), 0, WEAR_WARN.length);
+    m.knowLoud = !!data.knowLoud;
+    m.lastEra = num7(data.lastEra, -1);
+    m.kinds = data.kinds && typeof data.kinds === "object" ? { ...data.kinds } : {};
+    m.happyMod = num7(data.happyMod, 0);
+    return m;
+  }
+  function industryLinkHappyMod(sim2) {
+    const mem = sim2 && sim2.linkIndustry;
+    return mem ? Math.round(num7(mem.happyMod, 0)) : 0;
+  }
+  function industryState(sim2) {
+    const S = sim2 && sim2.industry || null;
+    const era = Math.max(0, Math.round(num7(sim2 && sim2.eraIndex, 0)));
+    const day = Math.round(num7(sim2 && sim2.day, 0));
+    const base = {
+      ok: false,
+      day,
+      era,
+      chains: [],
+      locked: [],
+      idleShare: 0,
+      loadShare: 0,
+      idleBuildings: 0,
+      craftGold: 0,
+      surplus: null,
+      surplusShare: 0,
+      arrears: 0,
+      oldShare: 0,
+      schooling: 0,
+      craftShare: 0,
+      gained: {}
+    };
+    if (!S || !S.prod) return base;
+    const buildings = (sim2.buildings || []).filter((b) => b && b.done && !b.destroyed);
+    const rows = chainStatus(S.prod, {
+      buildings: sim2.buildings || [],
+      seasonIdx: sim2.seasonIdx,
+      mult: chainMultOf(sim2)
+    });
+    const runs = S.prodReport && S.prodReport.runs || null;
+    let idleW = 0, totalW = 0, idleB = 0;
+    const chains = [];
+    for (const row of rows) {
+      let cIdleW = 0, cTotalW = 0;
+      for (const st of row.stages) {
+        if (st.winter || !st.buildings || !(st.capacity > 0.01)) continue;
+        const done = runs ? runs[st.id] || 0 : st.capacity;
+        const idle = clamp8(1 - done / st.capacity, 0, 1);
+        cIdleW += idle * st.buildings;
+        cTotalW += st.buildings;
+        if (idle > 1 - IDLE_EPS) idleB += st.buildings * idle;
+      }
+      idleW += cIdleW;
+      totalW += cTotalW;
+      const trouble = chainTrouble(S, row) || null;
+      const stageDef = trouble ? trouble.stage : null;
+      chains.push({
+        id: row.id,
+        ru: row.ru,
+        final: row.final,
+        output: r2(row.output),
+        bottleneck: row.bottleneck,
+        stageRu: stageDef ? stageDef.ru : null,
+        kind: trouble ? trouble.kind : null,
+        lack: trouble && trouble.lack ? trouble.lack : null,
+        idle: r2(cTotalW > 0 ? cIdleW / cTotalW : 0),
+        buildings: cTotalW,
+        text: trouble ? punct(trouble.text) : null,
+        suggest: trouble ? suggestBuilding(row.id, stageDef ? stageDef.id : null) : null
+      });
+    }
+    const idleShare = totalW > 0 ? clamp8(idleW / totalW, 0, 1) : 0;
+    return {
+      ok: true,
+      day,
+      era,
+      chains,
+      locked: lockedStages(sim2, era),
+      idleShare: r2(idleShare),
+      loadShare: totalW > 0 ? r2(1 - idleShare) : 0,
+      idleBuildings: r2(idleB),
+      craftGold: r2(craftGoldOf(sim2, buildings)),
+      ...surplusOf(S.prod),
+      arrears: Math.max(0, num7(S.eco && S.eco.arrears, 0)),
+      oldShare: r2(oldShareOf(buildings, era)),
+      ...schoolingOf(sim2, buildings),
+      gained: S.prodReport && S.prodReport.gained || {},
+      gold: Math.max(0, num7(sim2.res && sim2.res.gold, 0))
+    };
+  }
+  function industryLinks(sim2) {
+    const s = industryState(sim2);
+    const prev = readMemory3(sim2);
+    const mem = { ...prev, kinds: { ...prev.kinds } };
+    const events = [];
+    const mods = {
+      happy: 0,
+      stability: 0,
+      stabilityShock: 0,
+      gold: 0,
+      knowledge: 0,
+      estates: zeroEstates(),
+      output: {},
+      stockPct: 0,
+      speed: 0
+    };
+    const flags = {
+      ok: s.ok,
+      idleShare: s.idleShare,
+      wear: r2(prev.wear),
+      bottlenecks: [],
+      unlocked: [],
+      accident: null,
+      reasons: [],
+      memory: mem
+    };
+    if (!s.ok) {
+      mem.happyMod = 0;
+      return { mods, events, flags };
+    }
+    const sameDay = prev.day === s.day;
+    mods.happy = r2(IDLE_HAPPY_MAX * s.idleShare);
+    mods.gold = r2(-s.craftGold * IDLE_GOLD_SHARE * s.idleShare);
+    for (const fid of ESTATES3) {
+      const d = -(IDLE_ESTATE[fid] || 0) * s.idleShare;
+      if (d) mods.estates[fid] = r2(d);
+    }
+    if (!sameDay) {
+      mem.day = s.day;
+      mem.accCd = Math.max(0, mem.accCd - 1);
+      mem.idleDays = s.idleShare >= IDLE_STAB_FROM ? mem.idleDays + 1 : 0;
+      mem.wear = clamp8(mem.wear + wearGain(s) - repairRate(s), 0, WEAR_MAX2);
+    }
+    const parts = stabParts3(s, mem);
+    mods.stability = r2(parts.total);
+    mods.knowledge = r2(knowledgeGain(s));
+    const speed = SPEED_MAX * s.schooling;
+    mods.speed = r2(speed);
+    if (speed > 0) {
+      for (const chain of CHAINS) {
+        const got = num7(s.gained[chain.final], 0);
+        if (got > 0) mods.output[chain.final] = r2(got * speed);
+      }
+    }
+    for (const c of s.chains) {
+      if (!c.text) continue;
+      const row = {
+        id: c.id,
+        ru: c.ru,
+        kind: c.kind,
+        idle: c.idle,
+        text: c.text + idleTail(c) + suggestTail(c)
+      };
+      flags.bottlenecks.push(row);
+      if (!sameDay && c.buildings > 0 && mem.kinds[c.id] !== c.kind) {
+        events.push({ text: `Цепочка «${c.ru}». ${row.text}`, type: c.kind === "capacity" ? "info" : "bad" });
+      }
+      if (!sameDay) mem.kinds[c.id] = c.kind;
+    }
+    if (!sameDay) {
+      if (s.idleShare >= IDLE_LOUD && !mem.idleLoud) {
+        mem.idleLoud = true;
+        events.push({
+          text: `Хозяйство встало: без работы ${Math.round(s.idleShare * 100)}% мастерских${mods.gold < 0 ? `, ремесло недодаёт ${fmt2(-mods.gold)}🪙 в день` : ""}.`,
+          type: "bad"
+        });
+      } else if (s.idleShare < IDLE_STAB_FROM && mem.idleLoud) {
+        mem.idleLoud = false;
+        events.push({ text: "Цепочки снова загружены: мастерские заработали.", type: "good" });
+      }
+    }
+    flags.wear = r2(mem.wear);
+    if (!sameDay) {
+      while (mem.wearWarn < WEAR_WARN.length && mem.wear >= WEAR_WARN[mem.wearWarn]) {
+        mem.wearWarn++;
+        events.push({ text: `${wearText2(mem.wear, s)} ${wearCure(s)}`, type: "warn" });
+      }
+      while (mem.wearWarn > 0 && mem.wear < WEAR_WARN[mem.wearWarn - 1] - 10) mem.wearWarn--;
+      if (mem.wear >= WEAR_MAX2 && mem.accCd <= 0) {
+        const victim = worstBuilding(sim2, s.era);
+        const cost = r2(ACC_GOLD_BASE * (1 + s.era * 0.5));
+        flags.accident = {
+          building: victim ? victim.id : null,
+          name: victim ? victim.name : "Мастерская",
+          hpLoss: ACC_HP,
+          stockPct: ACC_STOCK_LOSS,
+          gold: -cost
+        };
+        mods.stockPct = ACC_STOCK_LOSS;
+        mods.gold = r2(mods.gold - cost);
+        mods.stabilityShock = ACC_STAB;
+        mods.happy = r2(mods.happy + ACC_HAPPY);
+        for (const fid of ESTATES3) {
+          if (ACC_ESTATE[fid]) mods.estates[fid] = r2((mods.estates[fid] || 0) - ACC_ESTATE[fid]);
+        }
+        mem.wear = WEAR_AFTER;
+        mem.accCd = ACCIDENT_CD;
+        mem.accidents++;
+        mem.wearWarn = 0;
+        events.push({
+          text: `⚙️ АВАРИЯ: ${flags.accident.name} встала — изношенное хозяйство не выдержало. Четверть сырья пропала, разбор завала ${fmt2(cost)}🪙.`,
+          type: "bad"
+        });
+        flags.wear = r2(mem.wear);
+      }
+    }
+    for (const fid of ESTATES3) {
+      if (mods.estates[fid]) mods.estates[fid] = r2(Math.max(-ESTATE_DROP_CAP2, mods.estates[fid]));
+    }
+    flags.locked = s.locked;
+    if (!sameDay) {
+      if (prev.lastEra >= 0 && s.era > prev.lastEra) {
+        const opened = openedAt(sim2, prev.lastEra, s.era);
+        flags.unlocked = opened;
+        if (opened.length) {
+          events.push({
+            text: `${ERAS[s.era] ? ERAS[s.era].ru : "Новая эпоха"} открывает звенья цепочек: ` + opened.map((o) => `«${o.stageRu}» (${o.name})`).join(", ") + ".",
+            type: "good"
+          });
+        }
+      }
+      mem.lastEra = s.era;
+    }
+    if (!sameDay) {
+      if (mods.knowledge > 0.05 && !mem.knowLoud) {
+        mem.knowLoud = true;
+        events.push({
+          text: `Излишки (${s.surplus.icon} ${s.surplus.ru}) идут в опыты: мастера дают +${fmt2(mods.knowledge)}📜 в день.`,
+          type: "good"
+        });
+      } else if (mods.knowledge <= 0 && mem.knowLoud) {
+        mem.knowLoud = false;
+      }
+    }
+    mem.happyMod = mods.happy;
+    flags.reasons = reasonRows(s, mods, parts);
+    return { mods, events, flags };
+  }
+  function chainMultOf(sim2) {
+    const g2 = (k) => typeof sim2.globalMult === "function" ? sim2.globalMult(k) : 1;
+    const w = WEATHER[sim2 && sim2.weather] || { gather: 1, farm: 1 };
+    const techs = sim2 && sim2.techs || null;
+    return {
+      gather: g2("gather") * w.gather,
+      farm: w.farm * (techs && techs.has && techs.has("feudalism") ? 1.2 : 1),
+      industry: g2("industry")
+    };
+  }
+  function stabParts3(s, mem) {
+    const out = { idle: 0, total: 0 };
+    if (s.idleShare >= IDLE_STAB_FROM) {
+      const ripe = Math.min(1, mem.idleDays / IDLE_STAB_DAYS);
+      out.idle = -IDLE_STAB * s.idleShare * ripe;
+    }
+    out.total = Math.max(STAB_FLOOR2, out.idle);
+    return out;
+  }
+  function wearGain(s) {
+    const arrearsPress = Math.min(1, s.arrears / WEAR_ARREARS_FULL);
+    const raw = WEAR_LOAD * s.loadShare + WEAR_ARREARS * arrearsPress + WEAR_AGE * s.oldShare;
+    return Math.min(WEAR_DAY_CAP, raw) * (1 - WEAR_SCHOOL * s.schooling);
+  }
+  function repairRate(s) {
+    if (s.arrears > 0) return 0;
+    const money = s.gold > 0 ? 1 : REPAIR_BROKE;
+    return REPAIR_BASE * (1 + REPAIR_SCHOOL * s.schooling) * money;
+  }
+  function knowledgeGain(s) {
+    if (!(s.surplusShare > 0)) return 0;
+    const hands = KNOW_BASE_SHARE + (1 - KNOW_BASE_SHARE) * s.craftShare;
+    return Math.min(KNOW_MAX, KNOW_MAX * s.surplusShare * hands);
+  }
+  function surplusOf(prod) {
+    let best = null, share = 0;
+    for (const it of INTERMEDIATES) {
+      const have = Math.max(0, num7(prod.stock ? prod.stock[it.id] : 0, 0));
+      const fill = it.cap > 0 ? have / it.cap : 0;
+      const over = fill > KNOW_FROM ? (fill - KNOW_FROM) / (1 - KNOW_FROM) : 0;
+      if (over > share) {
+        share = over;
+        best = { id: it.id, ru: it.ru, icon: it.icon, have: r2(have), fill: r2(fill) };
+      }
+    }
+    return { surplus: best, surplusShare: r2(clamp8(share, 0, 1)) };
+  }
+  function craftGoldOf(sim2, buildings) {
+    let sum = 0;
+    for (const b of buildings) {
+      if (!CRAFT_GOLD_IDS.includes(b.id)) continue;
+      const def = BUILDINGS[b.id];
+      if (!def || !def.out || !def.out.gold) continue;
+      const n = b.workers ? b.workers.length : def.workers || 0;
+      sum += def.out.gold * n;
+    }
+    return sum * (typeof sim2.globalMult === "function" ? sim2.globalMult("gold") : 1);
+  }
+  function oldShareOf(buildings, era) {
+    let old = 0, n = 0;
+    for (const b of buildings) {
+      const def = BUILDINGS[b.id] || EXTRA_BUILDINGS[b.id];
+      if (!def || !(def.out || def.chain)) continue;
+      n++;
+      if (era - num7(b.eraBuilt, era) >= WEAR_ERA_GAP) old++;
+    }
+    return n > 0 ? old / n : 0;
+  }
+  function schoolingOf(sim2, buildings) {
+    const vs = (sim2.villagers || []).filter((v) => v && (v.hp == null || v.hp > 0));
+    const adults = vs.filter((v) => v.age == null || v.age >= ADULT_AGE2);
+    const ranked = adults.filter((v) => (v.rank || 0) >= 1).length;
+    const craftShare = adults.length ? ranked / adults.length : 0;
+    const seen = /* @__PURE__ */ new Set();
+    let school = 0;
+    for (const b of buildings) {
+      const def = BUILDINGS[b.id];
+      if (!def || !def.out || !def.out.knowledge || seen.has(b.id)) continue;
+      seen.add(b.id);
+      school += SCHOOL_EACH;
+    }
+    return {
+      craftShare: r2(craftShare),
+      schooling: r2(clamp8(SKILL_WEIGHT * craftShare + Math.min(SCHOOL_CAP, school), 0, 1))
+    };
+  }
+  function lockedStages(sim2, era) {
+    const techs = sim2 && sim2.techs || null;
+    const known = (id) => !!(techs && techs.has && techs.has(id));
+    const out = [];
+    for (const chain of CHAINS) {
+      for (const st of chain.stages) {
+        let open = false, bestEra = 99, bestName = null;
+        for (const p of st.by) {
+          const def = BUILDINGS[p.b] || EXTRA_BUILDINGS[p.b];
+          if (!def) continue;
+          if (!def.req || known(def.req)) {
+            open = true;
+            break;
+          }
+          const e = unlockEra(def.req);
+          if (e < bestEra) {
+            bestEra = e;
+            bestName = def.name;
+          }
+        }
+        if (open || bestName == null) continue;
+        out.push({
+          chainId: chain.id,
+          chainRu: chain.ru,
+          stageId: st.id,
+          stageRu: st.ru,
+          name: bestName,
+          era: bestEra,
+          eraRu: ERAS[bestEra] ? ERAS[bestEra].ru : "—",
+          text: bestEra > era ? `«${chain.ru}» → ${st.ru}: звено откроется в ${ERAS[bestEra] ? ERAS[bestEra].ru : "будущем"} (${bestName}).` : `«${chain.ru}» → ${st.ru}: нужна технология для постройки «${bestName}».`
+        });
+      }
+    }
+    return out;
+  }
+  function openedAt(sim2, from, to) {
+    const out = [];
+    for (const chain of CHAINS) {
+      for (const st of chain.stages) {
+        for (const p of st.by) {
+          const def = BUILDINGS[p.b] || EXTRA_BUILDINGS[p.b];
+          if (!def || !def.req) continue;
+          const e = unlockEra(def.req);
+          if (e > from && e <= to) {
+            out.push({ chainId: chain.id, chainRu: chain.ru, stageId: st.id, stageRu: st.ru, name: def.name, era: e });
+          }
+        }
+      }
+    }
+    return out;
+  }
+  function worstBuilding(sim2, era) {
+    const ids = /* @__PURE__ */ new Set();
+    for (const chain of CHAINS) for (const st of chain.stages) for (const p of st.by) ids.add(p.b);
+    let best = null, bestAge = -1;
+    const list = (sim2.buildings || []).filter((b) => b && b.done && !b.destroyed);
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!ids.has(b.id)) continue;
+      const age = era - num7(b.eraBuilt, era);
+      if (age > bestAge) {
+        bestAge = age;
+        const def = BUILDINGS[b.id] || EXTRA_BUILDINGS[b.id];
+        best = { id: b.id, name: def ? def.name : b.id, index: i, ref: b };
+      }
+    }
+    return best;
+  }
+  function punct(s) {
+    return /[.!?…]$/.test(s) ? s : s + ".";
+  }
+  function idleTail(c) {
+    if (!(c.idle > 1 - IDLE_EPS)) return "";
+    return ` Простаивает ${Math.round(c.idle * 100)}% зданий цепочки.`;
+  }
+  function suggestTail(c) {
+    if (!c.suggest || c.kind === "capacity" || c.kind === "winter") return "";
+    return ` Строить: ${c.suggest.name}.`;
+  }
+  function wearText2(wear, s) {
+    if (wear >= WEAR_WARN[1]) return `Хозяйство изношено (${Math.round(wear)}%): авария близка.`;
+    if (wear >= WEAR_WARN[0]) return `Станки и печи потрёпаны (${Math.round(wear)}%).`;
+    return `Износ хозяйства ${Math.round(wear)}%.`;
+  }
+  function wearCure(s) {
+    if (s.arrears > 0) return "Чинить не на что: жалованье задержано.";
+    if (s.oldShare > 0.5) return "Половина построек отстала от эпохи — их пора обновить.";
+    if (s.loadShare > 0.8) return "Мастерские не остывают — нужны запасные.";
+    return "Ремонт идёт.";
+  }
+  function reasonRows(s, mods, parts) {
+    const rows = [];
+    if (mods.happy) rows.push({
+      id: "idle",
+      ru: "Простой мастерских",
+      v: r2(mods.happy),
+      text: `Без работы ${Math.round(s.idleShare * 100)}% зданий цепочек: ${fmt2(mods.happy)} к счастью.`
+    });
+    if (mods.gold) rows.push({
+      id: "gold",
+      ru: "Недобор ремесла",
+      v: r2(mods.gold),
+      text: `Ремеслу нечего продавать: ${fmt2(mods.gold)}🪙 в день.`
+    });
+    if (parts.idle) rows.push({
+      id: "stab",
+      ru: "Стабильность",
+      v: r2(parts.idle),
+      text: `Хозяйство стоит не первый день: ${fmt2(parts.idle)} стабильности в день.`
+    });
+    if (mods.knowledge) rows.push({
+      id: "know",
+      ru: "Опыты ремесла",
+      v: r2(mods.knowledge),
+      text: `Излишки сырья идут в опыты: +${fmt2(mods.knowledge)}📜 в день.`
+    });
+    if (mods.speed) rows.push({
+      id: "speed",
+      ru: "Обученные руки",
+      v: r2(mods.speed),
+      text: `Мастера и школы ускоряют цепочки на ${Math.round(mods.speed * 100)}%.`
+    });
+    return rows;
+  }
+  function readMemory3(sim2) {
+    const m = sim2 && sim2.linkIndustry;
+    return m && typeof m === "object" ? restoreIndustryMemory(m) : createIndustryMemory();
+  }
+  function zeroEstates() {
+    return Object.fromEntries(ESTATES3.map((f) => [f, 0]));
+  }
+  function num7(v, d) {
+    return typeof v === "number" && isFinite(v) ? v : d;
+  }
+  function clamp8(v, a, b) {
+    return v < a ? a : v > b ? b : v;
+  }
+  function r2(v) {
+    return Math.round(v * 100) / 100;
+  }
+  function fmt2(v) {
+    const r = Math.round(v * 10) / 10;
+    return (r > 0 ? "+" : "") + r;
+  }
+
+  // app/src/core/systems/link_neighbors.js
+  var NEAR = 10;
+  var REACH = 30;
+  var RISK_AI_WAR = 0.3;
+  var RISK_OUR_WAR = 0.55;
+  var RISK_CAP = 0.75;
+  var PRICE_PER_RISK = 0.35;
+  var DISCOUNT_EACH = 0.07;
+  var DISCOUNT_CAP = 0.25;
+  var TREATY_GOLD = 0.5;
+  var TREATY_ERA = 0.12;
+  var TREATY_REL_FLOOR = 0.5;
+  var FEAR_CAP = 1;
+  var BASE_DEFENCE = 6;
+  var MILITIA_PER_POP = 0.3;
+  var WALL_WEIGHT = 0.5;
+  var GUARD_GOLD = 1.2;
+  var GUARD_PER_SOLDIER = 0.05;
+  var GUARD_CAP = 3;
+  var MIL_SPAN = 25;
+  var MERCH_SPAN = 15;
+  var COMMONS_SPAN = 8;
+  var TRADE_JOY = 10;
+  var APPROACH2 = 0.04;
+  var STEP_CAP = 0.1;
+  var STAB_FEAR = -0.25;
+  var STAB_RISK = -0.15;
+  var STAB_CALM = 0.1;
+  var STAB_FLOOR3 = -0.5;
+  var HAPPY_PER_RISK = 6;
+  var HAPPY_PER_FEAR = 3;
+  var HAPPY_FLOOR2 = -7;
+  var REFUGEE_PERIOD = 8;
+  var REFUGEE_MAX = 3;
+  var EAT3 = 0.7;
+  var REFUGEE_FOOD_DAYS = 8;
+  var REFUGEE_KNOW = 0.8;
+  var COPY_GAP = 4;
+  var COPY_PERIOD = 15;
+  var COPY_REL = 20;
+  var COPY_DIST = 12;
+  var LAG_GAP = 8;
+  var LAG_REL = -0.05;
+  var KNOW_FLOW = 0.12;
+  var KNOW_CAP = 0.8;
+  var GOLD_TEMPT = 300;
+  var WEALTH_TEMPT = 1500;
+  var TEMPT_ERA_GOLD = 1.5;
+  var TEMPT_ERA_WEALTH = 1.6;
+  var GREED_MIN = 0.25;
+  var GREED_REL = -0.12;
+  var RESPECT_REL = 0.08;
+  var RESPECT_AGGRESSION = 6;
+  var REL_STEP_CAP = 0.2;
+  var ARMY_FLOOR = 5;
+  var ESTATES4 = Object.keys(SOCIAL_FACTIONS);
+  var clamp9 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var r33 = (v) => Math.round(v * 1e3) / 1e3;
+  var r22 = (v) => Math.round(v * 100) / 100;
+  var zeroApproval3 = () => Object.fromEntries(ESTATES4.map((f) => [f, 0]));
+  function homePoints(sim2) {
+    const pts = [];
+    const w = sim2 && sim2.world;
+    if (w && typeof w.startX === "number" && typeof w.startY === "number") {
+      pts.push({ x: w.startX, y: w.startY });
+    }
+    const cities = sim2 && sim2.empire && sim2.empire.state && sim2.empire.state.cities;
+    if (Array.isArray(cities)) {
+      for (const c of cities) if (c && typeof c.x === "number") pts.push({ x: c.x, y: c.y });
+    }
+    return pts;
+  }
+  function nearestDist2(home, settlements) {
+    let best = Infinity;
+    for (const h of home) {
+      for (const s of settlements || []) {
+        if (!s || typeof s.x !== "number") continue;
+        const d = Math.hypot(s.x - h.x, s.y - h.y);
+        if (d < best) best = d;
+      }
+    }
+    return best;
+  }
+  function proximity(dist) {
+    if (!isFinite(dist)) return 0;
+    if (dist <= NEAR) return 1;
+    return clamp9((REACH - dist) / (REACH - NEAR), 0, 1);
+  }
+  function ourStrength(sim2) {
+    const army = typeof sim2.armyPower === "function" ? sim2.armyPower() || 0 : (sim2.army && sim2.army.soldiers || 0) * 2;
+    const walls = typeof sim2.defensePower === "function" ? sim2.defensePower() || 0 : 0;
+    const pop = sim2.villagers && sim2.villagers.length || 0;
+    return army + walls * WALL_WEIGHT + pop * MILITIA_PER_POP + BASE_DEFENCE;
+  }
+  function traitsOf2(f) {
+    const tr = f && f.def && f.def.traits || {};
+    return {
+      aggression: tr.aggression ?? 5,
+      expansion: tr.expansion ?? 5,
+      trade: tr.trade ?? 5,
+      science: tr.science ?? 5,
+      faith: tr.faith ?? 5,
+      defense: tr.defense ?? 5
+    };
+  }
+  function aiFoes(sim2, fid) {
+    const D = sim2 && sim2.diplo;
+    if (!D || !Array.isArray(D.wars)) return [];
+    try {
+      return warEnemies(D, fid).filter((x) => x !== "player");
+    } catch {
+      return [];
+    }
+  }
+  function readNeighbors(sim2) {
+    const home = homePoints(sim2);
+    const out = [];
+    for (const f of sim2 && sim2.factions || []) {
+      if (!f || f.alive === false) continue;
+      const dist = nearestDist2(home, f.settlements);
+      const atWarWithUs = (sim2.wars || []).some((w) => w && w.fid === f.id);
+      const foes = aiFoes(sim2, f.id);
+      out.push({
+        fid: f.id,
+        name: f.def && f.def.name || f.id,
+        dist: isFinite(dist) ? r22(dist) : Infinity,
+        w: proximity(dist),
+        rel: sim2.relations && typeof sim2.relations[f.id] === "number" ? sim2.relations[f.id] : 0,
+        treaty: (sim2.treaties || []).some((t) => t && t.b === f.id && (t.type || "trade") === "trade"),
+        atWarWithUs,
+        foes,
+        wars: foes.length + (atWarWithUs ? 1 : 0),
+        army: f.armyPts || 0,
+        pop: f.P || 0,
+        techs: f.techCount || 0,
+        era: f.era || 0,
+        tr: traitsOf2(f)
+      });
+    }
+    return out;
+  }
+  function caravanIncome(sim2) {
+    const hasTrade = !!(sim2.techs && typeof sim2.techs.has === "function" && sim2.techs.has("trade"));
+    if (!hasTrade) return 0;
+    const markets = typeof sim2.countBuilding === "function" ? sim2.countBuilding("market") || 0 : 0;
+    if (markets <= 0) return 0;
+    const mult = typeof sim2.globalMult === "function" ? sim2.globalMult("gold") || 1 : 1;
+    return 0.6 * markets * mult / 15;
+  }
+  function routeDanger(nb) {
+    const rows = [];
+    let sum = 0;
+    for (const n of nb) {
+      if (n.w <= 0 || n.wars <= 0) continue;
+      const own = (n.atWarWithUs ? RISK_OUR_WAR : 0) + n.foes.length * RISK_AI_WAR;
+      const v = own * n.w;
+      if (v <= 1e-3) continue;
+      sum += v;
+      rows.push({
+        ru: n.atWarWithUs ? `${n.name} воюет с нами (${n.dist} кл.)` : `${n.name} воюет (${n.foes.length}) в ${n.dist} кл. от нас`,
+        v: r33(v)
+      });
+    }
+    rows.sort((a, b) => b.v - a.v);
+    return { risk: r33(clamp9(sum, 0, RISK_CAP)), raw: r33(sum), rows };
+  }
+  function fearFrom(n, mine) {
+    if (n.army < ARMY_FLOOR || n.w <= 0) return 0;
+    const gap = clamp9(n.army / Math.max(1, mine) - 1, 0, 2) / 2;
+    const host = clamp9((30 - n.rel) / 80, 0, 1.5);
+    const open = n.atWarWithUs ? 1.5 : 1;
+    return gap * host * n.w * open;
+  }
+  function temptation(sim2) {
+    const era = sim2.eraIndex || 0;
+    const gold = sim2.res && sim2.res.gold || 0;
+    const wealth = typeof sim2.wealth === "function" ? sim2.wealth() || 0 : 0;
+    const g2 = clamp9(gold / (GOLD_TEMPT * Math.pow(TEMPT_ERA_GOLD, era)), 0, 1);
+    const w = clamp9(wealth / (WEALTH_TEMPT * Math.pow(TEMPT_ERA_WEALTH, era)), 0, 1);
+    return { gold, wealth, value: r33(0.5 * g2 + 0.5 * w) };
+  }
+  function greedOf(n, mine, tempt) {
+    if (n.army < ARMY_FLOOR || n.w <= 0) return 0;
+    const weakness = clamp9(1 - mine / Math.max(1, n.army), 0, 1);
+    if (weakness <= 0) return 0;
+    const prize = 0.35 + 0.65 * tempt;
+    return r33(weakness * prize * (n.tr.aggression / 10) * n.w);
+  }
+  function neighborLinks(sim2) {
+    const out = {
+      mods: {
+        gold: 0,
+        knowledge: 0,
+        happy: 0,
+        stability: 0,
+        approval: zeroApproval3(),
+        priceMult: 1,
+        caravanMult: 1,
+        marketDiscount: 0,
+        routeRisk: 0
+      },
+      reasons: { gold: [], risk: [], threat: [], approval: {} },
+      events: [],
+      flags: {
+        quiet: true,
+        refugees: 0,
+        refugeeFrom: null,
+        refugeeBlocked: null,
+        copycats: [],
+        relations: [],
+        eyeingUs: [],
+        threats: [],
+        fear: 0,
+        routeRisk: 0,
+        tradeGold: 0,
+        guardGold: 0,
+        caravanLost: 0,
+        garrisonUnpaid: false,
+        calmBorders: false,
+        partners: 0
+      }
+    };
+    if (!sim2 || !Array.isArray(sim2.factions) || sim2.factions.length === 0) return out;
+    const day = Math.max(0, Math.round(sim2.day || 0));
+    const nb = readNeighbors(sim2);
+    if (nb.length === 0) return out;
+    const mine = ourStrength(sim2);
+    const purse = sim2.res && typeof sim2.res.gold === "number" ? sim2.res.gold : 0;
+    const danger = routeDanger(nb);
+    const risk = danger.risk;
+    out.mods.routeRisk = risk;
+    out.flags.routeRisk = risk;
+    out.reasons.risk = danger.rows;
+    out.mods.caravanMult = r33(1 - risk);
+    out.mods.priceMult = r33(1 + PRICE_PER_RISK * risk);
+    const caravan = caravanIncome(sim2);
+    const caravanLost = r33(caravan * risk);
+    out.flags.caravanLost = caravanLost;
+    if (caravanLost > 1e-3) {
+      out.reasons.gold.push({ ru: `Караваны не доходят (опасность ${Math.round(risk * 100)}%)`, v: r33(-caravanLost) });
+    }
+    let tradeGold = 0, discount = 0, partners = 0;
+    for (const n of nb) {
+      if (!n.treaty) continue;
+      partners++;
+      const ownRisk = clamp9(((n.atWarWithUs ? RISK_OUR_WAR : 0) + n.foes.length * RISK_AI_WAR) * n.w, 0, RISK_CAP);
+      const relK = clamp9(TREATY_REL_FLOOR + n.rel / 200, TREATY_REL_FLOOR, 1);
+      const g2 = TREATY_GOLD * (0.4 + n.tr.trade / 10) * (1 + TREATY_ERA * n.era) * (1 - ownRisk) * relK;
+      tradeGold += g2;
+      discount += DISCOUNT_EACH * (0.4 + n.tr.trade / 10) * (1 - ownRisk);
+      if (g2 > 5e-3) {
+        out.reasons.gold.push({
+          ru: `Договор с ${n.name}${ownRisk > 0.01 ? ` (маршрут опасен на ${Math.round(ownRisk * 100)}%)` : ""}`,
+          v: r33(g2)
+        });
+      }
+    }
+    tradeGold = r33(tradeGold);
+    out.flags.tradeGold = tradeGold;
+    out.flags.partners = partners;
+    out.mods.marketDiscount = r33(clamp9(discount, 0, DISCOUNT_CAP));
+    let fear = 0;
+    for (const n of nb) {
+      const fv = fearFrom(n, mine);
+      if (fv <= 5e-3) continue;
+      fear += fv;
+      out.reasons.threat.push({
+        ru: `${n.name}: войско ${Math.round(n.army)} против нашего ${Math.round(mine)}, ${n.dist} кл.`,
+        v: r33(fv)
+      });
+    }
+    fear = r33(clamp9(fear, 0, FEAR_CAP));
+    out.flags.fear = fear;
+    out.reasons.threat.sort((a, b) => b.v - a.v);
+    const soldiers = sim2.army && sim2.army.soldiers || 0;
+    const guardWant = r33(clamp9(GUARD_GOLD * fear * (1 + soldiers * GUARD_PER_SOLDIER), 0, GUARD_CAP));
+    const guardPaid = r33(clamp9(Math.min(guardWant, purse + tradeGold - caravanLost), 0, guardWant));
+    const unpaid = guardWant - guardPaid > 0.01;
+    out.flags.guardGold = guardPaid;
+    out.flags.garrisonUnpaid = unpaid;
+    if (guardPaid > 1e-3) {
+      out.reasons.gold.push({ ru: `Охрана границ (страх ${Math.round(fear * 100)}%)`, v: r33(-guardPaid) });
+    }
+    let flow = 0, source = null, srcW = -1;
+    for (const n of nb) {
+      if (n.atWarWithUs || n.foes.length === 0 || n.w <= 0) continue;
+      const v = n.w * Math.min(1, n.pop / 60);
+      flow += v;
+      if (v > srcW) {
+        srcW = v;
+        source = n;
+      }
+    }
+    if (day > 0 && day % REFUGEE_PERIOD === 0 && flow > 0 && source) {
+      const pop = sim2.villagers && sim2.villagers.length || 0;
+      const cap = typeof sim2.housingCap === "function" ? sim2.housingCap() || 0 : pop;
+      const room = Math.max(0, cap - pop);
+      const food = sim2.res && sim2.res.food || 0;
+      const fed = food >= (pop + 1) * EAT3 * REFUGEE_FOOD_DAYS;
+      const want = Math.min(REFUGEE_MAX, Math.floor(flow * REFUGEE_MAX));
+      let count = Math.min(want, room);
+      if (!fed) {
+        if (want > 0) out.flags.refugeeBlocked = "нечем кормить";
+        count = 0;
+      } else if (want > 0 && room <= 0) {
+        out.flags.refugeeBlocked = "негде селить";
+      }
+      if (count > 0) {
+        out.flags.refugees = count;
+        out.flags.refugeeFrom = { fid: source.fid, name: source.name };
+        const ourEra = sim2.eraIndex || 0;
+        if (source.era > ourEra) out.mods.knowledge += REFUGEE_KNOW * count;
+        out.events.push({
+          text: `Беженцы из земель ${source.name}: ${count} ${plural5(count, "человек", "человека", "человек")} просятся за наши стены — там война.` + (source.era > ourEra ? " Среди них мастера: они принесли чужие ремёсла." : ""),
+          type: "info"
+        });
+      } else if (out.flags.refugeeBlocked) {
+        out.events.push({
+          text: `Беженцы от войны у ${source.name} повернули прочь: ${out.flags.refugeeBlocked}.`,
+          type: "warn"
+        });
+      }
+    }
+    const ourTechs = sim2.techs && typeof sim2.techs.size === "number" ? sim2.techs.size : Array.isArray(sim2.techs) ? sim2.techs.length : 0;
+    let knowFlow = 0;
+    for (const n of nb) {
+      const gap = ourTechs - n.techs;
+      const contact = n.treaty || n.rel >= COPY_REL || n.dist <= COPY_DIST;
+      if (gap >= COPY_GAP && contact && !n.atWarWithUs) {
+        if (day > 0 && day % COPY_PERIOD === n.fid.length * 3 % COPY_PERIOD) {
+          const why = n.treaty ? "договор открыл им наши мастерские" : n.rel >= COPY_REL ? "добрые отношения развязали языки" : "наша межа рядом, и всё видно";
+          out.flags.copycats.push({ fid: n.fid, name: n.name, gap, why });
+          out.events.push({
+            text: `${n.name} перенимает наше ремесло: мы впереди на ${gap} ${plural5(gap, "технологию", "технологии", "технологий")}, а ${why}.`,
+            type: "warn"
+          });
+        }
+      } else if (gap >= LAG_GAP && !contact) {
+        pushRel(out, n, LAG_REL, `отстали на ${gap} технологий и завидуют`);
+      }
+      if (gap <= -3 && n.treaty && !n.atWarWithUs) {
+        knowFlow += KNOW_FLOW * Math.min(4, -gap) * (n.tr.science / 5);
+      }
+    }
+    knowFlow = r33(clamp9(knowFlow, 0, KNOW_CAP));
+    out.mods.knowledge = r33(out.mods.knowledge + knowFlow);
+    const tempt = temptation(sim2);
+    let worst = null;
+    for (const n of nb) {
+      const g2 = greedOf(n, mine, tempt.value);
+      if (g2 >= GREED_MIN) {
+        pushRel(out, n, GREED_REL * g2, "видят добычу");
+        const card = {
+          fid: n.fid,
+          name: n.name,
+          greed: r33(g2),
+          army: Math.round(n.army),
+          ours: Math.round(mine),
+          dist: n.dist,
+          rel: Math.round(n.rel),
+          text: `${n.name}: их войско ${Math.round(n.army)} против нашего ${Math.round(mine)}, в казне ${Math.round(tempt.gold)}🪙, до их земель ${n.dist} кл. Отношения тают на ${Math.abs(r33(GREED_REL * g2))} в день.`
+        };
+        out.flags.eyeingUs.push(card);
+        if (!worst || g2 > worst.greed) worst = card;
+      } else if (n.tr.aggression >= RESPECT_AGGRESSION && mine >= n.army && n.army >= ARMY_FLOOR && n.w > 0) {
+        pushRel(out, n, RESPECT_REL * n.w, "уважают силу");
+      }
+    }
+    out.flags.threats = out.reasons.threat.slice(0, 3);
+    const pol = sim2.politics && sim2.politics.state;
+    if (pol && pol.factions) {
+      const cur = (fid) => typeof pol.factions[fid] === "number" ? pol.factions[fid] : 50;
+      const step = (fid, target, dir) => {
+        const d = clamp9((target - cur(fid)) * APPROACH2, -STEP_CAP, STEP_CAP);
+        if (dir > 0 && d < 0) return 0;
+        if (dir < 0 && d > 0) return 0;
+        return r33(d);
+      };
+      if (fear > 0.01) {
+        const target = unpaid ? 50 - MIL_SPAN * fear : 50 + MIL_SPAN * fear;
+        out.mods.approval.military = step("military", target, unpaid ? -1 : 1);
+        out.reasons.approval.military = [{
+          ru: unpaid ? `Гарнизоны на границе без жалования (страх ${Math.round(fear * 100)}%)` : `Казна платит за охрану границ (страх ${Math.round(fear * 100)}%)`,
+          v: out.mods.approval.military
+        }];
+      }
+      const merchTarget = 50 - MERCH_SPAN * (risk * 0.6 + fear * 0.4) + TRADE_JOY * Math.min(1, partners / 2);
+      if (Math.abs(merchTarget - 50) > 0.5) {
+        out.mods.approval.merchants = step("merchants", merchTarget, 0);
+        const rows = [];
+        if (risk > 0.01) rows.push({ ru: `Дороги опасны (${Math.round(risk * 100)}%)`, v: r33(-MERCH_SPAN * risk * 0.6) });
+        if (fear > 0.01) rows.push({ ru: "Граница на замке, торг стеснён", v: r33(-MERCH_SPAN * fear * 0.4) });
+        if (partners > 0) rows.push({ ru: `Торговых договоров: ${partners}`, v: r33(TRADE_JOY * Math.min(1, partners / 2)) });
+        out.reasons.approval.merchants = rows;
+      }
+      if (risk > 0.01) {
+        out.mods.approval.commons = step("commons", 50 - COMMONS_SPAN * risk, -1);
+        out.reasons.approval.commons = [{
+          ru: `Привозное дороже на ${Math.round((out.mods.priceMult - 1) * 100)}%`,
+          v: out.mods.approval.commons
+        }];
+      }
+    }
+    let stab = STAB_FEAR * fear + STAB_RISK * risk;
+    const calm = fear <= 0.01 && risk <= 0.01 && partners > 0 && nb.every((n) => n.army < ARMY_FLOOR || n.w <= 0 || mine >= n.army);
+    if (calm) {
+      stab += STAB_CALM;
+      out.flags.calmBorders = true;
+    }
+    out.mods.stability = r33(clamp9(stab, STAB_FLOOR3, STAB_CALM));
+    out.mods.happy = Math.round(clamp9(-HAPPY_PER_RISK * risk - HAPPY_PER_FEAR * fear, HAPPY_FLOOR2, 0));
+    out.mods.gold = r33(tradeGold - caravanLost - guardPaid);
+    if (day > 0 && day % 10 === 0) {
+      if (risk > 0.15 && danger.rows.length) {
+        out.events.push({
+          text: `Дороги небезопасны: ${danger.rows[0].ru}. До нас доходит ${Math.round((1 - risk) * 100)}% караванов, привозное дороже на ${Math.round((out.mods.priceMult - 1) * 100)}%.`,
+          type: "warn"
+        });
+      }
+      if (worst) {
+        out.events.push({ text: `${worst.text} Войско или подарок остудят их.`, type: "bad" });
+      }
+      if (fear > 0.2 && out.reasons.threat.length) {
+        out.events.push({
+          text: unpaid ? `Гарнизоны на границе не получили жалования: казна пуста, а ${out.reasons.threat[0].ru}. ${SOCIAL_FACTIONS.military.ru} ропщут.` : `Казна тратит ${guardPaid}🪙 в день на охрану границ: ${out.reasons.threat[0].ru}. ${SOCIAL_FACTIONS.military.ru} довольны вниманием.`,
+          type: unpaid ? "bad" : "info"
+        });
+      }
+      if (tradeGold > 0.05) {
+        out.events.push({
+          text: `Договоры дают ${tradeGold}🪙 в день${out.mods.marketDiscount > 5e-3 ? ` и скидку ${Math.round(out.mods.marketDiscount * 100)}% на привозное` : ""}. Партнёров: ${partners}.`,
+          type: "good"
+        });
+      }
+      if (knowFlow > 0.05) {
+        out.events.push({ text: `Партнёры делятся учёностью: +${knowFlow}📜 в день. Мы отстаём — и учимся.`, type: "good" });
+      }
+      if (calm) {
+        out.events.push({ text: "Границы спокойны, купцы ходят без охраны — держава крепнет.", type: "good" });
+      }
+    }
+    out.flags.quiet = Math.abs(out.mods.gold) < 1e-3 && out.mods.knowledge === 0 && out.mods.happy === 0 && out.mods.stability === 0 && ESTATES4.every((f) => out.mods.approval[f] === 0) && out.flags.relations.length === 0 && out.flags.copycats.length === 0 && out.flags.refugees === 0 && out.events.length === 0;
+    return out;
+  }
+  function pushRel(out, n, dRel, why) {
+    const rec = out.flags.relations.find((x) => x.fid === n.fid);
+    if (rec) {
+      rec.dRel = r33(clamp9(rec.dRel + dRel, -REL_STEP_CAP, REL_STEP_CAP));
+      rec.why = `${rec.why}, ${why}`;
+      return;
+    }
+    out.flags.relations.push({
+      fid: n.fid,
+      name: n.name,
+      dRel: r33(clamp9(dRel, -REL_STEP_CAP, REL_STEP_CAP)),
+      why
+    });
+  }
+  function plural5(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+
   // app/src/core/systems/integrate.js
   function installSystems(sim2) {
     sim2.sys = {
@@ -12341,6 +13361,7 @@
     sim2.linkSurvival = createSurvivalMemory();
     sim2.sys.winterReport = null;
     sim2.sys.borderStats = null;
+    sim2.linkIndustry = createIndustryMemory();
     sim2.linkTerritory = createTerritoryMemory();
   }
   function systemsNewDay(sim2) {
@@ -12354,6 +13375,8 @@
     empireNewDay(sim2);
     applyEconomyLinks(sim2);
     applySurvivalLinks(sim2);
+    applyIndustryLinks(sim2);
+    applyNeighborLinks(sim2);
     applyTerritoryLinks(sim2);
     applyWarLinks(sim2);
   }
@@ -12431,7 +13454,7 @@
   }
   function systemsHappyMod(sim2) {
     if (!sim2.sys) return 0;
-    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0);
+    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + industryLinkHappyMod(sim2) + (sim2.sys.nbrLinks ? sim2.sys.nbrLinks.mods.happy : 0) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0);
   }
   function systemsPopCapMod(sim2) {
     return sim2.linkTerritory ? territoryPopCap(sim2) : 0;
@@ -12454,6 +13477,7 @@
       pol: politicsSerialize(sim2),
       emp: empireSerialize(sim2),
       link: sim2.linkSurvival || null,
+      linkInd: sim2.linkIndustry || null,
       terr: sim2.linkTerritory || null,
       linkWar: sim2.linkWar || null
     };
@@ -12469,6 +13493,7 @@
     if (data.pol) politicsRestore(sim2, data.pol);
     if (data.emp) empireRestore(sim2, data.emp);
     sim2.linkSurvival = restoreSurvivalMemory(data.link);
+    sim2.linkIndustry = restoreIndustryMemory(data.linkInd);
     sim2.linkTerritory = restoreTerritoryMemory(data.terr);
     sim2.linkWar = restoreWarMemory(data.linkWar);
   }
@@ -12488,6 +13513,67 @@
     }
     for (const e of L.events) sim2.addLog(e.text, e.type === "good" ? "info" : e.type);
     if (L.flags.defaultToday) sim2.addChronicle(`Казна объявила дефолт (день ${sim2.day}).`);
+    return L;
+  }
+  function applyNeighborLinks(sim2) {
+    const L = neighborLinks(sim2);
+    sim2.sys.nbrLinks = L;
+    if (L.mods.gold !== 0) sim2.res.gold = Math.max(0, sim2.res.gold + L.mods.gold);
+    if (L.mods.knowledge > 0) sim2.res.knowledge += L.mods.knowledge;
+    const pst = sim2.politics && sim2.politics.state;
+    if (pst) {
+      for (const [fid, d] of Object.entries(L.mods.approval)) {
+        if (!d || pst.factions[fid] == null) continue;
+        pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+      }
+      pst.stability = Math.max(0, Math.min(100, pst.stability + L.mods.stability));
+    }
+    if (L.flags.refugees > 0) {
+      const c = sim2.buildings.find((b) => b.id === "campfire" && !b.destroyed) || { x: sim2.world.startX, y: sim2.world.startY };
+      for (let i = 0; i < L.flags.refugees; i++) sim2.spawnVillager(c.x, c.y);
+      sim2.addChronicle(`Беженцы от чужой войны осели у нас: ${L.flags.refugees} чел. (день ${sim2.day}).`);
+    }
+    for (const c of L.flags.copycats) {
+      const f = sim2.faction(c.fid);
+      if (f) f.techCount = (f.techCount || 0) + 1;
+    }
+    for (const r of L.flags.relations) {
+      if (typeof sim2.adjustRel === "function") sim2.adjustRel(r.fid, r.dRel, r.why);
+    }
+    for (const e of L.events) sim2.addLog(e.text, e.type === "good" ? "good" : e.type);
+    return L;
+  }
+  function applyIndustryLinks(sim2) {
+    if (!sim2.industry) return null;
+    const L = industryLinks(sim2);
+    sim2.linkIndustry = L.flags.memory;
+    sim2.sys.indLinks = L;
+    for (const [r, add] of Object.entries(L.mods.output)) {
+      if (!(r in sim2.res) || !add) continue;
+      sim2.res[r] = Math.min(sim2.resCap[r] ?? 99999, sim2.res[r] + add);
+    }
+    if (L.mods.gold) sim2.res.gold = Math.max(0, sim2.res.gold + L.mods.gold);
+    if (L.mods.knowledge) sim2.res.knowledge += L.mods.knowledge;
+    const pst = sim2.politics && sim2.politics.state;
+    if (pst) {
+      pst.stability = Math.max(0, Math.min(100, pst.stability + L.mods.stability + L.mods.stabilityShock));
+      for (const [fid, d] of Object.entries(L.mods.estates)) {
+        if (!d || pst.factions[fid] == null) continue;
+        pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+      }
+    }
+    if (L.mods.stockPct && sim2.industry.prod) {
+      const stock = sim2.industry.prod.stock;
+      for (const k of Object.keys(stock)) stock[k] = Math.max(0, stock[k] * (1 + L.mods.stockPct));
+    }
+    const acc = L.flags.accident;
+    if (acc && acc.building) {
+      const b = sim2.buildings.find((x) => x.id === acc.building && x.done && !x.destroyed);
+      if (b) b.hp = Math.max(1, (b.hp || 100) - acc.hpLoss);
+      sim2.addChronicle(`Авария на производстве: ${acc.name} (день ${sim2.day}).`);
+      sim2.sfx?.("alarm");
+    }
+    for (const e of L.events) sim2.addLog(e.text, e.type === "warn" ? "bad" : e.type);
     return L;
   }
   function applyWarLinks(sim2) {
@@ -14900,15 +15986,15 @@ ${s}`, "console");
             c.fillStyle = np.base;
             for (let i = 0; i < 3; i++) {
               const r1 = hash2(x * 71 + s * 13 + i, y * 37 + i * 7);
-              const r2 = hash2(x * 17 + i, y * 91 + s * 5 + i);
+              const r23 = hash2(x * 17 + i, y * 91 + s * 5 + i);
               const along = 0.12 + r1 * 0.76;
-              const depth = 0.06 + r2 * 0.3;
+              const depth = 0.06 + r23 * 0.3;
               const bx = px + TP * (dx === 0 ? along : dx > 0 ? 1 - depth : depth);
               const by = py + TP * (dy === 0 ? along : dy > 0 ? 1 - depth : depth);
               c.globalAlpha = (wet ? 0.3 : 0.42) * (1 - depth * 1.9);
               if (c.globalAlpha <= 0.02) continue;
               c.beginPath();
-              c.ellipse(bx, by, TP * (0.14 + r1 * 0.16), TP * (0.12 + r2 * 0.14), r1 * 3, 0, 7);
+              c.ellipse(bx, by, TP * (0.14 + r1 * 0.16), TP * (0.12 + r23 * 0.14), r1 * 3, 0, 7);
               c.fill();
             }
           }
@@ -14928,8 +16014,8 @@ ${s}`, "console");
         for (let gx = g0x; gx <= g1x; gx++) {
           const r1 = hash2(gx * 131 + 7, gy * 57 + 3);
           if (r1 < 0.45) continue;
-          const r2 = hash2(gx * 29, gy * 191 + 11), r33 = hash2(gx * 83 + 5, gy * 13);
-          const wx = gx * 3 + r2 * 3, wy = gy * 3 + r33 * 3;
+          const r23 = hash2(gx * 29, gy * 191 + 11), r34 = hash2(gx * 83 + 5, gy * 13);
+          const wx = gx * 3 + r23 * 3, wy = gy * 3 + r34 * 3;
           const tx = Math.floor(wx), ty = Math.floor(wy);
           if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
           const t = world.tiles[ty * W + tx];
@@ -14941,12 +16027,12 @@ ${s}`, "console");
           const light = fbm2(wx, wy) > 0.5;
           const col = hex2rgb(light ? p.hi : p.lo);
           const grad = c.createRadialGradient(cx, cy, 0, cx, cy, rad);
-          const a = 0.075 + r2 * 0.1;
+          const a = 0.075 + r23 * 0.1;
           grad.addColorStop(0, `rgba(${col[0]},${col[1]},${col[2]},${a})`);
           grad.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
           c.fillStyle = grad;
           c.beginPath();
-          c.ellipse(cx, cy, rad, rad * (0.62 + r33 * 0.4), r1 * 3, 0, 7);
+          c.ellipse(cx, cy, rad, rad * (0.62 + r34 * 0.4), r1 * 3, 0, 7);
           c.fill();
         }
       }
@@ -14958,7 +16044,7 @@ ${s}`, "console");
       const D = this.q.detail;
       if (D < 0) return;
       const onRoad = this.road ? this.road.tiles.has(y * world.w + x) : false;
-      const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r33 = hash2(x * 3 + 7, y * 5 + 13);
+      const r1 = hash2(x, y), r23 = hash2(x + 991, y + 77), r34 = hash2(x * 3 + 7, y * 5 + 13);
       if (t === TILE.GRASS) {
         if (D === 0) return;
         const n = D >= 2 ? 3 : 2;
@@ -14981,18 +16067,18 @@ ${s}`, "console");
             c.stroke();
           }
         }
-        if (D >= 1 && r2 > 0.9) {
+        if (D >= 1 && r23 > 0.9) {
           c.fillStyle = "rgba(122,98,62,0.22)";
           c.beginPath();
-          c.ellipse(px + TP * (0.2 + r1 * 0.6), py + TP * (0.2 + r33 * 0.6), TP * (0.12 + r1 * 0.16), TP * (0.09 + r33 * 0.1), r1 * 3, 0, 7);
+          c.ellipse(px + TP * (0.2 + r1 * 0.6), py + TP * (0.2 + r34 * 0.6), TP * (0.12 + r1 * 0.16), TP * (0.09 + r34 * 0.1), r1 * 3, 0, 7);
           c.fill();
         }
-        if (D >= 2 && season < 2 && r33 > 0.84) {
+        if (D >= 2 && season < 2 && r34 > 0.84) {
           const fc = ["#f0e28a", "#f6f6f2", "#e8a0c0"][r1 * 3 | 0];
           for (let i = 0; i < 3; i++) {
             c.fillStyle = fc;
             c.beginPath();
-            c.arc(px + TP * (0.2 + r1 * 0.6) + (i - 1) * TP * 0.09, py + TP * (0.2 + r2 * 0.6) + i % 2 * TP * 0.07, TP * 0.035, 0, 7);
+            c.arc(px + TP * (0.2 + r1 * 0.6) + (i - 1) * TP * 0.09, py + TP * (0.2 + r23 * 0.6) + i % 2 * TP * 0.07, TP * 0.035, 0, 7);
             c.fill();
           }
         }
@@ -15001,7 +16087,7 @@ ${s}`, "console");
       if (t === TILE.FOREST) {
         c.fillStyle = "rgba(38,48,28,0.32)";
         c.beginPath();
-        c.ellipse(px + TP * (0.4 + r1 * 0.2), py + TP * (0.4 + r2 * 0.2), TP * (0.62 + r33 * 0.14), TP * (0.6 + r1 * 0.14), 0, 0, 7);
+        c.ellipse(px + TP * (0.4 + r1 * 0.2), py + TP * (0.4 + r23 * 0.2), TP * (0.62 + r34 * 0.14), TP * (0.6 + r1 * 0.14), 0, 0, 7);
         c.fill();
         if (D >= 1) {
           c.fillStyle = season === 2 ? "rgba(150,96,40,0.35)" : "rgba(60,80,44,0.4)";
@@ -15012,7 +16098,7 @@ ${s}`, "console");
         }
         if (onRoad) return;
         const cap = D >= 2 ? 4 : D === 1 ? 3 : 1;
-        const n = Math.max(1, Math.round(1 + r2 * (cap - 1)));
+        const n = Math.max(1, Math.round(1 + r23 * (cap - 1)));
         const list = [];
         for (let i = 0; i < n; i++) {
           const hx = hash2(x * 31 + i * 5, y * 13 + i), hy = hash2(x * 7 + i, y * 23 + i * 3);
@@ -15029,11 +16115,11 @@ ${s}`, "console");
       }
       if (t === TILE.HILL) {
         if (D < 1) return;
-        if (r2 > 0.62) {
+        if (r23 > 0.62) {
           c.fillStyle = p.det;
           c.globalAlpha = 0.55;
           c.beginPath();
-          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r33 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r33 * 0.03), r1 * 3, 0, 7);
+          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r34 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r34 * 0.03), r1 * 3, 0, 7);
           c.fill();
           c.globalAlpha = 1;
         }
@@ -15041,7 +16127,7 @@ ${s}`, "console");
           c.strokeStyle = p.det2;
           c.globalAlpha = 0.45;
           c.lineWidth = Math.max(1, TP * 0.04);
-          const gx = px + r33 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
+          const gx = px + r34 * TP * 0.7 + TP * 0.15, gy = py + r23 * TP * 0.6 + TP * 0.2;
           c.beginPath();
           c.moveTo(gx, gy + TP * 0.06);
           c.lineTo(gx + TP * 0.02, gy - TP * 0.06);
@@ -15057,10 +16143,10 @@ ${s}`, "console");
         c.fillStyle = nf > 0.5 ? p.hi : p.lo;
         c.globalAlpha = 0.16 + Math.abs(nf - 0.5) * 0.5;
         c.beginPath();
-        c.moveTo(px - TP * r1 * 0.3, py + TP * (r2 * 0.5 - 0.1));
-        c.lineTo(px + TP * (0.6 + r2 * 0.6), py - TP * r33 * 0.25);
-        c.lineTo(px + TP * (1.1 + r1 * 0.3), py + TP * (0.6 + r33 * 0.5));
-        c.lineTo(px + TP * (0.2 + r33 * 0.4), py + TP * (0.9 + r1 * 0.35));
+        c.moveTo(px - TP * r1 * 0.3, py + TP * (r23 * 0.5 - 0.1));
+        c.lineTo(px + TP * (0.6 + r23 * 0.6), py - TP * r34 * 0.25);
+        c.lineTo(px + TP * (1.1 + r1 * 0.3), py + TP * (0.6 + r34 * 0.5));
+        c.lineTo(px + TP * (0.2 + r34 * 0.4), py + TP * (0.9 + r1 * 0.35));
         c.closePath();
         c.fill();
         c.globalAlpha = 0.3;
@@ -15068,13 +16154,13 @@ ${s}`, "console");
         c.lineWidth = Math.max(1, TP * 0.03);
         c.beginPath();
         c.moveTo(px + TP * r1, py);
-        c.lineTo(px + TP * (0.2 + r2 * 0.6), py + TP * (0.5 + r33 * 0.3));
-        c.lineTo(px + TP * (r33 * 0.5), py + TP);
+        c.lineTo(px + TP * (0.2 + r23 * 0.6), py + TP * (0.5 + r34 * 0.3));
+        c.lineTo(px + TP * (r34 * 0.5), py + TP);
         c.stroke();
         c.globalAlpha = 1;
         if (D >= 1 && r1 > 0.3 && !onRoad) {
-          const ox = px + TP * (0.18 + r2 * 0.5), oy = py + TP * (0.42 + r33 * 0.4);
-          const rw = TP * (0.16 + r1 * 0.2), rh = rw * (0.7 + r2 * 0.5);
+          const ox = px + TP * (0.18 + r23 * 0.5), oy = py + TP * (0.42 + r34 * 0.4);
+          const rw = TP * (0.16 + r1 * 0.2), rh = rw * (0.7 + r23 * 0.5);
           c.fillStyle = "rgba(0,0,0,0.2)";
           c.beginPath();
           c.moveTo(ox + rw * 0.3, oy - rh);
@@ -15098,7 +16184,7 @@ ${s}`, "console");
           c.closePath();
           c.fill();
         }
-        if (D >= 1 && r33 > 0.72) {
+        if (D >= 1 && r34 > 0.72) {
           c.fillStyle = p.det2;
           c.globalAlpha = 0.45;
           for (let i = 0; i < 2; i++) {
@@ -15123,10 +16209,10 @@ ${s}`, "console");
           }
         }
         if (!peakHere || onRoad) return;
-        const scale = 0.9 + r2 * 0.9;
-        const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1 + r33 * 0.15);
+        const scale = 0.9 + r23 * 0.9;
+        const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1 + r34 * 0.15);
         const peak = py + TP * (0.55 - 0.62 * scale);
-        const wdt = TP * (0.5 + r33 * 0.25) * scale;
+        const wdt = TP * (0.5 + r34 * 0.25) * scale;
         c.fillStyle = "rgba(0,0,0,0.24)";
         c.beginPath();
         c.moveTo(cxp, peak);
@@ -15185,7 +16271,7 @@ ${s}`, "console");
           c.stroke();
         }
         c.globalAlpha = 1;
-        if (D >= 2 && r33 > 0.72) {
+        if (D >= 2 && r34 > 0.72) {
           c.fillStyle = p.lo;
           c.globalAlpha = 0.45;
           for (let i = 0; i < 2; i++) {
@@ -15206,7 +16292,7 @@ ${s}`, "console");
         if (D >= 2 && r1 > 0.88) {
           c.strokeStyle = "rgba(150,146,96,0.5)";
           c.lineWidth = Math.max(1, TP * 0.03);
-          const gx = px + TP * (0.25 + r2 * 0.5), gy = py + TP * (0.55 + r33 * 0.3);
+          const gx = px + TP * (0.25 + r23 * 0.5), gy = py + TP * (0.55 + r34 * 0.3);
           for (const k of [-1, 0, 1]) {
             c.beginPath();
             c.moveTo(gx, gy);
@@ -19340,10 +20426,10 @@ ${s}`, "console");
         ctx.ellipse(sx, sy, rad, rad * 0.62, 0, 0, 6.283);
         ctx.stroke();
         if (k > 0.32) {
-          const r2 = z * (0.04 + 0.3 * smooth(k - 0.32));
+          const r23 = z * (0.04 + 0.3 * smooth(k - 0.32));
           ctx.strokeStyle = `rgba(232,244,255,${0.3 * (1 - k)})`;
           ctx.beginPath();
-          ctx.ellipse(sx, sy, r2, r2 * 0.62, 0, 0, 6.283);
+          ctx.ellipse(sx, sy, r23, r23 * 0.62, 0, 0, 6.283);
           ctx.stroke();
         }
       }
@@ -20472,7 +21558,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp8 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp10 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -21309,7 +22395,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp8(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp10(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -21346,7 +22432,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp8(x >> 2, 0, this.pw - 1), gy = clamp8(y >> 2, 0, this.ph - 1);
+      const gx = clamp10(x >> 2, 0, this.pw - 1), gy = clamp10(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -21365,7 +22451,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp8(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp10(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -21402,67 +22488,67 @@ ${s}`, "console");
     // ---- что растёт на одной клетке ---------------------------------------
     tileItems(out, sim2, world, x, y, t, season, era, D, p, warm, wet, water, tile) {
       const r1 = hash2(x * 7 + 1, y * 11 + 3);
-      const r2 = hash2(x * 13 + 91, y * 5 + 47);
-      const r33 = hash2(x * 3 + 511, y * 29 + 17);
+      const r23 = hash2(x * 13 + 91, y * 5 + 47);
+      const r34 = hash2(x * 3 + 511, y * 29 + 17);
       const r4 = hash2(x * 23 + 7, y * 19 + 331);
       if (t === TILE.FOREST) {
         const edge = tile(x + 1, y) !== TILE.FOREST || tile(x - 1, y) !== TILE.FOREST || tile(x, y + 1) !== TILE.FOREST || tile(x, y - 1) !== TILE.FOREST;
         const want = (edge ? this.edgeFill : this.forestFill) * (1 - 0.72 * p);
         if (r1 < want) {
-          this.addTree(out, x, y, this.forestSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r33);
+          this.addTree(out, x, y, this.forestSpecies(r23, warm, wet, water, era, p), season, era, p, r23, r34);
           if (edge && D >= 2 && r4 < 0.34) {
             this.addTree(out, x + 0.42, y + 0.3, this.forestSpecies(r4, warm, wet, water, era, p), season, era, p, r4, r1);
           }
-        } else if (r33 < 0.14 + 0.55 * p) {
-          this.addUnder(out, x, y, U.STUMP, season, r33, r1);
-          if (r4 < 0.35 && p > 0.28) this.addUnder(out, x + 0.3, y + 0.22, U.SAPLING, season, r4, r2);
+        } else if (r34 < 0.14 + 0.55 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r34, r1);
+          if (r4 < 0.35 && p > 0.28) this.addUnder(out, x + 0.3, y + 0.22, U.SAPLING, season, r4, r23);
         }
-        if (D >= 1 && r2 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r2, r33);
+        if (D >= 1 && r23 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r23, r34);
         if (D >= 1 && r4 < 0.22) this.addUnder(out, x + 0.62, y + 0.26, U.BUSH, season, r4, r1);
-        if (D >= 2 && season !== 3 && r33 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r33, r4);
-        if (D >= 2 && r1 > 0.94) this.addUnder(out, x + 0.55, y + 0.7, U.LOG, season, r1, r2);
+        if (D >= 2 && season !== 3 && r34 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r34, r4);
+        if (D >= 2 && r1 > 0.94) this.addUnder(out, x + 0.55, y + 0.7, U.LOG, season, r1, r23);
         return;
       }
       if (t === TILE.GRASS) {
         const want = (0.05 + wet * 0.12) * (1 - 0.82 * p);
         if (r1 < want) {
-          this.addTree(out, x, y, this.openSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r33);
-        } else if (p > 0.3 && r33 < 0.1 * p) {
-          this.addUnder(out, x, y, U.STUMP, season, r33, r1);
+          this.addTree(out, x, y, this.openSpecies(r23, warm, wet, water, era, p), season, era, p, r23, r34);
+        } else if (p > 0.3 && r34 < 0.1 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r34, r1);
         }
-        if (water && r2 < 0.42) this.addUnder(out, x + 0.3, y + 0.55, U.REED, season, r2, r4);
+        if (water && r23 < 0.42) this.addUnder(out, x + 0.3, y + 0.55, U.REED, season, r23, r4);
         if (D >= 1 && r4 < 0.15) this.addUnder(out, x + 0.55, y + 0.35, U.BUSH, season, r4, r1);
-        if (D >= 2 && r33 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r33, r2);
+        if (D >= 2 && r34 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r34, r23);
         if (season < 2 && D >= 1) {
           const fl = 0.16 + wet * 0.14 + (era >= 8 ? p * 0.3 : -p * 0.1);
-          if (r2 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r2, r33);
+          if (r23 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r23, r34);
         }
         return;
       }
       if (t === TILE.HILL) {
         const want = 0.1 * (1 - 0.6 * p);
         if (r1 < want) {
-          const sp = warm < 0.42 ? r2 < 0.6 ? SP.spruce : SP.pine : r2 < 0.5 ? SP.junip : SP.pine;
-          this.addTree(out, x, y, sp, season, era, p, r2, r33);
+          const sp = warm < 0.42 ? r23 < 0.6 ? SP.spruce : SP.pine : r23 < 0.5 ? SP.junip : SP.pine;
+          this.addTree(out, x, y, sp, season, era, p, r23, r34);
         }
-        if (D >= 1 && r33 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r33, r1);
-        if (D >= 2 && r4 < 0.22) this.addUnder(out, x + 0.25, y + 0.66, U.GRASS, season, r4, r2);
-        if (D >= 2 && season < 2 && r2 > 0.9) this.addUnder(out, x + 0.6, y + 0.3, U.FLOWER, season, r2, r4);
+        if (D >= 1 && r34 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r34, r1);
+        if (D >= 2 && r4 < 0.22) this.addUnder(out, x + 0.25, y + 0.66, U.GRASS, season, r4, r23);
+        if (D >= 2 && season < 2 && r23 > 0.9) this.addUnder(out, x + 0.6, y + 0.3, U.FLOWER, season, r23, r4);
         return;
       }
       if (t === TILE.SAND) {
         if (water && warm > 0.55 && r1 < 0.14) {
-          this.addTree(out, x, y, SP.palm, season, era, p, r2, r33);
+          this.addTree(out, x, y, SP.palm, season, era, p, r23, r34);
         } else if (water && warm <= 0.55 && r1 < 0.06) {
-          this.addTree(out, x, y, SP.willow, season, era, p, r2, r33);
+          this.addTree(out, x, y, SP.willow, season, era, p, r23, r34);
         }
-        if (water && r2 < 0.28) this.addUnder(out, x + 0.4, y + 0.55, U.REED, season, r2, r4);
-        if (D >= 2 && r33 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r33, r1);
+        if (water && r23 < 0.28) this.addUnder(out, x + 0.4, y + 0.55, U.REED, season, r23, r4);
+        if (D >= 2 && r34 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r34, r1);
         return;
       }
       if (t === TILE.MOUNTAIN) {
         const foot = tile(x, y + 1) === TILE.HILL || tile(x - 1, y) === TILE.HILL || tile(x + 1, y) === TILE.HILL;
-        if (foot && r1 < 0.07) this.addTree(out, x, y, r2 < 0.5 ? SP.dead : SP.junip, season, era, p, r2, r33);
+        if (foot && r1 < 0.07) this.addTree(out, x, y, r23 < 0.5 ? SP.dead : SP.junip, season, era, p, r23, r34);
       }
     }
     // ---- выбор породы ------------------------------------------------------
@@ -21596,7 +22682,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp8(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp10(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -21751,7 +22837,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp9 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp11 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -21921,7 +23007,7 @@ ${s}`, "console");
       const rank = new Uint8Array(N);
       for (let i = 0; i < N; i++) rank[i] = rankOf(world.tiles[i]);
       const AMP = [0, 0.05, 0.05, 0.07, 0.16, 0.3];
-      const REACH = [1, 3, 3, 5, 5, 7];
+      const REACH2 = [1, 3, 3, 5, 5, 7];
       for (let lvl = 1; lvl <= 5; lvl++) {
         dist.fill(-1);
         let qh = 0, qt = 0;
@@ -21943,7 +23029,7 @@ ${s}`, "console");
             q[qt++] = ni;
           }
         }
-        const amp = AMP[lvl] * weight, reach = REACH[lvl];
+        const amp = AMP[lvl] * weight, reach = REACH2[lvl];
         for (let i = 0; i < N; i++) {
           if (dist[i] <= 0) continue;
           dome[i] += amp * Math.sqrt(Math.min(dist[i], reach) / reach);
@@ -22088,7 +23174,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp9(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp11(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -22105,10 +23191,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp9(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp9(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp11(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp11(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp9(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp11(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -22120,8 +23206,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp9(
-        nLand ? lapsArr[clamp9(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp11(
+        nLand ? lapsArr[clamp11(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -22132,8 +23218,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp9(i0, 0, w - 1);
-        this.txB[sx] = clamp9(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp11(i0, 0, w - 1);
+        this.txB[sx] = clamp11(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -22141,8 +23227,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp9(i0 - 1, 0, w - 1), b = row + clamp9(i0, 0, w - 1);
-          const c = row + clamp9(i0 + 1, 0, w - 1), d = row + clamp9(i0 + 2, 0, w - 1);
+          const a = row + clamp11(i0 - 1, 0, w - 1), b = row + clamp11(i0, 0, w - 1);
+          const c = row + clamp11(i0 + 1, 0, w - 1), d = row + clamp11(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -22183,12 +23269,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp9(j0 - 1, 0, h - 1) * SW, rb = clamp9(j0, 0, h - 1) * SW;
-        const rc = clamp9(j0 + 1, 0, h - 1) * SW, rd = clamp9(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp11(j0 - 1, 0, h - 1) * SW, rb = clamp11(j0, 0, h - 1) * SW;
+        const rc = clamp11(j0 + 1, 0, h - 1) * SW, rd = clamp11(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp9(jy, 0, h - 1) * w, jB = clamp9(jy + 1, 0, h - 1) * w;
+        const jA = clamp11(jy, 0, h - 1) * w, jB = clamp11(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -22238,9 +23324,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp9(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp9(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp11(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp11(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp9(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp11(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -22353,7 +23439,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp9(j0, 0, h - 1) * w, jB = clamp9(j0 + 1, 0, h - 1) * w;
+      const jA = clamp11(j0, 0, h - 1) * w, jB = clamp11(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -22396,7 +23482,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp9(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp11(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -22418,7 +23504,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp9(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp11(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -22494,28 +23580,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp9(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp9(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp9(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp9(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp11(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp11(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp11(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp11(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp9((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp9(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp11((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp11(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp9(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp11(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp9(k, 0, 1);
+        ctx.globalAlpha = clamp11(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -22637,7 +23723,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp10 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp12 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -22813,8 +23899,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp10(L.shadowLen, 0.45, 2.2);
-      const u = clamp10((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp12(L.shadowLen, 0.45, 2.2);
+      const u = clamp12((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -22874,7 +23960,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp10(0.78 / hf, 0.32, 0.6);
+      const band = clamp12(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul = this._checkMul(ctx);
@@ -22980,8 +24066,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp10(Math.round(dw), 12, 256);
-      const h = clamp10(Math.round(dh), 12, 384);
+      const w = clamp12(Math.round(dw), 12, 256);
+      const h = clamp12(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -22991,8 +24077,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp10(Math.round(dw), 12, 256);
-      const h = clamp10(Math.round(dh), 12, 384);
+      const w = clamp12(Math.round(dw), 12, 256);
+      const h = clamp12(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -23153,7 +24239,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp11 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -23669,7 +24755,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp11(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp13(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -23771,7 +24857,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp11(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp13(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -24144,7 +25230,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp11(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp13(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -24228,7 +25314,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp11(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp13(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;

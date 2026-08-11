@@ -23,6 +23,7 @@ import * as LS from './link_survival.js';
 import * as TER from './link_territory.js';
 import * as LWR from './link_war.js';
 import * as LIND from './link_industry.js';
+import * as LN from './link_neighbors.js';
 
 // ---------- Установка ----------
 
@@ -74,6 +75,9 @@ export function systemsNewDay(sim) {
   applyEconomyLinks(sim);
   applySurvivalLinks(sim);
   applyIndustryLinks(sim);
+  // Соседи читают уже сложившийся день: казну после налогов и стабильность
+  // после голода. Иначе охрана границ оплачивалась бы из вчерашних денег.
+  applyNeighborLinks(sim);
   // Территория идёт ПОСЛЕ выживания: голод может снять город, и его потерю
   // тоже надо разыграть — кому он достался и как это увидели соседи.
   applyTerritoryLinks(sim);
@@ -193,6 +197,7 @@ export function systemsHappyMod(sim) {
   return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim)
     + (sim.sys.ecoLinks ? sim.sys.ecoLinks.mods.happy : 0)
     + LS.survivalHappyMod(sim) + LIND.industryLinkHappyMod(sim)
+    + (sim.sys.nbrLinks ? sim.sys.nbrLinks.mods.happy : 0)
     + TER.territoryHappyMod(sim)
     + (sim.sys.warLinks ? sim.sys.warLinks.mods.happy : 0);
 }
@@ -292,6 +297,50 @@ function applyEconomyLinks(sim) {
   }
   for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'info' : e.type);
   if (L.flags.defaultToday) sim.addChronicle(`Казна объявила дефолт (день ${sim.day}).`);
+  return L;
+}
+
+// Связь «соседи ↔ наша держава»: караваны, страх, беженцы, разрыв в науке.
+function applyNeighborLinks(sim) {
+  const L = LN.neighborLinks(sim);
+  sim.sys.nbrLinks = L;                 // для HUD: панель читает готовый разбор
+
+  // Деньги: доход с договоров минус недошедшие караваны и охрана границ.
+  if (L.mods.gold !== 0) sim.res.gold = Math.max(0, sim.res.gold + L.mods.gold);
+  // Чужое ремесло: беженцы-мастера и учёные партнёры.
+  if (L.mods.knowledge > 0) sim.res.knowledge += L.mods.knowledge;
+
+  // Сословия и стабильность.
+  const pst = sim.politics && sim.politics.state;
+  if (pst) {
+    for (const [fid, d] of Object.entries(L.mods.approval)) {
+      if (!d || pst.factions[fid] == null) continue;
+      pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+    }
+    pst.stability = Math.max(0, Math.min(100, pst.stability + L.mods.stability));
+  }
+
+  // Беженцы: модуль уже проверил жильё и запас еды, здесь только расселение.
+  if (L.flags.refugees > 0) {
+    const c = sim.buildings.find(b => b.id === 'campfire' && !b.destroyed)
+      || { x: sim.world.startX, y: sim.world.startY };
+    for (let i = 0; i < L.flags.refugees; i++) sim.spawnVillager(c.x, c.y);
+    sim.addChronicle(`Беженцы от чужой войны осели у нас: ${L.flags.refugees} чел. (день ${sim.day}).`);
+  }
+
+  // Копирование технологий. Счётчик ядра — единственная точка входа: civ_ai.js
+  // в sync() сам доучит фракции разницу и выберет, что именно она переняла.
+  for (const c of L.flags.copycats) {
+    const f = sim.faction(c.fid);
+    if (f) f.techCount = (f.techCount || 0) + 1;
+  }
+
+  // Наглость и уважение: отношения ведёт ядро, у него лог и затухание.
+  for (const r of L.flags.relations) {
+    if (typeof sim.adjustRel === 'function') sim.adjustRel(r.fid, r.dRel, r.why);
+  }
+
+  for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'good' : e.type);
   return L;
 }
 
