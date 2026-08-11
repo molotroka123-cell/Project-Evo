@@ -14027,6 +14027,28 @@
     const def = BUILDINGS[id];
     return def && def.name ? def.name : id;
   }
+  function mastersReport(sim2) {
+    const M = sim2 && sim2.linkMasters ? sim2.linkMasters : createMasters();
+    const day = sim2 && typeof sim2.day === "number" ? sim2.day : 0;
+    const rows = [];
+    for (const [id, c] of Object.entries(M.crafts)) {
+      if (c.level < 0.05) continue;
+      rows.push({
+        id,
+        ru: craftName(id),
+        level: round28(c.level),
+        master: c.master,
+        apprentice: c.apprentice,
+        years: round28((day - c.since) / 100),
+        // Прямой ответ на вопрос «чем я рискую»: во сколько обойдётся смерть
+        // мастера прямо сейчас.
+        atRisk: round28(c.level * (c.apprentice ? 1 - KEEP_WITH_HEIR : 1 - KEEP_NO_HEIR)),
+        safe: !!c.apprentice
+      });
+    }
+    rows.sort((a, b) => b.level - a.level);
+    return rows;
+  }
   function clamp12(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
@@ -14299,6 +14321,9 @@
     }
     for (const e of L.events) sim2.addLog(e.text, e.type);
     return L;
+  }
+  function mastersPanel(sim2) {
+    return mastersReport(sim2);
   }
   function applyIntelLinks(sim2) {
     if (!sim2.linkIntel) sim2.linkIntel = createIntel();
@@ -28436,7 +28461,19 @@ ${out}`;
       return renderMarketPanel(this.sim, this.marketState);
     }
     panel_people() {
-      return PANELS.people.render(this.sim);
+      const rows = mastersPanel(this.sim);
+      if (!rows.length) return PANELS.people.render(this.sim);
+      const list = rows.map((r) => {
+        const pct = Math.round(r.level * 100);
+        const risk = Math.round(r.atRisk * 100);
+        return `<div class="mem-row">
+        <div class="mem-head"><b>${r.ru}</b><span style="color:var(--dim)">умение ${pct}%</span></div>
+        <div class="mem-bar"><i style="width:${pct}%;background:${r.safe ? "var(--good)" : "var(--warn, #d9a06a)"}"></i></div>
+        <div class="mem-txt">Мастер: ${r.master || "—"}${r.years >= 1 ? ` · у дела ${Math.floor(r.years)} г.` : ""}<br>
+          ${r.apprentice ? `Ученик: ${r.apprentice} — ремесло переживёт мастера (потеря ${risk}%).` : `<b style="color:var(--bad)">Ученика нет.</b> Если мастер погибнет, умение упадёт на ${risk}%.`}</div>
+      </div>`;
+      }).join("");
+      return PANELS.people.render(this.sim) + `<div class="sec">Ремесло и мастера</div>${list}`;
     }
     panel_industry() {
       return PANELS.industry.render(this.sim);

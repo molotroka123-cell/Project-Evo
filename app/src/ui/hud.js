@@ -4,7 +4,7 @@ import { DAY_SECONDS } from '../core/simulation.js';
 import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
-import { PANELS, memoryPanel, intelOf, intelTrustWord } from '../core/systems/integrate.js';
+import { PANELS, memoryPanel, mastersPanel, intelOf, intelTrustWord } from '../core/systems/integrate.js';
 
 // Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
 // разовым событиям дня, а еда вообще списывается одним куском на смене суток.
@@ -887,7 +887,27 @@ export class Hud {
   }
 
   panel_market() { return renderMarketPanel(this.sim, this.marketState); }
-  panel_people()   { return PANELS.people.render(this.sim); }
+  panel_people() {
+    // К списку жителей добавляем мастеров: без этого игрок не узнает, что
+    // конкретный человек стоит половины выпуска кузницы, и не поймёт, почему
+    // после набега производство просело больше, чем на одного работника.
+    const rows = mastersPanel(this.sim);
+    if (!rows.length) return PANELS.people.render(this.sim);
+    const list = rows.map(r => {
+      const pct = Math.round(r.level * 100);
+      const risk = Math.round(r.atRisk * 100);
+      return `<div class="mem-row">
+        <div class="mem-head"><b>${r.ru}</b><span style="color:var(--dim)">умение ${pct}%</span></div>
+        <div class="mem-bar"><i style="width:${pct}%;background:${r.safe ? 'var(--good)' : 'var(--warn, #d9a06a)'}"></i></div>
+        <div class="mem-txt">Мастер: ${r.master || '—'}${r.years >= 1 ? ` · у дела ${Math.floor(r.years)} г.` : ''}<br>
+          ${r.apprentice
+            ? `Ученик: ${r.apprentice} — ремесло переживёт мастера (потеря ${risk}%).`
+            : `<b style="color:var(--bad)">Ученика нет.</b> Если мастер погибнет, умение упадёт на ${risk}%.`}</div>
+      </div>`;
+    }).join('');
+    return PANELS.people.render(this.sim)
+      + `<div class="sec">Ремесло и мастера</div>${list}`;
+  }
   panel_industry() { return PANELS.industry.render(this.sim); }
   panel_war()      { return PANELS.war.render(this.sim); }
   panel_politics() { return PANELS.politics.render(this.sim); }
