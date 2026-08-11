@@ -26,6 +26,7 @@ import * as LIND from './link_industry.js';
 import * as LN from './link_neighbors.js';
 import * as MEM from './link_memory.js';
 import * as INT from './link_intel.js';
+import * as MAS from './link_masters.js';
 
 // С какого уровня отношений война считается ударом в спину. 20 — это уже не
 // «терпим друг друга», а сложившийся лад: договоры, караваны, общие войны.
@@ -69,6 +70,8 @@ export function installSystems(sim) {
   sim.linkMemory = MEM.createMemory();
   // Разведка: что мы знаем о соседях и когда об этом слышали в последний раз.
   sim.linkIntel = INT.createIntel();
+  // Ремесло живёт в людях: у каждого промысла свой мастер и свой ученик.
+  sim.linkMasters = MAS.createMasters();
 }
 
 // ---------- Раз в сутки ----------
@@ -93,6 +96,9 @@ export function systemsNewDay(sim) {
   applyEconomyLinks(sim);
   const survOut = applySurvivalLinks(sim);
   applyIndustryLinks(sim);
+  // Мастера идут ПОСЛЕ хозяйства: они поднимают тот выпуск, который оно
+  // уже посчитало, а не считают его заново.
+  applyMasterLinks(sim);
   // Соседи читают уже сложившийся день: казну после налогов и стабильность
   // после голода. Иначе охрана границ оплачивалась бы из вчерашних денег.
   applyNeighborLinks(sim);
@@ -273,6 +279,7 @@ export function systemsSerialize(sim) {
     linkWar: sim.linkWar || null,
     mem: sim.linkMemory || null,
     intel: sim.linkIntel || null,
+    masters: sim.linkMasters || null,
   };
 }
 
@@ -292,6 +299,7 @@ export function systemsRestore(sim, data) {
   sim.linkWar = LWR.restoreWarMemory(data.linkWar);
   sim.linkMemory = MEM.restoreMemory(data.mem);
   sim.linkIntel = INT.restoreIntel(data.intel);
+  sim.linkMasters = MAS.restoreMasters(data.masters);
 }
 
 // ---------- Для HUD ----------
@@ -427,6 +435,34 @@ function applyMemoryLinks(sim, incoming) {
   for (const e of L.events) sim.addLog(e.text, e.type);
   return L;
 }
+
+// Ремесло живёт в людях: мастер, ученик и то, что уходит вместе с мастером.
+function applyMasterLinks(sim) {
+  if (!sim.linkMasters) sim.linkMasters = MAS.createMasters();
+  const L = MAS.masterLinks(sim);
+  sim.linkMasters = L.flags.memory;
+  sim.sys.masterLinks = L;
+
+  // Прибавка мастеров к выпуску. Потолок склада тот же, что у самих цепочек:
+  // умение не должно быть способом обойти вместимость амбара.
+  for (const [res, add] of Object.entries(L.mods.output)) {
+    if (!(res in sim.res) || !add) continue;
+    sim.res[res] = Math.min(sim.resCap[res] ?? 99999, sim.res[res] + add);
+  }
+  // Утрату ремесла записываем в летопись: это событие уровня «потеряли город»,
+  // и через десять лет игрок должен иметь возможность понять, почему кузница
+  // так и не вышла на прежний выпуск.
+  for (const l of L.flags.lost) {
+    if (l.before >= 0.25) {
+      sim.addChronicle(`${MAS.craftName(l.id)}: умер последний мастер, ученика не было (день ${sim.day}).`);
+    }
+  }
+  for (const e of L.events) sim.addLog(e.text, e.type);
+  return L;
+}
+
+// Строки для панели «Народ»: у кого что в руках и чем рискуем.
+export function mastersPanel(sim) { return MAS.mastersReport(sim); }
 
 // Разведка: знание о соседях как ресурс со сроком годности.
 function applyIntelLinks(sim) {

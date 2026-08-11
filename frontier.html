@@ -5798,12 +5798,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num10 = 1;
+    let num11 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num10++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num11++}`));
     }
     return out;
   }
@@ -13867,6 +13867,176 @@
     return Math.round(v * 100) / 100;
   }
 
+  // app/src/core/systems/link_masters.js
+  var MAX_LEVEL = 1;
+  var LEARN_DAYS = 1e3;
+  var MASTER_GAIN = 0.45;
+  var KEEP_WITH_HEIR = 0.85;
+  var KEEP_NO_HEIR = 0.25;
+  var APPRENTICE_MIN_WORKERS = 2;
+  var FORGET_BELOW2 = 0.02;
+  var IDLE_GRACE = 40;
+  function createMasters() {
+    return { v: 1, day: -1, crafts: {} };
+  }
+  function restoreMasters(data) {
+    const m = createMasters();
+    if (!data || typeof data !== "object") return m;
+    m.day = num10(data.day, -1);
+    if (data.crafts && typeof data.crafts === "object") {
+      for (const [id, c] of Object.entries(data.crafts)) {
+        if (!c || typeof c !== "object") continue;
+        m.crafts[id] = {
+          level: clamp12(num10(c.level, 0), 0, MAX_LEVEL),
+          master: typeof c.master === "string" ? c.master : null,
+          since: num10(c.since, 0),
+          apprentice: typeof c.apprentice === "string" ? c.apprentice : null,
+          appSince: num10(c.appSince, 0),
+          idle: Math.max(0, num10(c.idle, 0))
+        };
+      }
+    }
+    return m;
+  }
+  function workersByCraft(sim2) {
+    const map = /* @__PURE__ */ new Map();
+    const list = sim2 && sim2.villagers ? sim2.villagers : [];
+    for (let i = 0; i < list.length; i++) {
+      const v = list[i];
+      if (!v || v.hp !== void 0 && v.hp <= 0) continue;
+      const b = v.target && v.target.b;
+      if (!b || !b.done || b.destroyed) continue;
+      const def = BUILDINGS[b.id];
+      if (!def || !def.out) continue;
+      if (!map.has(b.id)) map.set(b.id, []);
+      map.get(b.id).push({ v, idx: i });
+    }
+    return map;
+  }
+  var aliveNames = (sim2) => {
+    const s = /* @__PURE__ */ new Set();
+    for (const v of sim2.villagers || []) {
+      if (v && (v.hp === void 0 || v.hp > 0)) s.add(v.name);
+    }
+    return s;
+  };
+  function masterLinks(sim2) {
+    const day = sim2 && typeof sim2.day === "number" ? sim2.day : 0;
+    const M = sim2 && sim2.linkMasters ? sim2.linkMasters : createMasters();
+    const out = {
+      mods: { output: {} },
+      // ресурс → сколько добавить за сутки
+      events: [],
+      flags: { memory: M, lost: [], promoted: [], crafts: {} }
+    };
+    if (M.day === day) return out;
+    const N = { v: 1, day, crafts: {} };
+    for (const [k, c] of Object.entries(M.crafts)) N.crafts[k] = { ...c };
+    const byCraft = workersByCraft(sim2);
+    const alive = aliveNames(sim2);
+    const ids = /* @__PURE__ */ new Set([...Object.keys(N.crafts), ...byCraft.keys()]);
+    for (const id of ids) {
+      const workers = byCraft.get(id) || [];
+      let c = N.crafts[id];
+      if (!c) c = N.crafts[id] = { level: 0, master: null, since: day, apprentice: null, appSince: 0, idle: 0 };
+      const masterAlive = c.master && alive.has(c.master);
+      if (c.master && !masterAlive) {
+        const heir = c.apprentice && alive.has(c.apprentice) ? c.apprentice : null;
+        const before = c.level;
+        if (heir) {
+          c.level = c.level * KEEP_WITH_HEIR;
+          c.master = heir;
+          c.since = day;
+          c.apprentice = null;
+          c.appSince = 0;
+          out.events.push({
+            text: `⚒ ${craftName(id)}: мастера не стало, но дело принял ${heir} — ремесло сохранено.`,
+            type: "info"
+          });
+        } else {
+          c.level = c.level * KEEP_NO_HEIR;
+          c.master = null;
+          c.since = day;
+          out.flags.lost.push({ id, before: round28(before), after: round28(c.level) });
+          if (before >= 0.25) {
+            out.events.push({
+              text: `⚒ ${craftName(id)}: мастер умер, не оставив ученика. С ним ушло ремесло — умение упало с ${Math.round(before * 100)}% до ${Math.round(c.level * 100)}%.`,
+              type: "bad"
+            });
+          }
+        }
+      }
+      if (!workers.length) {
+        c.idle = (c.idle || 0) + 1;
+        if (c.idle <= IDLE_GRACE) {
+          if (c.master && !alive.has(c.master)) c.master = null;
+          if (c.apprentice && !alive.has(c.apprentice)) c.apprentice = null;
+          continue;
+        }
+        c.level = Math.max(0, c.level - MAX_LEVEL / (LEARN_DAYS * 3));
+        c.master = null;
+        c.apprentice = null;
+        if (c.level < FORGET_BELOW2) delete N.crafts[id];
+        continue;
+      }
+      c.idle = 0;
+      if (!c.master || !alive.has(c.master)) {
+        const first = workers[0];
+        c.master = first.v.name;
+        c.since = day;
+        out.flags.promoted.push({ id, name: c.master });
+      }
+      if (c.apprentice && !alive.has(c.apprentice)) {
+        c.apprentice = null;
+        c.appSince = 0;
+      }
+      if (!c.apprentice && workers.length >= APPRENTICE_MIN_WORKERS) {
+        const cand = workers.find((w) => w.v.name !== c.master);
+        if (cand) {
+          c.apprentice = cand.v.name;
+          c.appSince = day;
+          if (c.level >= 0.3) {
+            out.events.push({
+              text: `⚒ ${craftName(id)}: ${c.master} взял ученика — ${c.apprentice}. Теперь ремесло переживёт мастера.`,
+              type: "good"
+            });
+          }
+        }
+      }
+      c.level = Math.min(MAX_LEVEL, c.level + MAX_LEVEL / LEARN_DAYS);
+      const def = BUILDINGS[id];
+      if (def && def.out && c.level > 0.01) {
+        const k = MASTER_GAIN * c.level;
+        for (const [res, amount] of Object.entries(def.out)) {
+          out.mods.output[res] = (out.mods.output[res] || 0) + amount * workers.length * k;
+        }
+      }
+      out.flags.crafts[id] = {
+        level: round28(c.level),
+        master: c.master,
+        apprentice: c.apprentice,
+        workers: workers.length,
+        // Сколько лет мастер у дела — это и есть то, что игрок теряет.
+        years: round28((day - c.since) / 100)
+      };
+    }
+    out.flags.memory = N;
+    return out;
+  }
+  function craftName(id) {
+    const def = BUILDINGS[id];
+    return def && def.name ? def.name : id;
+  }
+  function clamp12(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function num10(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round28(v) {
+    return Math.round(v * 100) / 100;
+  }
+
   // app/src/core/systems/integrate.js
   var BETRAYAL_REL_WAS = 20;
   function relValue2(sim2, fid) {
@@ -13893,6 +14063,7 @@
     sim2.linkTerritory = createTerritoryMemory();
     sim2.linkMemory = createMemory();
     sim2.linkIntel = createIntel();
+    sim2.linkMasters = createMasters();
   }
   function systemsNewDay(sim2) {
     if (!sim2.sys) return;
@@ -13906,6 +14077,7 @@
     applyEconomyLinks(sim2);
     const survOut = applySurvivalLinks(sim2);
     applyIndustryLinks(sim2);
+    applyMasterLinks(sim2);
     applyNeighborLinks(sim2);
     applyTerritoryLinks(sim2);
     applyIntelLinks(sim2);
@@ -14020,7 +14192,8 @@
       terr: sim2.linkTerritory || null,
       linkWar: sim2.linkWar || null,
       mem: sim2.linkMemory || null,
-      intel: sim2.linkIntel || null
+      intel: sim2.linkIntel || null,
+      masters: sim2.linkMasters || null
     };
   }
   function systemsRestore(sim2, data) {
@@ -14039,6 +14212,7 @@
     sim2.linkWar = restoreWarMemory(data.linkWar);
     sim2.linkMemory = restoreMemory(data.mem);
     sim2.linkIntel = restoreIntel(data.intel);
+    sim2.linkMasters = restoreMasters(data.masters);
   }
   function applyEconomyLinks(sim2) {
     if (!sim2.politics || !sim2.industry) return null;
@@ -14105,6 +14279,23 @@
     }
     for (const [fid, d] of Object.entries(L.mods.relations)) {
       if (d && typeof sim2.adjustRel === "function") sim2.adjustRel(fid, d, "Старая обида");
+    }
+    for (const e of L.events) sim2.addLog(e.text, e.type);
+    return L;
+  }
+  function applyMasterLinks(sim2) {
+    if (!sim2.linkMasters) sim2.linkMasters = createMasters();
+    const L = masterLinks(sim2);
+    sim2.linkMasters = L.flags.memory;
+    sim2.sys.masterLinks = L;
+    for (const [res, add] of Object.entries(L.mods.output)) {
+      if (!(res in sim2.res) || !add) continue;
+      sim2.res[res] = Math.min(sim2.resCap[res] ?? 99999, sim2.res[res] + add);
+    }
+    for (const l of L.flags.lost) {
+      if (l.before >= 0.25) {
+        sim2.addChronicle(`${craftName(l.id)}: умер последний мастер, ученика не было (день ${sim2.day}).`);
+      }
     }
     for (const e of L.events) sim2.addLog(e.text, e.type);
     return L;
@@ -22169,7 +22360,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp12 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -23006,7 +23197,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp12(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp13(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -23043,7 +23234,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp12(x >> 2, 0, this.pw - 1), gy = clamp12(y >> 2, 0, this.ph - 1);
+      const gx = clamp13(x >> 2, 0, this.pw - 1), gy = clamp13(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -23062,7 +23253,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp12(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp13(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -23293,7 +23484,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp12(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp13(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -23448,7 +23639,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -23785,7 +23976,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp13(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp14(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -23802,10 +23993,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp13(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp13(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp14(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp14(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp13(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp14(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -23817,8 +24008,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp13(
-        nLand ? lapsArr[clamp13(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp14(
+        nLand ? lapsArr[clamp14(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -23829,8 +24020,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp13(i0, 0, w - 1);
-        this.txB[sx] = clamp13(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp14(i0, 0, w - 1);
+        this.txB[sx] = clamp14(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -23838,8 +24029,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp13(i0 - 1, 0, w - 1), b = row + clamp13(i0, 0, w - 1);
-          const c = row + clamp13(i0 + 1, 0, w - 1), d = row + clamp13(i0 + 2, 0, w - 1);
+          const a = row + clamp14(i0 - 1, 0, w - 1), b = row + clamp14(i0, 0, w - 1);
+          const c = row + clamp14(i0 + 1, 0, w - 1), d = row + clamp14(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -23880,12 +24071,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp13(j0 - 1, 0, h - 1) * SW, rb = clamp13(j0, 0, h - 1) * SW;
-        const rc = clamp13(j0 + 1, 0, h - 1) * SW, rd = clamp13(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp14(j0 - 1, 0, h - 1) * SW, rb = clamp14(j0, 0, h - 1) * SW;
+        const rc = clamp14(j0 + 1, 0, h - 1) * SW, rd = clamp14(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp13(jy, 0, h - 1) * w, jB = clamp13(jy + 1, 0, h - 1) * w;
+        const jA = clamp14(jy, 0, h - 1) * w, jB = clamp14(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -23935,9 +24126,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp13(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp13(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp14(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp14(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp13(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp14(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -24050,7 +24241,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp13(j0, 0, h - 1) * w, jB = clamp13(j0 + 1, 0, h - 1) * w;
+      const jA = clamp14(j0, 0, h - 1) * w, jB = clamp14(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -24093,7 +24284,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp13(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp14(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -24115,7 +24306,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp13(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp14(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -24191,28 +24382,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp13(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp13(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp13(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp13(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp14(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp14(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp14(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp14(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp13((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp13(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp14((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp14(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp13(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp14(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp13(k, 0, 1);
+        ctx.globalAlpha = clamp14(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -24334,7 +24525,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -24510,8 +24701,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp14(L.shadowLen, 0.45, 2.2);
-      const u = clamp14((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp15(L.shadowLen, 0.45, 2.2);
+      const u = clamp15((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -24571,7 +24762,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp14(0.78 / hf, 0.32, 0.6);
+      const band = clamp15(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul = this._checkMul(ctx);
@@ -24677,8 +24868,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp14(Math.round(dw), 12, 256);
-      const h = clamp14(Math.round(dh), 12, 384);
+      const w = clamp15(Math.round(dw), 12, 256);
+      const h = clamp15(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -24688,8 +24879,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp14(Math.round(dw), 12, 256);
-      const h = clamp14(Math.round(dh), 12, 384);
+      const w = clamp15(Math.round(dw), 12, 256);
+      const h = clamp15(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -24850,7 +25041,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -25366,7 +25557,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp15(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp16(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -25468,7 +25659,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp15(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp16(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -25841,7 +26032,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp15(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp16(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -25925,7 +26116,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp15(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp16(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
