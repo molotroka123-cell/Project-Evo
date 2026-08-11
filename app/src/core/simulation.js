@@ -4,7 +4,7 @@ import { createRng, makeNoise2D } from './rng.js';
 import * as D from './data.js';
 import { generateWorld, tileAt, isWater, stepToward, findNearestTile, hasNeighborTile, makeAnimal, aStar, findFactionSpawns } from './world.js';
 import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, NICKNAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
-import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsSerialize, systemsRestore } from './systems/integrate.js';
+import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
@@ -344,6 +344,10 @@ export class Simulation {
   housingCap() {
     let cap = 0;
     for (const b of this.doneBuildings()) cap += BUILDINGS[b.id].housing || 0;
+    // Своя земля тоже даёт где жить: на присвоенной территории ставят
+    // выселки. Без этого расширение границ не давало ничего, кроме краски
+    // на карте и земельного налога.
+    cap += systemsPopCapMod(this);
     return cap;
   }
 

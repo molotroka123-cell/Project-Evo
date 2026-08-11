@@ -20,6 +20,7 @@ import * as EMP from './wire_empire.js';
 // день и возвращают отчёт; применяют отчёт функции applyXxxLinks в конце файла.
 import * as LEC from './link_economy.js';
 import * as LS from './link_survival.js';
+import * as TER from './link_territory.js';
 
 // ---------- Установка ----------
 
@@ -40,6 +41,9 @@ export function installSystems(sim) {
   // пересчитывает то, что уже посчитано модулем.
   sim.sys.winterReport = null;
   sim.sys.borderStats = null;
+  // Память связи «территория → отпадение»: снимок городов, дни ультиматумов,
+  // затухающий траур по потерянной провинции.
+  sim.linkTerritory = TER.createTerritoryMemory();
 }
 
 // ---------- Раз в сутки ----------
@@ -63,6 +67,9 @@ export function systemsNewDay(sim) {
   // уже пошатнувшуюся державу, а не вчерашнюю.
   applyEconomyLinks(sim);
   applySurvivalLinks(sim);
+  // Территория идёт ПОСЛЕ выживания: голод может снять город, и его потерю
+  // тоже надо разыграть — кому он достался и как это увидели соседи.
+  applyTerritoryLinks(sim);
 }
 
 // ---------- Соседи ----------
@@ -164,7 +171,10 @@ function tickBordersFor(sim) {
   // Земельный налог: территория начинает приносить доход, а не только красить
   // карту. Это делает захват земли осмысленным до появления городов.
   const tax = B.landTaxPerDay(s.borders, 'player', { techs: sim.techs });
-  if (tax > 0) sim.res.gold += tax * sim.globalMult('gold');
+  // Растянутая держава довозит до казны не всё: разницу съедают кормления
+  // сборщиков. Множитель считается по вчерашнему состоянию — налог начисляется
+  // в начале суток, а связь считается в конце (расхождение меньше суток).
+  if (tax > 0) sim.res.gold += tax * sim.globalMult('gold') * TER.territoryLandTaxMult(sim);
 }
 
 // ---------- Модификаторы, которые ядро подмешивает в свои формулы ----------
@@ -174,7 +184,14 @@ export function systemsHappyMod(sim) {
   if (!sim.sys) return 0;
   return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim)
     + (sim.sys.ecoLinks ? sim.sys.ecoLinks.mods.happy : 0)
-    + LS.survivalHappyMod(sim);
+    + LS.survivalHappyMod(sim)
+    + TER.territoryHappyMod(sim);
+}
+
+// Своя земля даёт где ставить выселки: площадь границ поднимает потолок
+// населения. Читается из памяти связи — проход по карте в housingCap() недопустим.
+export function systemsPopCapMod(sim) {
+  return sim.linkTerritory ? TER.territoryPopCap(sim) : 0;
 }
 
 // Больные не работают. Ядро умножает на это выработку.
@@ -199,6 +216,7 @@ export function systemsSerialize(sim) {
     pol: POL.politicsSerialize(sim),
     emp: EMP.empireSerialize(sim),
     link: sim.linkSurvival || null,
+    terr: sim.linkTerritory || null,
   };
 }
 
@@ -213,6 +231,7 @@ export function systemsRestore(sim, data) {
   if (data.pol) POL.politicsRestore(sim, data.pol);
   if (data.emp) EMP.empireRestore(sim, data.emp);
   sim.linkSurvival = LS.restoreSurvivalMemory(data.link);
+  sim.linkTerritory = TER.restoreTerritoryMemory(data.terr);
 }
 
 // ---------- Для HUD ----------
@@ -261,6 +280,57 @@ function applyEconomyLinks(sim) {
   for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'info' : e.type);
   if (L.flags.defaultToday) sim.addChronicle(`Казна объявила дефолт (день ${sim.day}).`);
   return L;
+}
+
+// Связь «территория → расстояние → коррупция → отпадение».
+function applyTerritoryLinks(sim) {
+  if (!sim.linkTerritory) sim.linkTerritory = TER.createTerritoryMemory();
+  const out = TER.territoryLinks(sim);
+  sim.linkTerritory = out.flags.memory;
+
+  const pst = sim.politics && sim.politics.state;
+  if (pst) {
+    const dS = out.mods.stability + out.mods.stabilityShock;
+    pst.stability = Math.max(0, Math.min(100, pst.stability + dS));
+    for (const [fid, d] of Object.entries(out.mods.estates)) {
+      if (!d || pst.factions[fid] == null) continue;
+      pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+    }
+  }
+
+  // Сепаратизм по городам. Потолок 12 — тот же, что в empire.js
+  // (UNREST_REVOLT + 2): выше него смута не копится ни от чего.
+  if (sim.empire) {
+    for (const c of sim.empire.state.cities) {
+      const d = out.mods.cityUnrest[c.id];
+      if (d) c.unrest = Math.max(0, Math.min(12, (c.unrest || 0) + d));
+    }
+  }
+
+  // Отпавший город достаётся соседу: у него прибавляется поселение и
+  // население. Поля фракции ведёт ядро и civ_ai.js — пишем ровно те же.
+  for (const g of out.flags.defected) {
+    sim.addChronicle(g.factionName
+      ? `${g.name} присягнул ${g.factionName} (день ${sim.day}).`
+      : `${g.name} объявил себя вольным городом (день ${sim.day}).`);
+    if (!g.fid) continue;
+    const f = sim.faction(g.fid);
+    if (!f) continue;
+    f.P = (f.P || 0) + g.gainP;
+    f.settlements.push({ x: g.x, y: g.y });
+  }
+
+  // Отношения: принявшему мятежников — вдвойне, остальным — за слабость.
+  for (const [fid, d] of Object.entries(out.mods.relations)) {
+    if (d) sim.adjustRel(fid, d, 'Отпадение города');
+  }
+
+  if (out.flags.defected.length) {
+    sim.sfx?.('alarm');
+    if (typeof sim.toast === 'function') sim.toast('Провинция вышла из-под руки столицы!', 'bad');
+  }
+  for (const e of out.events) sim.addLog(e.text, e.type);
+  return out;
 }
 
 // Связь «выживание → держава»: холод, голод и болезни доходят до трона.
