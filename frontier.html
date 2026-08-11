@@ -1640,6 +1640,10 @@
     if (!code) return 0;
     return state.areas[code] * TAX_PER_TILE * (opts.mult ?? 1);
   }
+  function territoryTiles(state, side) {
+    const code = ownerCode(side);
+    return code ? state.tiles[code] : 0;
+  }
   function territoryStats(state) {
     const out = [];
     for (let c = 1; c <= MAX_OWNER_CODE; c++) {
@@ -5783,12 +5787,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num6 = 1;
+    let num7 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num6++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num7++}`));
     }
     return out;
   }
@@ -6314,7 +6318,7 @@
     const W = sim2.war, R = W.raid;
     if (!R.squadId) return;
     const sq = findSquad(sim2.armyState, R.squadId);
-    if (sim2.lastRaidDay === sim2.day) {
+    if (sim2.lastRaidDay >= R.day) {
       if (sq) disbandSquad(sim2.armyState, sq.id);
       R.squadId = 0;
       R.landedDay = sim2.day;
@@ -7961,6 +7965,7 @@
   var REVOLT_SHOCK_DAYS = 15;
   var REVOLT_SHOCK_HAPPY = -8;
   var TURMOIL_HAPPY = -10;
+  var TURMOIL_MULT = { gather: 0.85, gold: 0.85, industry: 0.85, knowledge: 0.85, build: 0.85, unrest: 1.5 };
   var FACTION_ANGRY = 25;
   var FACTION_HAPPY = 60;
   var DOCTRINE_MIN_STAB = 30;
@@ -8302,6 +8307,27 @@
       tier: state.doctrines[branchId],
       log: `✦ Доктрина принята: ${d.ru} — «${chk.next.ru}» (ступень ${state.doctrines[branchId]} из ${d.tiers.length}).`
     };
+  }
+  function politicsMult(state, kind) {
+    let m = 1;
+    const g2 = government(state);
+    if (g2.mult[kind]) m *= g2.mult[kind];
+    if (state.turmoil > 0 && TURMOIL_MULT[kind]) m *= TURMOIL_MULT[kind];
+    if (state.ruler) {
+      for (const tid of state.ruler.traits) {
+        const t = TRAIT_BY_ID2[tid];
+        if (t && t.mult && t.mult[kind]) m *= t.mult[kind];
+      }
+    }
+    for (const d of DOCTRINES) {
+      const tier = state.doctrines[d.id] || 0;
+      for (let i = 0; i < tier; i++) if (d.tiers[i].mult[kind]) m *= d.tiers[i].mult[kind];
+    }
+    for (const fid of angryFactions(state)) {
+      const dom = FACTION_DOMAIN[fid];
+      if (dom && dom.kind === kind) m *= dom.mult;
+    }
+    return m;
   }
   function politicsHappy(state) {
     let h = government(state).happy || 0;
@@ -11351,6 +11377,954 @@
     return (Math.round(v * 10) / 10).toFixed(1);
   }
 
+  // app/src/core/systems/link_territory.js
+  var TILES_PER_HEAD = 45;
+  var POP_CAP_MAX = 12;
+  var REACH_FREE = CORR_FREE_DIST;
+  var GOV_REACH = { chiefdom: 0.7, monarchy: 1, republic: 1, empire: 1.35, federation: 1.6 };
+  var ROAD_REACH_GAIN = 0.8;
+  var STRETCH_SPAN = 30;
+  var STRETCH_TAX = 0.45;
+  var LAND_TAX_MIN = 0.55;
+  var CORR_FREE_PRESS = 0.25;
+  var CORR_ESTATE = { nobles: 0.12, clergy: 0, merchants: -0.2, commons: -0.3, military: -0.05 };
+  var ESTATE_STEP_CAP = 0.4;
+  var CORR_STAB = 0.5;
+  var SEPAR_PER_DAY = 0.35;
+  var STAB_HOLD = 55;
+  var HOLD_PER_DAY = 0.5;
+  var PANIC_SEPAR = 0.4;
+  var GARRISON_FULL = 60;
+  var GARRISON_HOLD = 0.5;
+  var UNREST_STEP_MAX = 0.6;
+  var AUTONOMY_UNREST = 4;
+  var DEMAND_COOLDOWN = 25;
+  var DEMAND_STAB = 0.15;
+  var DEMAND_STAB_CAP = 0.6;
+  var SEPAR_STAB = 0.6;
+  var STAB_FLOOR = -1.4;
+  var WARN_ETA = 7;
+  var WARN_COOLDOWN = 10;
+  var DEFECT_RANGE = 42;
+  var DEFECT_P_PER_POP = 1;
+  var DEFECT_P_CAP = 20;
+  var DEFECT_REL_TAKER = -25;
+  var DEFECT_REL_OTHERS = -6;
+  var DEFECT_STAB_SHOCK = -10;
+  var FREE_CITY_STAB_SHOCK = -6;
+  var DEFECT_SHOCK_CAP = -20;
+  var DEFECT_SHOCK_DAYS = 10;
+  var DEFECT_HAPPY = 5;
+  function createTerritoryMemory() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного применения в одни сутки
+      stage: "ok",
+      // 'ok' | 'thin' | 'torn' — ступень растяжки, для событий
+      shock: 0,
+      // дней траура по потерянному городу
+      happyMod: 0,
+      // последняя поправка к счастью — её читает happiness()
+      popCap: 0,
+      // последняя прибавка к потолку населения — её читает housingCap()
+      defections: 0,
+      // Снимок городов: положение нужно ПОСЛЕ отпадения (empire.js город уже удалил),
+      // а дни предупреждений — чтобы не повторять одно и то же каждые сутки.
+      cities: {}
+      // id -> { x, y, warnDay, demandDay }
+    };
+  }
+  function restoreTerritoryMemory(data) {
+    const m = createTerritoryMemory();
+    if (!data || typeof data !== "object") return m;
+    m.day = num6(data.day, -1);
+    m.stage = ["ok", "thin", "torn"].includes(data.stage) ? data.stage : "ok";
+    m.shock = clamp7(num6(data.shock, 0), 0, DEFECT_SHOCK_DAYS);
+    m.happyMod = num6(data.happyMod, 0);
+    m.popCap = clamp7(num6(data.popCap, 0), 0, POP_CAP_MAX);
+    m.defections = Math.max(0, num6(data.defections, 0));
+    const src = data.cities;
+    if (src && typeof src === "object") {
+      for (const [id, c] of Object.entries(src)) {
+        if (!c || typeof c !== "object") continue;
+        m.cities[id] = {
+          x: num6(c.x, 0),
+          y: num6(c.y, 0),
+          warnDay: num6(c.warnDay, -999),
+          demandDay: num6(c.demandDay, -999)
+        };
+      }
+    }
+    return m;
+  }
+  function territoryState(sim2) {
+    const world = sim2 && sim2.world || null;
+    const capX = num6(world && world.startX, 0);
+    const capY = num6(world && world.startY, 0);
+    const day = Math.round(num6(sim2 && sim2.day, 0));
+    const cls = routeClass({ techs: sim2 && sim2.techs, buildings: sim2 && sim2.buildings || [] });
+    const roadIdx = Math.max(0, ROAD_CLASSES.findIndex((c) => c.id === cls.id));
+    const roadEase = ROAD_CLASSES.length > 1 ? roadIdx / (ROAD_CLASSES.length - 1) : 0;
+    const pol = sim2 && sim2.politics && sim2.politics.state || null;
+    const gov = pol ? String(pol.gov || "chiefdom") : "chiefdom";
+    const stability = pol ? clamp7(num6(pol.stability, 60), 0, 100) : 60;
+    const govUnrest = pol ? clamp7(politicsMult(pol, "unrest"), 0.5, 2) : 1;
+    const govReach = GOV_REACH[gov] != null ? GOV_REACH[gov] : 1;
+    const reachFree = REACH_FREE * govReach * (1 + ROAD_REACH_GAIN * roadEase);
+    const borders = sim2 && sim2.sys && sim2.sys.borders || null;
+    let tiles = 0, reach = 0, farTiles = 0;
+    if (borders && borders.owners && borders.w) {
+      const W = borders.w, H = borders.h, owners = borders.owners;
+      let sum = 0;
+      for (let y = 0; y < H; y++) {
+        const dy = y - capY, dy2 = dy * dy, row = y * W;
+        for (let x = 0; x < W; x++) {
+          if (owners[row + x] !== OWNER_PLAYER) continue;
+          const dx = x - capX;
+          const d = Math.sqrt(dx * dx + dy2);
+          tiles++;
+          sum += d;
+          if (d > reachFree) farTiles++;
+        }
+      }
+      reach = tiles > 0 ? sum / tiles : 0;
+    } else if (borders) {
+      tiles = territoryTiles(borders, "player");
+    }
+    const stretch = clamp7((reach - reachFree) / STRETCH_SPAN, 0, 1);
+    const ectx = { day, world, capitalX: capX, capitalY: capY, techs: sim2 && sim2.techs };
+    const cities = [];
+    let corrWeight = 0, corrSum = 0, lostGold = 0, unrestSum = 0;
+    const st = sim2 && sim2.empire && sim2.empire.state || null;
+    for (const c of st && Array.isArray(st.cities) ? st.cities : []) {
+      const dist = Math.hypot(num6(c.x, 0) - capX, num6(c.y, 0) - capY);
+      const corr = corruption(dist, ectx);
+      const happy = clamp7(num6(c.happy, 50), 0, 100);
+      const pop = Math.max(0, num6(c.pop, 0));
+      const nominal = pop * PROD_PER_POP.gold * prodMult(c, "gold") * (happy < 35 ? 0.7 : 1);
+      const unrest = Math.max(0, num6(c.unrest, 0));
+      cities.push({
+        id: c.id,
+        name: c.name || "Безымянск",
+        x: num6(c.x, 0),
+        y: num6(c.y, 0),
+        pop,
+        spec: c.spec || null,
+        happy,
+        unrest,
+        dist,
+        corr,
+        lost: nominal * corr
+      });
+      corrWeight += Math.max(1, pop);
+      corrSum += corr * Math.max(1, pop);
+      lostGold += nominal * corr;
+      unrestSum += unrest;
+    }
+    const corrAvg = corrWeight > 0 ? corrSum / corrWeight : 0;
+    const corrPress = clamp7(corrAvg / CORR_MAX, 0, 1);
+    const corrBite = clamp7((corrPress - CORR_FREE_PRESS) / (1 - CORR_FREE_PRESS), 0, 1);
+    const rep = sim2 && sim2.empire && sim2.empire.lastReport || null;
+    const revoltedToday = rep && rep.day === day && Array.isArray(rep.revolted) ? rep.revolted : [];
+    return {
+      day,
+      capX,
+      capY,
+      tiles,
+      reach: round25(reach),
+      farTiles,
+      stretch: round32(stretch),
+      reachFree: round25(reachFree),
+      roadEase,
+      roadRu: cls.ru,
+      gov,
+      govReach,
+      govUnrest,
+      stability,
+      armyPower: Math.max(0, num6(sim2 && typeof sim2.armyPower === "function" ? sim2.armyPower() : 0, 0)),
+      cities,
+      corrAvg: round32(corrAvg),
+      corrPress: round32(corrPress),
+      corrBite: round32(corrBite),
+      lostGold: round25(lostGold),
+      unrestSum: round25(unrestSum),
+      revoltedToday,
+      factions: aliveFactions(sim2)
+    };
+  }
+  function territoryLandTaxMult(sim2) {
+    return landTaxMultOf(territoryState(sim2));
+  }
+  function landTaxMultOf(s) {
+    return round32(clamp7(1 - STRETCH_TAX * s.stretch, LAND_TAX_MIN, 1));
+  }
+  function popCapOf(s) {
+    return Math.min(POP_CAP_MAX, Math.floor(s.tiles / TILES_PER_HEAD));
+  }
+  function territoryPopCap(sim2) {
+    const m = sim2 && sim2.linkTerritory;
+    return m ? clamp7(Math.round(num6(m.popCap, 0)), 0, POP_CAP_MAX) : 0;
+  }
+  function territoryHappyMod(sim2) {
+    const m = sim2 && sim2.linkTerritory;
+    return m ? Math.round(num6(m.happyMod, 0)) : 0;
+  }
+  function secessionEta(city, s) {
+    const own = ownUnrestGrow(city);
+    const link = cityUnrestDelta(city, s);
+    const total = own + link;
+    if (total <= 1e-3) return null;
+    return Math.max(1, Math.ceil((UNREST_REVOLT - city.unrest) / total));
+  }
+  function ownUnrestGrow(city) {
+    if (city.happy >= UNREST_HAPPY) return -(city.spec === "military" ? 2 : 1);
+    let grow = (UNREST_HAPPY - city.happy) / UNREST_HAPPY * (0.5 + city.dist / 40);
+    if (city.spec === "military") grow *= 0.5;
+    return grow;
+  }
+  function cityUnrestDelta(city, s) {
+    const over = Math.max(0, city.dist - s.reachFree);
+    const distPress = clamp7(over / STRETCH_SPAN, 0, 1);
+    const garrison = clamp7(s.armyPower / GARRISON_FULL, 0, 1);
+    const grow = SEPAR_PER_DAY * distPress * (1 - GARRISON_HOLD * garrison);
+    const central = (s.stability - STAB_HOLD) / (100 - STAB_HOLD);
+    const panic = central < 0 ? PANIC_SEPAR * Math.min(1, -central) : 0;
+    const hold = central > 0 ? HOLD_PER_DAY * central : 0;
+    const d = (grow + panic) * s.govUnrest - hold;
+    return round25(clamp7(d, -UNREST_STEP_MAX, UNREST_STEP_MAX));
+  }
+  function nearestNeighbour(s, x, y) {
+    let best = null, bestD = Infinity;
+    for (const f of s.factions) {
+      for (const st of f.settlements) {
+        const d = Math.hypot(st.x - x, st.y - y);
+        if (d < bestD) {
+          bestD = d;
+          best = { fid: f.id, name: f.name, dist: round25(d) };
+        }
+      }
+    }
+    return best && bestD <= DEFECT_RANGE ? best : null;
+  }
+  function watchOf(s) {
+    const out = [];
+    for (const c of s.cities) {
+      const eta = secessionEta(c, s);
+      if (eta === null) continue;
+      const taker = nearestNeighbour(s, c.x, c.y);
+      out.push({
+        id: c.id,
+        name: c.name,
+        dist: Math.round(c.dist),
+        unrest: round25(c.unrest),
+        eta,
+        taker: taker ? taker.name : null,
+        takerFid: taker ? taker.fid : null,
+        advice: adviceFor(c, s)
+      });
+    }
+    out.sort((a, b) => a.eta - b.eta);
+    return out;
+  }
+  function adviceFor(city, s) {
+    const tips = [];
+    if (city.spec !== "military") tips.push("военная специализация вдвое гасит смуту");
+    if (s.armyPower < GARRISON_FULL) tips.push(`армия до ${GARRISON_FULL} очков ставит гарнизоны (сейчас ${Math.round(s.armyPower)})`);
+    if (s.stability < STAB_HOLD) tips.push(`стабильность выше ${STAB_HOLD} сама отнимает смуту (сейчас ${Math.round(s.stability)})`);
+    if (s.roadEase < 1) tips.push(`дороги приближают окраины (сейчас ${s.roadRu})`);
+    if (city.happy < UNREST_HAPPY) tips.push("караван с едой и трактир поднимут настроение города");
+    return tips;
+  }
+  function territoryLinks(sim2) {
+    const s = territoryState(sim2);
+    const prev = readMemory2(sim2);
+    const mem = { ...prev, cities: {} };
+    const events = [];
+    const sameDay = prev.day === s.day;
+    if (!sameDay) {
+      mem.day = s.day;
+      mem.shock = Math.max(0, num6(prev.shock, 0) - 1);
+    }
+    const parts = stabParts2(s, prev);
+    const mods = {
+      happy: 0,
+      stability: round25(parts.total),
+      stabilityShock: 0,
+      landTaxMult: landTaxMultOf(s),
+      popCap: popCapOf(s),
+      estates: estateShifts2(s),
+      cityUnrest: {},
+      // id -> сдвиг смуты
+      relations: {}
+      // fid -> сдвиг отношения к игроку
+    };
+    const flags = {
+      tiles: s.tiles,
+      reach: s.reach,
+      reachFree: s.reachFree,
+      stretch: s.stretch,
+      stage: stageOf3(s.stretch),
+      road: s.roadRu,
+      gov: s.gov,
+      corruptionLoss: s.lostGold,
+      demands: [],
+      watch: watchOf(s),
+      defected: [],
+      reasons: breakdownRows(s, parts),
+      memory: mem
+    };
+    for (const c of s.cities) {
+      const prevC = prev.cities && prev.cities[c.id] || {};
+      const memC = {
+        x: c.x,
+        y: c.y,
+        warnDay: num6(prevC.warnDay, -999),
+        demandDay: num6(prevC.demandDay, -999)
+      };
+      const d = cityUnrestDelta(c, s);
+      if (d !== 0 && !(d < 0 && c.unrest <= 0)) mods.cityUnrest[c.id] = d;
+      if (!sameDay && c.unrest >= AUTONOMY_UNREST && s.day - memC.demandDay >= DEMAND_COOLDOWN) {
+        memC.demandDay = s.day;
+        const taker = nearestNeighbour(s, c.x, c.y);
+        flags.demands.push({ id: c.id, name: c.name, dist: Math.round(c.dist), unrest: round25(c.unrest) });
+        events.push({
+          text: `⚖ ${c.name} требует автономии: ${Math.round(c.dist)} клеток до столицы, ${Math.round(c.corr * 100)}% дани оседает у наместника` + (taker ? `, а ${taker.name} рядом — в ${Math.round(taker.dist)} клетках.` : "."),
+          type: "warn"
+        });
+      }
+      if (!sameDay) {
+        const eta = secessionEta(c, s);
+        if (eta !== null && eta <= WARN_ETA && s.day - memC.warnDay >= WARN_COOLDOWN) {
+          memC.warnDay = s.day;
+          const taker = nearestNeighbour(s, c.x, c.y);
+          const tips = adviceFor(c, s);
+          events.push({
+            text: `⚠ ${c.name} отложится примерно через ${eta} ${plural3(eta, "день", "дня", "дней")}` + (taker ? ` и присягнёт ${taker.name}.` : " и станет вольным городом.") + (tips.length ? ` Что делать: ${tips.join(", ")}.` : ""),
+            type: "bad"
+          });
+        }
+      }
+      mem.cities[c.id] = memC;
+    }
+    if (!sameDay && s.revoltedToday.length) {
+      let shock = 0;
+      for (const r of s.revoltedToday) {
+        const known = prev.cities && prev.cities[r.id] || null;
+        const x = known ? known.x : s.capX, y = known ? known.y : s.capY;
+        const pop = Math.max(0, num6(r.pop, 0));
+        const taker = known ? nearestNeighbour(s, x, y) : null;
+        const gained = Math.min(DEFECT_P_CAP, pop * DEFECT_P_PER_POP);
+        flags.defected.push({
+          id: r.id,
+          name: r.name || "город",
+          pop,
+          x,
+          y,
+          fid: taker ? taker.fid : null,
+          factionName: taker ? taker.name : null,
+          gainP: round25(gained),
+          dist: Math.round(Math.hypot(x - s.capX, y - s.capY))
+        });
+        shock += taker ? DEFECT_STAB_SHOCK : FREE_CITY_STAB_SHOCK;
+        mem.defections++;
+        mem.shock = DEFECT_SHOCK_DAYS;
+        delete mem.cities[r.id];
+        if (taker) {
+          mods.relations[taker.fid] = (mods.relations[taker.fid] || 0) + DEFECT_REL_TAKER;
+          for (const f of s.factions) {
+            if (f.id === taker.fid) continue;
+            mods.relations[f.id] = (mods.relations[f.id] || 0) + DEFECT_REL_OTHERS;
+          }
+          events.push({
+            text: `🏴 ${r.name} присягнул ${taker.name}: ${pop} ${plural3(pop, "житель", "жителя", "жителей")} и земли ушли соседу. Остальные соседи это запомнили.`,
+            type: "bad"
+          });
+        } else {
+          for (const f of s.factions) {
+            mods.relations[f.id] = (mods.relations[f.id] || 0) + DEFECT_REL_OTHERS;
+          }
+          events.push({
+            text: `🏴 ${r.name} объявил себя вольным городом: соседей рядом нет, но и власти столицы больше нет.`,
+            type: "bad"
+          });
+        }
+      }
+      mods.stabilityShock = Math.max(DEFECT_SHOCK_CAP, shock);
+    }
+    mods.happy = mem.shock > 0 ? -Math.round(DEFECT_HAPPY * mem.shock / DEFECT_SHOCK_DAYS) : 0;
+    if (!sameDay && flags.stage !== prev.stage) {
+      mem.stage = flags.stage;
+      if (flags.stage === "torn") {
+        events.push({
+          text: `‼ Держава расползлась: своя земля лежит в среднем в ${Math.round(s.reach)} клетках от столицы (рука ${s.roadRu.toLowerCase()} и ${govRu(s.gov)} достаёт до ${Math.round(s.reachFree)}). До казны доходит ${Math.round(landTaxMultOf(s) * 100)}% земельных податей.`,
+          type: "bad"
+        });
+      } else if (flags.stage === "thin") {
+        events.push({
+          text: `⚠ Держава растянута: ${s.farTiles} ${plural3(s.farTiles, "клетка лежит", "клетки лежат", "клеток лежат")} дальше ${Math.round(s.reachFree)} — до них воля столицы доходит с потерями. Дороги и реформа их приблизят.`,
+          type: "warn"
+        });
+      } else {
+        events.push({ text: "Держава снова собрана в кулак: окраины больше не тянут казну.", type: "good" });
+      }
+    } else if (!sameDay) {
+      mem.stage = flags.stage;
+    }
+    mem.happyMod = mods.happy;
+    mem.popCap = mods.popCap;
+    return { mods, events, flags };
+  }
+  function stabParts2(s, mem) {
+    const out = { corr: 0, separ: 0, demands: 0, raw: 0, total: 0 };
+    if (s.corrBite > 0) out.corr = -CORR_STAB * s.corrBite;
+    if (s.cities.length && s.unrestSum > 0) {
+      const press = clamp7(s.unrestSum / (s.cities.length * UNREST_REVOLT), 0, 1);
+      out.separ = -SEPAR_STAB * press;
+    }
+    const demanding = s.cities.filter((c) => c.unrest >= AUTONOMY_UNREST).length;
+    if (demanding > 0) out.demands = -Math.min(DEMAND_STAB_CAP, DEMAND_STAB * demanding);
+    out.raw = out.corr + out.separ + out.demands;
+    out.total = Math.max(STAB_FLOOR, out.raw);
+    return out;
+  }
+  function estateShifts2(s) {
+    const out = {};
+    for (const fid of Object.keys(SOCIAL_FACTIONS)) {
+      const d = (CORR_ESTATE[fid] || 0) * s.corrBite;
+      const capped = clamp7(d, -ESTATE_STEP_CAP, ESTATE_STEP_CAP);
+      out[fid] = Math.abs(capped) < 0.01 ? 0 : round25(capped);
+    }
+    return out;
+  }
+  function breakdownRows(s, parts) {
+    const rows = [];
+    if (parts.corr < 0) {
+      rows.push({ ru: `Наместники крадут ${Math.round(s.corrAvg * 100)}% дани (${f12(s.lostGold)}🪙/день)`, v: round25(parts.corr) });
+    }
+    if (parts.separ < 0) rows.push({ ru: `Смута в провинциях: ${f12(s.unrestSum)} из ${s.cities.length * UNREST_REVOLT}`, v: round25(parts.separ) });
+    if (parts.demands < 0) {
+      const n = s.cities.filter((c) => c.unrest >= AUTONOMY_UNREST).length;
+      rows.push({ ru: `Требования автономии: ${n} ${plural3(n, "город", "города", "городов")}`, v: round25(parts.demands) });
+    }
+    if (parts.raw < STAB_FLOOR) {
+      rows.push({ ru: "Предел: глубже за сутки не проседает", v: round25(STAB_FLOOR - parts.raw) });
+    }
+    return rows;
+  }
+  function stageOf3(stretch) {
+    if (stretch >= 0.6) return "torn";
+    if (stretch >= 0.15) return "thin";
+    return "ok";
+  }
+  function aliveFactions(sim2) {
+    const list = sim2 && sim2.factions || [];
+    const out = [];
+    if (!Array.isArray(list)) return out;
+    for (const f of list) {
+      if (!f || f.alive === false) continue;
+      const settlements = Array.isArray(f.settlements) ? f.settlements.filter((s) => s && Number.isFinite(s.x)) : [];
+      if (!settlements.length) continue;
+      out.push({ id: f.id, name: f.def && f.def.name || f.name || f.id, settlements });
+    }
+    return out;
+  }
+  function govRu(gov) {
+    const map = {
+      chiefdom: "вождество",
+      monarchy: "монархия",
+      republic: "республика",
+      empire: "империя",
+      federation: "федерация"
+    };
+    return map[gov] || gov;
+  }
+  function readMemory2(sim2) {
+    const m = sim2 && sim2.linkTerritory;
+    if (!m || typeof m !== "object") return createTerritoryMemory();
+    return { ...createTerritoryMemory(), ...m, cities: { ...m.cities || {} } };
+  }
+  function clamp7(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function num6(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round25(v) {
+    return Math.round(v * 100) / 100;
+  }
+  function round32(v) {
+    return Math.round(v * 1e3) / 1e3;
+  }
+  function f12(v) {
+    return (Math.round(v * 10) / 10).toFixed(1);
+  }
+  function plural3(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+
+  // app/src/core/systems/link_war.js
+  var ESTATES2 = Object.keys(SOCIAL_FACTIONS);
+  var LOSS_MIL_SPAN = 6;
+  var LOSS_SCALE_MEN = 10;
+  var GRIEF_PER_MAN = 0.35;
+  var GRIEF_MAX = 6;
+  var GRIEF_DECAY = 0.12;
+  var WIN_MIL = 1.2;
+  var WIN_STAB = 0.15;
+  var WIN_PRIDE = 1.5;
+  var DEFEAT_MIL = -2;
+  var DEFEAT_STAB = -0.3;
+  var DEFEAT_GRIEF = 1.5;
+  var CAPTURE_MIL = 4;
+  var CAPTURE_STAB = 0.5;
+  var CAPTURE_PRIDE = 4;
+  var CAPTURE_NOBLES = 0.5;
+  var BANNER_MIL = 0.6;
+  var BANNER_PRIDE = 1.5;
+  var WIPED_MIL = -2;
+  var WIPED_STAB = -0.25;
+  var BEARER_MIL = -1;
+  var BEARER_GRIEF = 1;
+  var DEFEAT_NOBLES = -0.3;
+  var PRIDE_MAX = 6;
+  var PRIDE_DECAY = 0.1;
+  var MIL_DAY_UP = 5;
+  var MIL_DAY_DOWN = -6;
+  var WEAR_PER_DAY = 0.5;
+  var WEAR_PER_EXTRA_WAR = 0.25;
+  var WEAR_PER_LOSS = 0.08;
+  var WEAR_LOSS_MAX = 2;
+  var WEAR_PER_DEFEAT = 3;
+  var WEAR_WIN_RELIEF = 4;
+  var WEAR_CAPTURE_RELIEF = 8;
+  var WEAR_DECAY = 1.2;
+  var WEAR_MAX = 100;
+  var WEAR_ACHE = 35;
+  var WEAR_HAPPY = -6;
+  var WEAR_STAB = -0.4;
+  var WEAR_COMMONS = -0.15;
+  var WEAR_MIL = -0.05;
+  var WEAR_MARKS = [35, 60, 85];
+  var DESERT_AFTER = 4;
+  var DESERT_RATE3 = 0.025;
+  var DESERT_RATE_MAX = 0.12;
+  var DESERT_HOME_MULT = 0.5;
+  var MORALE_ARREARS = -1.2;
+  var MORALE_ARREARS_MAX = -6;
+  var MORALE_PAID = 1;
+  var MULT_ARREARS = -0.02;
+  var MULT_ARREARS_MAX = -0.2;
+  var MULT_LOVE_MAX = 0.1;
+  var MULT_MIN = 0.8;
+  var MULT_MAX = 1.1;
+  var ORDER_STAB_MAX = 0.25;
+  var ORDER_SHARE = 0.1;
+  var ORDER_MIN_MEN = 6;
+  var ORDER_AFTER = 3;
+  var BORED_AFTER = 40;
+  var BORED_RAMP = 60;
+  var BORED_RATE = -0.09;
+  var BORED_FLOOR = 35;
+  var RESPITE_ARREARS = 5;
+  var RESPITE_MEN_SHARE = 0.05;
+  var RESPITE_MEN_MIN = 2;
+  var RESPITE_GOLD = 25;
+  var RESPITE_FOOD = 40;
+  var RESPITE_POOR_MEN = 1;
+  var RESPITE_DAYS = 18;
+  var RESPITE_CD = 40;
+  var STAB_WORST2 = -1.2;
+  var STAB_BEST = 0.6;
+  var HAPPY_WORST2 = -10;
+  var HAPPY_BEST = 6;
+  var COMMONS_DAY = [-0.3, 0.1];
+  var r32 = (v) => Math.round(v * 1e3) / 1e3;
+  var zeroApproval2 = () => ({ nobles: 0, clergy: 0, merchants: 0, commons: 0, military: 0 });
+  function createWarMemory() {
+    return {
+      v: 1,
+      day: -1,
+      // день, за который снят срез; -1 = среза ещё нет
+      total: 0,
+      // бойцы: в отрядах на карте + резерв в поселении
+      battles: 0,
+      // счётчик боёв armyState (для контроля)
+      ordered: 0,
+      // сколько человек МЫ вчера отправили дезертировать
+      warDays: 0,
+      peaceDays: 0,
+      weariness: 0,
+      grief: 0,
+      pride: 0,
+      respiteDay: -999,
+      wearMark: 0,
+      // последняя названная игроку отметка усталости
+      boredSaid: -999,
+      orderSaid: -999
+    };
+  }
+  function restoreWarMemory(data) {
+    const M = createWarMemory();
+    if (!data || typeof data !== "object") return M;
+    const n = (v, d) => typeof v === "number" && isFinite(v) ? v : d;
+    M.day = n(data.day, -1);
+    M.total = Math.max(0, n(data.total, 0));
+    M.battles = Math.max(0, n(data.battles, 0));
+    M.ordered = Math.max(0, n(data.ordered, 0));
+    M.warDays = Math.max(0, n(data.warDays, 0));
+    M.peaceDays = Math.max(0, n(data.peaceDays, 0));
+    M.weariness = clamp2(n(data.weariness, 0), 0, WEAR_MAX);
+    M.grief = clamp2(n(data.grief, 0), 0, GRIEF_MAX);
+    M.pride = clamp2(n(data.pride, 0), 0, PRIDE_MAX);
+    M.respiteDay = n(data.respiteDay, -999);
+    M.wearMark = Math.max(0, n(data.wearMark, 0));
+    M.boredSaid = n(data.boredSaid, -999);
+    M.orderSaid = n(data.orderSaid, -999);
+    return M;
+  }
+  function pickEco2(sim2) {
+    if (!sim2) return null;
+    return sim2.industry && sim2.industry.eco || sim2.economy || null;
+  }
+  function arrearsOf(sim2) {
+    const e = pickEco2(sim2);
+    return e && typeof e.arrears === "number" ? Math.max(0, e.arrears) : 0;
+  }
+  function polState(sim2) {
+    return sim2 && sim2.politics && sim2.politics.state || null;
+  }
+  function playerSquads(sim2) {
+    if (!sim2 || !sim2.armyState || !Array.isArray(sim2.armyState.squads)) return [];
+    return squadsOf(sim2.armyState, "player").filter((s) => squadSize(s) > 0);
+  }
+  function fieldMen2(sim2) {
+    let n = 0;
+    for (const sq of playerSquads(sim2)) n += squadSize(sq);
+    return n;
+  }
+  function reserveMen(sim2) {
+    return sim2 && sim2.army ? Math.max(0, Math.floor(sim2.army.soldiers || 0)) : 0;
+  }
+  function warCount(sim2) {
+    return Array.isArray(sim2 && sim2.wars) ? sim2.wars.length : 0;
+  }
+  function classifyDay(events, hasField) {
+    const out = { victories: 0, defeats: 0, captures: 0, banners: 0, wiped: 0, bearersLost: 0, cut: 0, deserted: 0 };
+    for (const e of events || []) {
+      if (!e || typeof e.text !== "string") continue;
+      const t = e.text, k = e.type;
+      if (t.startsWith("⚔")) {
+        if (!hasField) continue;
+        if (k === "good") out.victories++;
+        else if (k === "bad") out.defeats++;
+      } else if (t.startsWith("🚩 Поселение")) {
+        if (k === "good") out.captures++;
+      } else if (t.startsWith("🚩 Знаменосец")) {
+        if (k === "good") out.banners++;
+      } else if (t.startsWith("☠")) {
+        if (k === "bad") out.wiped++;
+      } else if (t.startsWith("🕯")) {
+        if (k === "bad") out.bearersLost++;
+      } else if (t.startsWith("🪢")) {
+        if (k === "warn") out.cut++;
+      } else if (t.startsWith("🏃")) {
+        if (k === "bad") out.deserted++;
+      }
+    }
+    return out;
+  }
+  function wearQ(weariness) {
+    return clamp2((weariness - WEAR_ACHE) / (WEAR_MAX - WEAR_ACHE), 0, 1);
+  }
+  function desertRate(arrears) {
+    if (arrears < DESERT_AFTER) return 0;
+    return Math.min(DESERT_RATE_MAX, DESERT_RATE3 * (arrears - DESERT_AFTER + 1));
+  }
+  function armyMultOf(arrears, milApproval) {
+    const rot = Math.max(MULT_ARREARS_MAX, MULT_ARREARS * Math.max(0, arrears));
+    const love = MULT_LOVE_MAX * clamp2(((milApproval == null ? 50 : milApproval) - FACTION_HAPPY) / (100 - FACTION_HAPPY), 0, 1);
+    return clamp2(r32(1 + rot + love), MULT_MIN, MULT_MAX);
+  }
+  function lossHit(loss, prevTotal) {
+    if (loss <= 0 || prevTotal <= 0) return 0;
+    const share = clamp2(loss / prevTotal, 0, 1);
+    const weight = Math.min(1, prevTotal / LOSS_SCALE_MEN);
+    return -LOSS_MIL_SPAN * share * weight;
+  }
+  function desertPlan(squads, total) {
+    const alive = [...squads].filter((s) => squadSize(s) > 0).sort((a, b) => squadSize(b) - squadSize(a) || a.id - b.id);
+    const men = alive.reduce((n, s) => n + squadSize(s), 0);
+    if (!men || total <= 0) return [];
+    let left = Math.min(Math.floor(total), men);
+    const plan = alive.map((s) => ({ id: s.id, name: s.name, size: squadSize(s), take: 0 }));
+    for (const p of plan) {
+      if (left <= 0) break;
+      const take2 = Math.min(p.size, Math.floor(Math.min(total, men) * p.size / men));
+      p.take = take2;
+      left -= take2;
+    }
+    for (const p of plan) {
+      if (left <= 0) break;
+      const add = Math.min(p.size - p.take, left);
+      p.take += add;
+      left -= add;
+    }
+    return plan.filter((p) => p.take > 0);
+  }
+  function warLinks(sim2, memo) {
+    const M = restoreWarMemory(memo);
+    const out = {
+      mods: { approval: zeroApproval2(), stability: 0, happy: 0, morale: 0, armyMult: 1 },
+      reasons: { approval: [], stability: [], happy: [], morale: [] },
+      events: [],
+      flags: {
+        quiet: true,
+        losses: 0,
+        victories: 0,
+        defeats: 0,
+        captures: 0,
+        weariness: M.weariness,
+        warDays: M.warDays,
+        peaceDays: M.peaceDays,
+        arrears: 0,
+        desert: { field: 0, reserve: 0, squads: [] },
+        raidDelay: 0,
+        bored: false,
+        order: false,
+        exhausted: false,
+        advice: []
+      },
+      memo: M
+    };
+    if (!sim2 || !sim2.armyState) return out;
+    const day = Math.max(0, Math.round(sim2.day || 0));
+    const gap = M.day < 0 ? -1 : day - M.day;
+    if (gap === 0 || gap < 0 && M.day >= 0) return out;
+    const N = { ...M, day };
+    const squads = playerSquads(sim2);
+    const field = fieldMen2(sim2);
+    const reserve = reserveMen(sim2);
+    const total = field + reserve;
+    const pop = sim2.villagers ? sim2.villagers.length : 0;
+    const wars = warCount(sim2);
+    const arrears = arrearsOf(sim2);
+    const st = polState(sim2);
+    const mil = st && typeof st.factions.military === "number" ? st.factions.military : 50;
+    out.flags.arrears = arrears;
+    const A = out.mods.approval;
+    const addA = (fid, v, ru) => {
+      if (Math.abs(v) > 5e-4) {
+        A[fid] += v;
+        out.reasons.approval.push({ fid, ru, v: r32(v) });
+      }
+    };
+    const addS = (v, ru) => {
+      if (Math.abs(v) > 5e-4) {
+        out.mods.stability += v;
+        out.reasons.stability.push({ ru, v: r32(v) });
+      }
+    };
+    const fresh = gap === 1;
+    let loss = 0;
+    if (fresh) loss = Math.max(0, M.total - total - M.ordered);
+    out.flags.losses = loss;
+    const D = classifyDay(sim2.war && sim2.war.events, field > 0 || M.total > reserve);
+    if (!fresh) {
+      D.victories = 0;
+      D.defeats = 0;
+      D.captures = 0;
+      D.banners = 0;
+      D.wiped = 0;
+      D.bearersLost = 0;
+    }
+    out.flags.victories = D.victories;
+    out.flags.defeats = D.defeats;
+    out.flags.captures = D.captures;
+    if (loss > 0) {
+      const v = lossHit(loss, Math.max(1, M.total));
+      addA("military", v, `Не вернулись из строя: ${loss} ${plural4(loss, "боец", "бойца", "бойцов")}`);
+      if (loss >= Math.max(4, M.total * 0.25)) addS(-0.3, "Войско понесло тяжёлые потери");
+      N.grief = Math.min(GRIEF_MAX, N.grief + loss * GRIEF_PER_MAN);
+    }
+    if (D.victories) {
+      addA("military", WIN_MIL * D.victories, `Победа в поле ×${D.victories}`);
+      addS(WIN_STAB * D.victories, "Наши войска победили");
+      N.pride = Math.min(PRIDE_MAX, N.pride + WIN_PRIDE * D.victories);
+    }
+    if (D.defeats) {
+      addA("military", DEFEAT_MIL * D.defeats, `Разбиты в поле ×${D.defeats}`);
+      addA("nobles", DEFEAT_NOBLES * D.defeats, "Поражение позорит державу");
+      addS(DEFEAT_STAB * D.defeats, "Наши войска разбиты");
+      N.grief = Math.min(GRIEF_MAX, N.grief + DEFEAT_GRIEF * D.defeats);
+    }
+    if (D.captures) {
+      addA("military", CAPTURE_MIL * D.captures, `Взят чужой город ×${D.captures}`);
+      addA("nobles", CAPTURE_NOBLES * D.captures, "Слава державе");
+      addS(CAPTURE_STAB * D.captures, "Взят чужой город");
+      N.pride = Math.min(PRIDE_MAX, N.pride + CAPTURE_PRIDE * D.captures);
+    }
+    if (D.banners) {
+      addA("military", BANNER_MIL * D.banners, "Знамя победы поднято");
+      N.pride = Math.min(PRIDE_MAX, N.pride + BANNER_PRIDE * D.banners);
+    }
+    if (D.wiped) {
+      addA("military", WIPED_MIL * D.wiped, `Отряд погиб целиком ×${D.wiped}`);
+      addS(WIPED_STAB * D.wiped, "Отряд перестал существовать");
+    }
+    if (D.bearersLost) {
+      addA("military", BEARER_MIL * D.bearersLost, "Знаменосец пал");
+      N.grief = Math.min(GRIEF_MAX, N.grief + BEARER_GRIEF * D.bearersLost);
+    }
+    if (wars > 0) {
+      N.warDays = M.warDays + 1;
+      N.peaceDays = 0;
+    } else {
+      N.peaceDays = M.peaceDays + 1;
+      N.warDays = 0;
+    }
+    let wear = M.weariness;
+    if (wars > 0) {
+      wear += WEAR_PER_DAY + WEAR_PER_EXTRA_WAR * Math.min(3, wars - 1);
+      wear += Math.min(WEAR_LOSS_MAX, loss * WEAR_PER_LOSS) + D.defeats * WEAR_PER_DEFEAT;
+    } else {
+      wear -= WEAR_DECAY;
+    }
+    wear -= D.victories * WEAR_WIN_RELIEF + D.captures * WEAR_CAPTURE_RELIEF;
+    N.weariness = clamp2(wear, 0, WEAR_MAX);
+    out.flags.weariness = r32(N.weariness);
+    out.flags.warDays = N.warDays;
+    out.flags.peaceDays = N.peaceDays;
+    const wq = wearQ(N.weariness);
+    if (wq > 0) {
+      addA("commons", WEAR_COMMONS * wq, `Усталость от войны (${Math.round(N.weariness)})`);
+      addA("military", WEAR_MIL * wq, "Войско тоже устало");
+      addS(WEAR_STAB * wq, `Война идёт ${N.warDays} ${plural4(N.warDays, "день", "дня", "дней")}`);
+      out.flags.exhausted = wq >= 0.6;
+    }
+    let morale = 0;
+    if (arrears > 0) {
+      const m = Math.max(MORALE_ARREARS_MAX, MORALE_ARREARS * arrears);
+      morale += m;
+      out.reasons.morale.push({ ru: `Жалование задержано ${arrears} ${plural4(arrears, "день", "дня", "дней")}`, v: r32(m) });
+    } else if (mil >= FACTION_HAPPY && (field > 0 || reserve > 0)) {
+      morale += MORALE_PAID;
+      out.reasons.morale.push({ ru: "Жалование вовремя, войско в чести", v: MORALE_PAID });
+    }
+    out.mods.morale = r32(morale);
+    const rate = desertRate(arrears);
+    if (rate > 0 && total > 0) {
+      const goField = Math.floor(field * rate);
+      const goHome = Math.floor(reserve * rate * DESERT_HOME_MULT);
+      const forced = arrears >= DESERT_AFTER + 4 && goField + goHome === 0 ? 1 : 0;
+      const f = goField + (forced && field > 0 ? 1 : 0);
+      const h = goHome + (forced && field === 0 && reserve > 0 ? 1 : 0);
+      out.flags.desert.field = f;
+      out.flags.desert.reserve = h;
+      out.flags.desert.squads = desertPlan(squads, f);
+      if (f + h > 0) {
+        out.events.push({
+          text: `🏃 Жалование не платят ${arrears} ${plural4(arrears, "день", "дня", "дней")}: из войска ушли ${f + h} ${plural4(f + h, "человек", "человека", "человек")}. Меньше ртов — меньше расход казны.`,
+          type: "bad"
+        });
+        out.flags.advice.push("Распустите отряд дома — он вернётся в резерв, а казна перестанет платить за поле.");
+      }
+    }
+    N.ordered = out.flags.desert.field + out.flags.desert.reserve;
+    out.mods.armyMult = armyMultOf(arrears, mil);
+    if (wars === 0 && arrears === 0 && N.peaceDays >= ORDER_AFTER && total >= ORDER_MIN_MEN) {
+      const need = Math.max(ORDER_MIN_MEN, pop * ORDER_SHARE);
+      const strength = clamp2(total / need, 0, 1);
+      addS(ORDER_STAB_MAX * strength, `Гарнизон держит порядок (${total} ${plural4(total, "боец", "бойца", "бойцов")})`);
+      out.flags.order = true;
+      if (day - M.orderSaid >= 30) {
+        N.orderSaid = day;
+        out.events.push({ text: `🛡 Войско при деле и при жаловании: улицы спокойны, порядок держится сам.`, type: "good" });
+      }
+    }
+    if (wars === 0 && N.peaceDays > BORED_AFTER && mil > BORED_FLOOR) {
+      const bq = clamp2((N.peaceDays - BORED_AFTER) / BORED_RAMP, 0, 1);
+      const size = 0.6 + 0.4 * clamp2(total / 10, 0, 1);
+      addA("military", BORED_RATE * bq * size, `Мир идёт ${N.peaceDays} ${plural4(N.peaceDays, "день", "дня", "дней")} — войску нечем заняться`);
+      out.flags.bored = true;
+      if (bq >= 0.5 && day - M.boredSaid >= 30) {
+        N.boredSaid = day;
+        out.events.push({
+          text: "Военные ропщут: «Ржавеют мечи, беднеет дружина». Долгий мир их не радует.",
+          type: "warn"
+        });
+      }
+    }
+    const raidsOn = sim2.raids && !sim2.raids.off && (sim2.eraIndex || 0) >= 2;
+    const beggared = arrears >= RESPITE_ARREARS && total <= Math.max(RESPITE_MEN_MIN, Math.floor(pop * RESPITE_MEN_SHARE));
+    const gold = sim2.res ? sim2.res.gold || 0 : 0;
+    const food = sim2.res ? sim2.res.food || 0 : 0;
+    const nothingToTake = total <= RESPITE_POOR_MEN && gold < RESPITE_GOLD && food < RESPITE_FOOD;
+    if (raidsOn && (beggared || nothingToTake) && day - M.respiteDay >= RESPITE_CD && (sim2.raids.timer || 0) > 0) {
+      N.respiteDay = day;
+      out.flags.raidDelay = RESPITE_DAYS;
+      out.events.push({
+        text: `🏕 Соседи видят разорение: в пустой казне брать нечего, войска нет и грабить некого. Набег откладывается на ${RESPITE_DAYS} дн.`,
+        type: "good"
+      });
+      out.flags.advice.push("Передышка дана не навсегда: соберите золото и людей, пока набег отложен.");
+    }
+    N.grief = Math.max(0, N.grief * (1 - GRIEF_DECAY));
+    N.pride = Math.max(0, N.pride * (1 - PRIDE_DECAY));
+    let happy = -N.grief + N.pride + WEAR_HAPPY * wq;
+    if (N.grief > 0.5) out.reasons.happy.push({ ru: "Горе по павшим", v: r32(-N.grief) });
+    if (N.pride > 0.5) out.reasons.happy.push({ ru: "Гордость за победы", v: r32(N.pride) });
+    if (wq > 0) out.reasons.happy.push({ ru: "Усталость от войны", v: r32(WEAR_HAPPY * wq) });
+    out.mods.happy = Math.round(clamp2(happy, HAPPY_WORST2, HAPPY_BEST));
+    A.military = r32(clamp2(A.military, MIL_DAY_DOWN, MIL_DAY_UP));
+    A.commons = r32(clamp2(A.commons, COMMONS_DAY[0], COMMONS_DAY[1]));
+    A.nobles = r32(clamp2(A.nobles, -2, 2));
+    out.mods.stability = r32(clamp2(out.mods.stability, STAB_WORST2, STAB_BEST));
+    if (loss >= 3 || D.wiped) {
+      out.events.push({
+        text: `⚔ Потери: ${loss} ${plural4(loss, "боец", "бойца", "бойцов")} не вернулись. Военное сословие мрачнеет, в домах траур.`,
+        type: "bad"
+      });
+    }
+    if (D.captures) {
+      out.events.push({ text: "Взят чужой город: войско в славе, город ликует, усталость от войны отступила.", type: "good" });
+    } else if (D.victories && !D.defeats) {
+      out.events.push({ text: "Победа в поле: военные довольны, а долгая война стала чуть легче.", type: "good" });
+    }
+    const mark = WEAR_MARKS.filter((m) => N.weariness >= m).pop() || 0;
+    if (mark > N.wearMark) {
+      N.wearMark = mark;
+      out.events.push({ text: wearText(mark, N.warDays), type: mark >= 60 ? "bad" : "warn" });
+    } else if (mark < N.wearMark) {
+      N.wearMark = mark;
+    }
+    if (out.flags.exhausted) {
+      out.flags.advice.push("Мир или победа — два способа снять усталость от войны. Она тает по 1.2 в день без войн.");
+    }
+    out.flags.quiet = out.events.length === 0 && out.mods.stability === 0 && out.mods.happy === 0 && out.mods.morale === 0 && out.mods.armyMult === 1 && !out.flags.desert.field && !out.flags.desert.reserve && ESTATES2.every((f) => A[f] === 0);
+    N.total = total;
+    N.battles = sim2.armyState.battles || 0;
+    out.memo = N;
+    return out;
+  }
+  function wearText(mark, warDays) {
+    if (mark >= 85) return `Страна изнемогает: война идёт ${warDays} ${plural4(warDays, "день", "дня", "дней")}, в городе ропот, на площадях кричат о мире.`;
+    if (mark >= 60) return `Война всем надоела: ${warDays} ${plural4(warDays, "день", "дня", "дней")} без мира. Простолюдины ропщут, порядок шатается.`;
+    return "Война затянулась: в городе начинают уставать от поборов и похорон.";
+  }
+  function plural4(n, one, few, many) {
+    const a = Math.abs(Math.round(n)) % 100;
+    if (a > 10 && a < 20) return many;
+    const b = a % 10;
+    if (b === 1) return one;
+    if (b >= 2 && b <= 4) return few;
+    return many;
+  }
+
   // app/src/core/systems/integrate.js
   function installSystems(sim2) {
     sim2.sys = {
@@ -11363,9 +12337,11 @@
     install(sim2);
     installPolitics(sim2);
     installEmpire(sim2);
+    sim2.linkWar = createWarMemory();
     sim2.linkSurvival = createSurvivalMemory();
     sim2.sys.winterReport = null;
     sim2.sys.borderStats = null;
+    sim2.linkTerritory = createTerritoryMemory();
   }
   function systemsNewDay(sim2) {
     if (!sim2.sys) return;
@@ -11378,6 +12354,8 @@
     empireNewDay(sim2);
     applyEconomyLinks(sim2);
     applySurvivalLinks(sim2);
+    applyTerritoryLinks(sim2);
+    applyWarLinks(sim2);
   }
   function systemsFactions(sim2) {
     if (!sim2.sys || !sim2.sys.civ) return false;
@@ -11449,11 +12427,14 @@
     });
     if (changed || !s.borderStats) s.borderStats = territoryStats(s.borders);
     const tax = landTaxPerDay(s.borders, "player", { techs: sim2.techs });
-    if (tax > 0) sim2.res.gold += tax * sim2.globalMult("gold");
+    if (tax > 0) sim2.res.gold += tax * sim2.globalMult("gold") * territoryLandTaxMult(sim2);
   }
   function systemsHappyMod(sim2) {
     if (!sim2.sys) return 0;
-    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2);
+    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0);
+  }
+  function systemsPopCapMod(sim2) {
+    return sim2.linkTerritory ? territoryPopCap(sim2) : 0;
   }
   function systemsWorkMult(sim2) {
     if (!sim2.sys) return 1;
@@ -11472,7 +12453,9 @@
       war: serialize2(sim2),
       pol: politicsSerialize(sim2),
       emp: empireSerialize(sim2),
-      link: sim2.linkSurvival || null
+      link: sim2.linkSurvival || null,
+      terr: sim2.linkTerritory || null,
+      linkWar: sim2.linkWar || null
     };
   }
   function systemsRestore(sim2, data) {
@@ -11486,6 +12469,8 @@
     if (data.pol) politicsRestore(sim2, data.pol);
     if (data.emp) empireRestore(sim2, data.emp);
     sim2.linkSurvival = restoreSurvivalMemory(data.link);
+    sim2.linkTerritory = restoreTerritoryMemory(data.terr);
+    sim2.linkWar = restoreWarMemory(data.linkWar);
   }
   function applyEconomyLinks(sim2) {
     if (!sim2.politics || !sim2.industry) return null;
@@ -11504,6 +12489,88 @@
     for (const e of L.events) sim2.addLog(e.text, e.type === "good" ? "info" : e.type);
     if (L.flags.defaultToday) sim2.addChronicle(`Казна объявила дефолт (день ${sim2.day}).`);
     return L;
+  }
+  function applyWarLinks(sim2) {
+    if (!sim2.war || !sim2.armyState) return null;
+    const L = warLinks(sim2, sim2.linkWar);
+    sim2.linkWar = L.memo;
+    sim2.sys.warLinks = L;
+    const P = sim2.politics ? sim2.politics.state : null;
+    if (P) {
+      for (const fid of Object.keys(P.factions)) {
+        P.factions[fid] = Math.max(0, Math.min(100, P.factions[fid] + (L.mods.approval[fid] || 0)));
+      }
+      if (L.flags.bored) P.factions.military = Math.max(BORED_FLOOR, P.factions.military);
+      P.stability = Math.max(0, Math.min(100, P.stability + L.mods.stability));
+    }
+    if (L.mods.morale !== 0) {
+      for (const sq of playerSquads(sim2)) {
+        sq.morale = Math.max(0, Math.min(100, (sq.morale ?? 100) + L.mods.morale));
+      }
+    }
+    if (L.mods.armyMult !== 1) {
+      for (const sq of playerSquads(sim2)) sq.mult = (sq.mult || 1) * L.mods.armyMult;
+    }
+    for (const p of L.flags.desert.squads) {
+      const sq = sim2.armyState.squads.find((s) => s.id === p.id);
+      if (!sq) continue;
+      let left = p.take;
+      for (const [uid, n] of Object.entries(sq.units)) {
+        if (left <= 0) break;
+        const d = Math.min(n, left);
+        left -= d;
+        if (n - d > 0) sq.units[uid] = n - d;
+        else delete sq.units[uid];
+      }
+    }
+    sim2.armyState.squads = sim2.armyState.squads.filter((s) => {
+      const alive = Object.values(s.units || {}).some((n) => n > 0) || Object.values(s.engines || {}).some((n) => n > 0);
+      return alive;
+    });
+    if (L.flags.desert.reserve > 0) {
+      sim2.army.soldiers = Math.max(0, sim2.army.soldiers - L.flags.desert.reserve);
+    }
+    if (L.flags.raidDelay > 0 && sim2.raids) sim2.raids.timer += L.flags.raidDelay;
+    for (const e of L.events) sim2.addLog(e.text, e.type === "good" ? "good" : e.type);
+    if (L.flags.captures) sim2.addChronicle(`Взят чужой город (день ${sim2.day}).`);
+    return L;
+  }
+  function applyTerritoryLinks(sim2) {
+    if (!sim2.linkTerritory) sim2.linkTerritory = createTerritoryMemory();
+    const out = territoryLinks(sim2);
+    sim2.linkTerritory = out.flags.memory;
+    const pst = sim2.politics && sim2.politics.state;
+    if (pst) {
+      const dS = out.mods.stability + out.mods.stabilityShock;
+      pst.stability = Math.max(0, Math.min(100, pst.stability + dS));
+      for (const [fid, d] of Object.entries(out.mods.estates)) {
+        if (!d || pst.factions[fid] == null) continue;
+        pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+      }
+    }
+    if (sim2.empire) {
+      for (const c of sim2.empire.state.cities) {
+        const d = out.mods.cityUnrest[c.id];
+        if (d) c.unrest = Math.max(0, Math.min(12, (c.unrest || 0) + d));
+      }
+    }
+    for (const g2 of out.flags.defected) {
+      sim2.addChronicle(g2.factionName ? `${g2.name} присягнул ${g2.factionName} (день ${sim2.day}).` : `${g2.name} объявил себя вольным городом (день ${sim2.day}).`);
+      if (!g2.fid) continue;
+      const f = sim2.faction(g2.fid);
+      if (!f) continue;
+      f.P = (f.P || 0) + g2.gainP;
+      f.settlements.push({ x: g2.x, y: g2.y });
+    }
+    for (const [fid, d] of Object.entries(out.mods.relations)) {
+      if (d) sim2.adjustRel(fid, d, "Отпадение города");
+    }
+    if (out.flags.defected.length) {
+      sim2.sfx?.("alarm");
+      if (typeof sim2.toast === "function") sim2.toast("Провинция вышла из-под руки столицы!", "bad");
+    }
+    for (const e of out.events) sim2.addLog(e.text, e.type);
+    return out;
   }
   function applySurvivalLinks(sim2) {
     if (!sim2.linkSurvival) sim2.linkSurvival = createSurvivalMemory();
@@ -11883,6 +12950,7 @@
     housingCap() {
       let cap = 0;
       for (const b of this.doneBuildings()) cap += BUILDINGS[b.id].housing || 0;
+      cap += systemsPopCapMod(this);
       return cap;
     }
     globalMult(kind) {
@@ -13860,8 +14928,8 @@ ${s}`, "console");
         for (let gx = g0x; gx <= g1x; gx++) {
           const r1 = hash2(gx * 131 + 7, gy * 57 + 3);
           if (r1 < 0.45) continue;
-          const r2 = hash2(gx * 29, gy * 191 + 11), r32 = hash2(gx * 83 + 5, gy * 13);
-          const wx = gx * 3 + r2 * 3, wy = gy * 3 + r32 * 3;
+          const r2 = hash2(gx * 29, gy * 191 + 11), r33 = hash2(gx * 83 + 5, gy * 13);
+          const wx = gx * 3 + r2 * 3, wy = gy * 3 + r33 * 3;
           const tx = Math.floor(wx), ty = Math.floor(wy);
           if (tx < 0 || ty < 0 || tx >= W || ty >= H) continue;
           const t = world.tiles[ty * W + tx];
@@ -13878,7 +14946,7 @@ ${s}`, "console");
           grad.addColorStop(1, `rgba(${col[0]},${col[1]},${col[2]},0)`);
           c.fillStyle = grad;
           c.beginPath();
-          c.ellipse(cx, cy, rad, rad * (0.62 + r32 * 0.4), r1 * 3, 0, 7);
+          c.ellipse(cx, cy, rad, rad * (0.62 + r33 * 0.4), r1 * 3, 0, 7);
           c.fill();
         }
       }
@@ -13890,7 +14958,7 @@ ${s}`, "console");
       const D = this.q.detail;
       if (D < 0) return;
       const onRoad = this.road ? this.road.tiles.has(y * world.w + x) : false;
-      const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r32 = hash2(x * 3 + 7, y * 5 + 13);
+      const r1 = hash2(x, y), r2 = hash2(x + 991, y + 77), r33 = hash2(x * 3 + 7, y * 5 + 13);
       if (t === TILE.GRASS) {
         if (D === 0) return;
         const n = D >= 2 ? 3 : 2;
@@ -13916,10 +14984,10 @@ ${s}`, "console");
         if (D >= 1 && r2 > 0.9) {
           c.fillStyle = "rgba(122,98,62,0.22)";
           c.beginPath();
-          c.ellipse(px + TP * (0.2 + r1 * 0.6), py + TP * (0.2 + r32 * 0.6), TP * (0.12 + r1 * 0.16), TP * (0.09 + r32 * 0.1), r1 * 3, 0, 7);
+          c.ellipse(px + TP * (0.2 + r1 * 0.6), py + TP * (0.2 + r33 * 0.6), TP * (0.12 + r1 * 0.16), TP * (0.09 + r33 * 0.1), r1 * 3, 0, 7);
           c.fill();
         }
-        if (D >= 2 && season < 2 && r32 > 0.84) {
+        if (D >= 2 && season < 2 && r33 > 0.84) {
           const fc = ["#f0e28a", "#f6f6f2", "#e8a0c0"][r1 * 3 | 0];
           for (let i = 0; i < 3; i++) {
             c.fillStyle = fc;
@@ -13933,7 +15001,7 @@ ${s}`, "console");
       if (t === TILE.FOREST) {
         c.fillStyle = "rgba(38,48,28,0.32)";
         c.beginPath();
-        c.ellipse(px + TP * (0.4 + r1 * 0.2), py + TP * (0.4 + r2 * 0.2), TP * (0.62 + r32 * 0.14), TP * (0.6 + r1 * 0.14), 0, 0, 7);
+        c.ellipse(px + TP * (0.4 + r1 * 0.2), py + TP * (0.4 + r2 * 0.2), TP * (0.62 + r33 * 0.14), TP * (0.6 + r1 * 0.14), 0, 0, 7);
         c.fill();
         if (D >= 1) {
           c.fillStyle = season === 2 ? "rgba(150,96,40,0.35)" : "rgba(60,80,44,0.4)";
@@ -13965,7 +15033,7 @@ ${s}`, "console");
           c.fillStyle = p.det;
           c.globalAlpha = 0.55;
           c.beginPath();
-          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r32 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r32 * 0.03), r1 * 3, 0, 7);
+          c.ellipse(px + TP * (0.2 + r1 * 0.55), py + TP * (0.25 + r33 * 0.45), TP * (0.05 + r1 * 0.04), TP * (0.04 + r33 * 0.03), r1 * 3, 0, 7);
           c.fill();
           c.globalAlpha = 1;
         }
@@ -13973,7 +15041,7 @@ ${s}`, "console");
           c.strokeStyle = p.det2;
           c.globalAlpha = 0.45;
           c.lineWidth = Math.max(1, TP * 0.04);
-          const gx = px + r32 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
+          const gx = px + r33 * TP * 0.7 + TP * 0.15, gy = py + r2 * TP * 0.6 + TP * 0.2;
           c.beginPath();
           c.moveTo(gx, gy + TP * 0.06);
           c.lineTo(gx + TP * 0.02, gy - TP * 0.06);
@@ -13990,9 +15058,9 @@ ${s}`, "console");
         c.globalAlpha = 0.16 + Math.abs(nf - 0.5) * 0.5;
         c.beginPath();
         c.moveTo(px - TP * r1 * 0.3, py + TP * (r2 * 0.5 - 0.1));
-        c.lineTo(px + TP * (0.6 + r2 * 0.6), py - TP * r32 * 0.25);
-        c.lineTo(px + TP * (1.1 + r1 * 0.3), py + TP * (0.6 + r32 * 0.5));
-        c.lineTo(px + TP * (0.2 + r32 * 0.4), py + TP * (0.9 + r1 * 0.35));
+        c.lineTo(px + TP * (0.6 + r2 * 0.6), py - TP * r33 * 0.25);
+        c.lineTo(px + TP * (1.1 + r1 * 0.3), py + TP * (0.6 + r33 * 0.5));
+        c.lineTo(px + TP * (0.2 + r33 * 0.4), py + TP * (0.9 + r1 * 0.35));
         c.closePath();
         c.fill();
         c.globalAlpha = 0.3;
@@ -14000,12 +15068,12 @@ ${s}`, "console");
         c.lineWidth = Math.max(1, TP * 0.03);
         c.beginPath();
         c.moveTo(px + TP * r1, py);
-        c.lineTo(px + TP * (0.2 + r2 * 0.6), py + TP * (0.5 + r32 * 0.3));
-        c.lineTo(px + TP * (r32 * 0.5), py + TP);
+        c.lineTo(px + TP * (0.2 + r2 * 0.6), py + TP * (0.5 + r33 * 0.3));
+        c.lineTo(px + TP * (r33 * 0.5), py + TP);
         c.stroke();
         c.globalAlpha = 1;
         if (D >= 1 && r1 > 0.3 && !onRoad) {
-          const ox = px + TP * (0.18 + r2 * 0.5), oy = py + TP * (0.42 + r32 * 0.4);
+          const ox = px + TP * (0.18 + r2 * 0.5), oy = py + TP * (0.42 + r33 * 0.4);
           const rw = TP * (0.16 + r1 * 0.2), rh = rw * (0.7 + r2 * 0.5);
           c.fillStyle = "rgba(0,0,0,0.2)";
           c.beginPath();
@@ -14030,7 +15098,7 @@ ${s}`, "console");
           c.closePath();
           c.fill();
         }
-        if (D >= 1 && r32 > 0.72) {
+        if (D >= 1 && r33 > 0.72) {
           c.fillStyle = p.det2;
           c.globalAlpha = 0.45;
           for (let i = 0; i < 2; i++) {
@@ -14056,9 +15124,9 @@ ${s}`, "console");
         }
         if (!peakHere || onRoad) return;
         const scale = 0.9 + r2 * 0.9;
-        const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1 + r32 * 0.15);
+        const cxp = px + TP * (0.4 + r1 * 0.2), base = py + TP * (1 + r33 * 0.15);
         const peak = py + TP * (0.55 - 0.62 * scale);
-        const wdt = TP * (0.5 + r32 * 0.25) * scale;
+        const wdt = TP * (0.5 + r33 * 0.25) * scale;
         c.fillStyle = "rgba(0,0,0,0.24)";
         c.beginPath();
         c.moveTo(cxp, peak);
@@ -14117,7 +15185,7 @@ ${s}`, "console");
           c.stroke();
         }
         c.globalAlpha = 1;
-        if (D >= 2 && r32 > 0.72) {
+        if (D >= 2 && r33 > 0.72) {
           c.fillStyle = p.lo;
           c.globalAlpha = 0.45;
           for (let i = 0; i < 2; i++) {
@@ -14138,7 +15206,7 @@ ${s}`, "console");
         if (D >= 2 && r1 > 0.88) {
           c.strokeStyle = "rgba(150,146,96,0.5)";
           c.lineWidth = Math.max(1, TP * 0.03);
-          const gx = px + TP * (0.25 + r2 * 0.5), gy = py + TP * (0.55 + r32 * 0.3);
+          const gx = px + TP * (0.25 + r2 * 0.5), gy = py + TP * (0.55 + r33 * 0.3);
           for (const k of [-1, 0, 1]) {
             c.beginPath();
             c.moveTo(gx, gy);
@@ -19404,7 +20472,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp7 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp8 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -20241,7 +21309,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp7(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp8(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -20278,7 +21346,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp7(x >> 2, 0, this.pw - 1), gy = clamp7(y >> 2, 0, this.ph - 1);
+      const gx = clamp8(x >> 2, 0, this.pw - 1), gy = clamp8(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -20297,7 +21365,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp7(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp8(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -20335,39 +21403,39 @@ ${s}`, "console");
     tileItems(out, sim2, world, x, y, t, season, era, D, p, warm, wet, water, tile) {
       const r1 = hash2(x * 7 + 1, y * 11 + 3);
       const r2 = hash2(x * 13 + 91, y * 5 + 47);
-      const r32 = hash2(x * 3 + 511, y * 29 + 17);
+      const r33 = hash2(x * 3 + 511, y * 29 + 17);
       const r4 = hash2(x * 23 + 7, y * 19 + 331);
       if (t === TILE.FOREST) {
         const edge = tile(x + 1, y) !== TILE.FOREST || tile(x - 1, y) !== TILE.FOREST || tile(x, y + 1) !== TILE.FOREST || tile(x, y - 1) !== TILE.FOREST;
         const want = (edge ? this.edgeFill : this.forestFill) * (1 - 0.72 * p);
         if (r1 < want) {
-          this.addTree(out, x, y, this.forestSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r32);
+          this.addTree(out, x, y, this.forestSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r33);
           if (edge && D >= 2 && r4 < 0.34) {
             this.addTree(out, x + 0.42, y + 0.3, this.forestSpecies(r4, warm, wet, water, era, p), season, era, p, r4, r1);
           }
-        } else if (r32 < 0.14 + 0.55 * p) {
-          this.addUnder(out, x, y, U.STUMP, season, r32, r1);
+        } else if (r33 < 0.14 + 0.55 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r33, r1);
           if (r4 < 0.35 && p > 0.28) this.addUnder(out, x + 0.3, y + 0.22, U.SAPLING, season, r4, r2);
         }
-        if (D >= 1 && r2 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r2, r32);
+        if (D >= 1 && r2 < 0.34) this.addUnder(out, x + 0.18, y + 0.44, U.FERN, season, r2, r33);
         if (D >= 1 && r4 < 0.22) this.addUnder(out, x + 0.62, y + 0.26, U.BUSH, season, r4, r1);
-        if (D >= 2 && season !== 3 && r32 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r32, r4);
+        if (D >= 2 && season !== 3 && r33 > 0.78) this.addUnder(out, x + 0.4, y + 0.6, U.LITTER, season, r33, r4);
         if (D >= 2 && r1 > 0.94) this.addUnder(out, x + 0.55, y + 0.7, U.LOG, season, r1, r2);
         return;
       }
       if (t === TILE.GRASS) {
         const want = (0.05 + wet * 0.12) * (1 - 0.82 * p);
         if (r1 < want) {
-          this.addTree(out, x, y, this.openSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r32);
-        } else if (p > 0.3 && r32 < 0.1 * p) {
-          this.addUnder(out, x, y, U.STUMP, season, r32, r1);
+          this.addTree(out, x, y, this.openSpecies(r2, warm, wet, water, era, p), season, era, p, r2, r33);
+        } else if (p > 0.3 && r33 < 0.1 * p) {
+          this.addUnder(out, x, y, U.STUMP, season, r33, r1);
         }
         if (water && r2 < 0.42) this.addUnder(out, x + 0.3, y + 0.55, U.REED, season, r2, r4);
         if (D >= 1 && r4 < 0.15) this.addUnder(out, x + 0.55, y + 0.35, U.BUSH, season, r4, r1);
-        if (D >= 2 && r32 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r32, r2);
+        if (D >= 2 && r33 < 0.3) this.addUnder(out, x + 0.22, y + 0.62, U.GRASS, season, r33, r2);
         if (season < 2 && D >= 1) {
           const fl = 0.16 + wet * 0.14 + (era >= 8 ? p * 0.3 : -p * 0.1);
-          if (r2 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r2, r32);
+          if (r2 < fl) this.addUnder(out, x + 0.66, y + 0.52, U.FLOWER, season, r2, r33);
         }
         return;
       }
@@ -20375,26 +21443,26 @@ ${s}`, "console");
         const want = 0.1 * (1 - 0.6 * p);
         if (r1 < want) {
           const sp = warm < 0.42 ? r2 < 0.6 ? SP.spruce : SP.pine : r2 < 0.5 ? SP.junip : SP.pine;
-          this.addTree(out, x, y, sp, season, era, p, r2, r32);
+          this.addTree(out, x, y, sp, season, era, p, r2, r33);
         }
-        if (D >= 1 && r32 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r32, r1);
+        if (D >= 1 && r33 < 0.2) this.addUnder(out, x + 0.45, y + 0.4, U.BUSH, season, r33, r1);
         if (D >= 2 && r4 < 0.22) this.addUnder(out, x + 0.25, y + 0.66, U.GRASS, season, r4, r2);
         if (D >= 2 && season < 2 && r2 > 0.9) this.addUnder(out, x + 0.6, y + 0.3, U.FLOWER, season, r2, r4);
         return;
       }
       if (t === TILE.SAND) {
         if (water && warm > 0.55 && r1 < 0.14) {
-          this.addTree(out, x, y, SP.palm, season, era, p, r2, r32);
+          this.addTree(out, x, y, SP.palm, season, era, p, r2, r33);
         } else if (water && warm <= 0.55 && r1 < 0.06) {
-          this.addTree(out, x, y, SP.willow, season, era, p, r2, r32);
+          this.addTree(out, x, y, SP.willow, season, era, p, r2, r33);
         }
         if (water && r2 < 0.28) this.addUnder(out, x + 0.4, y + 0.55, U.REED, season, r2, r4);
-        if (D >= 2 && r32 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r32, r1);
+        if (D >= 2 && r33 < 0.16) this.addUnder(out, x + 0.2, y + 0.4, U.GRASS, season, r33, r1);
         return;
       }
       if (t === TILE.MOUNTAIN) {
         const foot = tile(x, y + 1) === TILE.HILL || tile(x - 1, y) === TILE.HILL || tile(x + 1, y) === TILE.HILL;
-        if (foot && r1 < 0.07) this.addTree(out, x, y, r2 < 0.5 ? SP.dead : SP.junip, season, era, p, r2, r32);
+        if (foot && r1 < 0.07) this.addTree(out, x, y, r2 < 0.5 ? SP.dead : SP.junip, season, era, p, r2, r33);
       }
     }
     // ---- выбор породы ------------------------------------------------------
@@ -20528,7 +21596,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp7(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp8(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -20683,7 +21751,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp8 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp9 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -21020,7 +22088,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp8(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp9(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -21037,10 +22105,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp8(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp8(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp9(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp9(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp8(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp9(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -21052,8 +22120,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp8(
-        nLand ? lapsArr[clamp8(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp9(
+        nLand ? lapsArr[clamp9(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -21064,8 +22132,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp8(i0, 0, w - 1);
-        this.txB[sx] = clamp8(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp9(i0, 0, w - 1);
+        this.txB[sx] = clamp9(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -21073,8 +22141,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp8(i0 - 1, 0, w - 1), b = row + clamp8(i0, 0, w - 1);
-          const c = row + clamp8(i0 + 1, 0, w - 1), d = row + clamp8(i0 + 2, 0, w - 1);
+          const a = row + clamp9(i0 - 1, 0, w - 1), b = row + clamp9(i0, 0, w - 1);
+          const c = row + clamp9(i0 + 1, 0, w - 1), d = row + clamp9(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -21115,12 +22183,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp8(j0 - 1, 0, h - 1) * SW, rb = clamp8(j0, 0, h - 1) * SW;
-        const rc = clamp8(j0 + 1, 0, h - 1) * SW, rd = clamp8(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp9(j0 - 1, 0, h - 1) * SW, rb = clamp9(j0, 0, h - 1) * SW;
+        const rc = clamp9(j0 + 1, 0, h - 1) * SW, rd = clamp9(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp8(jy, 0, h - 1) * w, jB = clamp8(jy + 1, 0, h - 1) * w;
+        const jA = clamp9(jy, 0, h - 1) * w, jB = clamp9(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -21170,9 +22238,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp8(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp8(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp9(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp9(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp8(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp9(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -21285,7 +22353,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp8(j0, 0, h - 1) * w, jB = clamp8(j0 + 1, 0, h - 1) * w;
+      const jA = clamp9(j0, 0, h - 1) * w, jB = clamp9(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -21328,7 +22396,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp8(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp9(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -21350,7 +22418,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp8(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp9(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -21426,28 +22494,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp8(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp8(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp8(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp8(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp9(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp9(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp9(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp9(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp8((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp8(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp9((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp9(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp8(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp9(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp8(k, 0, 1);
+        ctx.globalAlpha = clamp9(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -21569,7 +22637,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp9 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp10 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -21745,8 +22813,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp9(L.shadowLen, 0.45, 2.2);
-      const u = clamp9((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp10(L.shadowLen, 0.45, 2.2);
+      const u = clamp10((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -21806,7 +22874,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp9(0.78 / hf, 0.32, 0.6);
+      const band = clamp10(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul = this._checkMul(ctx);
@@ -21912,8 +22980,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp9(Math.round(dw), 12, 256);
-      const h = clamp9(Math.round(dh), 12, 384);
+      const w = clamp10(Math.round(dw), 12, 256);
+      const h = clamp10(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -21923,8 +22991,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp9(Math.round(dw), 12, 256);
-      const h = clamp9(Math.round(dh), 12, 384);
+      const w = clamp10(Math.round(dw), 12, 256);
+      const h = clamp10(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -22085,7 +23153,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp10 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp11 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -22601,7 +23669,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp10(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp11(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -22703,7 +23771,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp10(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp11(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -23076,7 +24144,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp10(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp11(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -23160,7 +24228,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp10(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp11(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -27142,14 +28210,14 @@ ${out}`;
       flp.frequency.value = 260;
       const ftrim = c.createGain();
       ftrim.gain.value = 0.33;
-      const f12 = mk(47, "sawtooth"), f2 = mk(70.5, "sawtooth"), f3 = mk(23.5, "square");
-      f12.connect(flp);
+      const f13 = mk(47, "sawtooth"), f2 = mk(70.5, "sawtooth"), f3 = mk(23.5, "square");
+      f13.connect(flp);
       f2.connect(flp);
       f3.connect(flp);
       flp.connect(ftrim);
       ftrim.connect(fg);
       fg.connect(this.ambBus);
-      f12.start(0);
+      f13.start(0);
       f2.start(0);
       f3.start(0);
       A.factory = { g: fg };

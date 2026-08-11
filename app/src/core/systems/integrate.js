@@ -21,6 +21,7 @@ import * as EMP from './wire_empire.js';
 import * as LEC from './link_economy.js';
 import * as LS from './link_survival.js';
 import * as TER from './link_territory.js';
+import * as LWR from './link_war.js';
 
 // ---------- Установка ----------
 
@@ -35,6 +36,8 @@ export function installSystems(sim) {
   WAR.install(sim);
   POL.installPolitics(sim);
   EMP.installEmpire(sim);
+  // Память связи войны: вчерашняя численность войска, дни войны, усталость.
+  sim.linkWar = LWR.createWarMemory();
   // Память связи выживания: сколько суток подряд голодаем и когда был бунт.
   sim.linkSurvival = LS.createSurvivalMemory();
   // Последние отчёты держим для HUD: панель читает готовые числа, а не
@@ -70,6 +73,7 @@ export function systemsNewDay(sim) {
   // Территория идёт ПОСЛЕ выживания: голод может снять город, и его потерю
   // тоже надо разыграть — кому он достался и как это увидели соседи.
   applyTerritoryLinks(sim);
+  applyWarLinks(sim);
 }
 
 // ---------- Соседи ----------
@@ -185,7 +189,8 @@ export function systemsHappyMod(sim) {
   return W.happyMod(sim.sys.winter) + IND.industryHappyMod(sim) + POL.politicsHappyMod(sim)
     + (sim.sys.ecoLinks ? sim.sys.ecoLinks.mods.happy : 0)
     + LS.survivalHappyMod(sim)
-    + TER.territoryHappyMod(sim);
+    + TER.territoryHappyMod(sim)
+    + (sim.sys.warLinks ? sim.sys.warLinks.mods.happy : 0);
 }
 
 // Своя земля даёт где ставить выселки: площадь границ поднимает потолок
@@ -217,6 +222,7 @@ export function systemsSerialize(sim) {
     emp: EMP.empireSerialize(sim),
     link: sim.linkSurvival || null,
     terr: sim.linkTerritory || null,
+    linkWar: sim.linkWar || null,
   };
 }
 
@@ -232,6 +238,7 @@ export function systemsRestore(sim, data) {
   if (data.emp) EMP.empireRestore(sim, data.emp);
   sim.linkSurvival = LS.restoreSurvivalMemory(data.link);
   sim.linkTerritory = TER.restoreTerritoryMemory(data.terr);
+  sim.linkWar = LWR.restoreWarMemory(data.linkWar);
 }
 
 // ---------- Для HUD ----------
@@ -279,6 +286,64 @@ function applyEconomyLinks(sim) {
   }
   for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'info' : e.type);
   if (L.flags.defaultToday) sim.addChronicle(`Казна объявила дефолт (день ${sim.day}).`);
+  return L;
+}
+
+// Связь «бой ↔ дух ↔ военное сословие ↔ казна ↔ армия».
+function applyWarLinks(sim) {
+  if (!sim.war || !sim.armyState) return null;
+  const L = LWR.warLinks(sim, sim.linkWar);
+  sim.linkWar = L.memo;
+  sim.sys.warLinks = L;                    // для HUD: панель читает готовый разбор
+
+  // Сословия: потери, победы, усталость, скука.
+  const P = sim.politics ? sim.politics.state : null;
+  if (P) {
+    for (const fid of Object.keys(P.factions)) {
+      P.factions[fid] = Math.max(0, Math.min(100, P.factions[fid] + (L.mods.approval[fid] || 0)));
+    }
+    // Скука не тянет военных ниже своего пола — потолок петли.
+    if (L.flags.bored) P.factions.military = Math.max(LWR.BORED_FLOOR, P.factions.military);
+    P.stability = Math.max(0, Math.min(100, P.stability + L.mods.stability));
+  }
+
+  // Дух отрядов в поле: невыплаченное жалование разлагает строй.
+  if (L.mods.morale !== 0) {
+    for (const sq of LWR.playerSquads(sim)) {
+      sq.morale = Math.max(0, Math.min(100, (sq.morale ?? 100) + L.mods.morale));
+    }
+  }
+  // Боеспособность. syncSquads() в wire_army заново ставит sq.mult каждый день,
+  // поэтому множитель именно домножается и не копится.
+  if (L.mods.armyMult !== 1) {
+    for (const sq of LWR.playerSquads(sim)) sq.mult = (sq.mult || 1) * L.mods.armyMult;
+  }
+
+  // Дезертирство: из отрядов по плану связи, из резерва — числом.
+  for (const p of L.flags.desert.squads) {
+    const sq = sim.armyState.squads.find(s => s.id === p.id);
+    if (!sq) continue;
+    let left = p.take;
+    for (const [uid, n] of Object.entries(sq.units)) {
+      if (left <= 0) break;
+      const d = Math.min(n, left);
+      left -= d;
+      if (n - d > 0) sq.units[uid] = n - d; else delete sq.units[uid];
+    }
+  }
+  sim.armyState.squads = sim.armyState.squads.filter(s => {
+    const alive = Object.values(s.units || {}).some(n => n > 0) || Object.values(s.engines || {}).some(n => n > 0);
+    return alive;
+  });
+  if (L.flags.desert.reserve > 0) {
+    sim.army.soldiers = Math.max(0, sim.army.soldiers - L.flags.desert.reserve);
+  }
+
+  // Выход из спирали: разорённую державу грабить незачем — набег отодвигается.
+  if (L.flags.raidDelay > 0 && sim.raids) sim.raids.timer += L.flags.raidDelay;
+
+  for (const e of L.events) sim.addLog(e.text, e.type === 'good' ? 'good' : e.type);
+  if (L.flags.captures) sim.addChronicle(`Взят чужой город (день ${sim.day}).`);
   return L;
 }
 

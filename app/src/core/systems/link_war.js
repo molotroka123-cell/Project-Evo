@@ -162,6 +162,23 @@ export const BORED_FLOOR = 35;
 // Условия передышки: казна пуста пятый день, войска почти не осталось.
 export const RESPITE_ARREARS = 5;
 export const RESPITE_MEN_SHARE = 0.05, RESPITE_MEN_MIN = 2;
+
+// ВТОРОЙ ПУТЬ К ПЕРЕДЫШКЕ: «брать нечего» вместо «войско разбежалось».
+//
+// Задолженность по жалованию — хороший признак разорения, но только для того,
+// у кого войско БЫЛО. Державе, не собравшей ни одного солдата, платить некому,
+// arrears вечно ноль, и передышка не наступает никогда. Замер поймал ровно
+// этот случай: партия со старта в Ренессансе набирала 22 жителя к 50-му дню, а
+// дальше набеги мололи её до одного человека и двух монет — и продолжали
+// приходить к этому одному человеку до конца прогона. Двадцать три смерти из
+// двадцати трёх — рейды.
+//
+// Грабителю разница между «войско разбежалось» и «войска не было» не видна: он
+// смотрит на добычу. Поэтому вторая проверка идёт по тому же, по чему смотрел
+// бы он, — пустая казна, пустые амбары и отсутствие войска.
+export const RESPITE_GOLD = 25;      // меньше этого в казне брать нечего
+export const RESPITE_FOOD = 40;      // и в амбарах тоже
+export const RESPITE_POOR_MEN = 1;   // войска нет вовсе (или один сторож)
 // На сколько отодвигается набег и как часто такое вообще бывает.
 export const RESPITE_DAYS = 18, RESPITE_CD = 40;
 
@@ -528,9 +545,14 @@ export function warLinks(sim, memo) {
 
   // --- 6. Выход из спирали «нет денег → нет армии → набеги» ----------------
   const raidsOn = sim.raids && !sim.raids.off && (sim.eraIndex || 0) >= 2;
+  // Путь первый: войско было и разбежалось от невыплат.
   const beggared = arrears >= RESPITE_ARREARS
     && total <= Math.max(RESPITE_MEN_MIN, Math.floor(pop * RESPITE_MEN_SHARE));
-  if (raidsOn && beggared && day - M.respiteDay >= RESPITE_CD && (sim.raids.timer || 0) > 0) {
+  // Путь второй: войска не было вовсе, а брать нечего (см. RESPITE_GOLD выше).
+  const gold = sim.res ? (sim.res.gold || 0) : 0;
+  const food = sim.res ? (sim.res.food || 0) : 0;
+  const nothingToTake = total <= RESPITE_POOR_MEN && gold < RESPITE_GOLD && food < RESPITE_FOOD;
+  if (raidsOn && (beggared || nothingToTake) && day - M.respiteDay >= RESPITE_CD && (sim.raids.timer || 0) > 0) {
     N.respiteDay = day;
     out.flags.raidDelay = RESPITE_DAYS;
     out.events.push({
