@@ -4,7 +4,7 @@ import { DAY_SECONDS } from '../core/simulation.js';
 import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
-import { PANELS, memoryPanel } from '../core/systems/integrate.js';
+import { PANELS, memoryPanel, intelOf, intelTrustWord } from '../core/systems/integrate.js';
 
 // Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
 // разовым событиям дня, а еда вообще списывается одним куском на смене суток.
@@ -947,10 +947,20 @@ export class Hud {
     const treaty = s.treaties.some(t => t.b === fid);
     const tr = f.def.traits;
     const hist = (s.diploLog[fid] || []).slice(-6).reverse();
-    const armyEst = atWar || R >= 20 ? `~${Math.round(f.armyPts)}` : (f.armyPts < 20 ? 'мало' : f.armyPts < 60 ? 'сопоставимо' : 'много');
+    // Карточка показывает НЕ правду, а последнее, что о соседе рассказали.
+    // Прежде здесь стояло f.armyPts — точное текущее число, всегда и про всех,
+    // и половина решений принималась автоматически: видно же, что войско
+    // втрое сильнее. Теперь знание стареет, и «лезть или нет» решается с риском.
+    // Симуляция и ИИ по-прежнему видят настоящее состояние: туман неведения —
+    // правило для игрока, а не для мира.
+    const k = intelOf(s, fid);
+    const armyEst = k.armyText;
+    const eraShown = k.any && k.era != null && ERAS[k.era] ? ERAS[k.era].ru : 'неизвестно';
     this.showModal(`
       <h3><span style="color:${f.def.color}">⬤</span> ${f.def.name}</h3>
-      <p>${f.def.leader} · Эпоха: ${ERAS[f.era].ru} · Армия: ${armyEst}</p>
+      <p>${f.def.leader} · Эпоха: ${eraShown} · Армия: ${armyEst}</p>
+      <p style="margin:-4px 0 8px;font-size:12px;color:var(--dim)">
+        ${k.any ? `${k.sourceText}, ${k.ageText} · ${intelTrustWord(k.trust)}` : 'о них ничего не рассказывали'}</p>
       <div class="kv"><span>Отношение</span><span>${R} (${R >= 20 ? 'дружелюбие' : R > -20 ? 'нейтралитет' : 'вражда'})</span></div>
       <div class="kv"><span>Уважает</span><span>${f.def.agenda.likes}</span></div>
       <div class="kv"><span>Презирает</span><span>${f.def.agenda.hates}</span></div>

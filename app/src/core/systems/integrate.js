@@ -25,6 +25,7 @@ import * as LWR from './link_war.js';
 import * as LIND from './link_industry.js';
 import * as LN from './link_neighbors.js';
 import * as MEM from './link_memory.js';
+import * as INT from './link_intel.js';
 
 // С какого уровня отношений война считается ударом в спину. 20 — это уже не
 // «терпим друг друга», а сложившийся лад: договоры, караваны, общие войны.
@@ -66,6 +67,8 @@ export function installSystems(sim) {
   sim.linkTerritory = TER.createTerritoryMemory();
   // Летопись как причина: что пережито, то меняет поведение державы.
   sim.linkMemory = MEM.createMemory();
+  // Разведка: что мы знаем о соседях и когда об этом слышали в последний раз.
+  sim.linkIntel = INT.createIntel();
 }
 
 // ---------- Раз в сутки ----------
@@ -96,6 +99,10 @@ export function systemsNewDay(sim) {
   // Территория идёт ПОСЛЕ выживания: голод может снять город, и его потерю
   // тоже надо разыграть — кому он достался и как это увидели соседи.
   applyTerritoryLinks(sim);
+  // Разведка идёт ПОСЛЕ соседей: она читает опасность дорог, которую считает
+  // именно link_neighbors. Своей второй оценки опасности быть не должно —
+  // игрок читал бы в двух панелях разные числа.
+  applyIntelLinks(sim);
   const warOut = applyWarLinks(sim);
   // Память идёт ПОСЛЕДНЕЙ: она записывает то, что породили остальные связи
   // за эти же сутки, и уже завтра держава живёт с оглядкой на записанное.
@@ -265,6 +272,7 @@ export function systemsSerialize(sim) {
     terr: sim.linkTerritory || null,
     linkWar: sim.linkWar || null,
     mem: sim.linkMemory || null,
+    intel: sim.linkIntel || null,
   };
 }
 
@@ -283,6 +291,7 @@ export function systemsRestore(sim, data) {
   sim.linkTerritory = TER.restoreTerritoryMemory(data.terr);
   sim.linkWar = LWR.restoreWarMemory(data.linkWar);
   sim.linkMemory = MEM.restoreMemory(data.mem);
+  sim.linkIntel = INT.restoreIntel(data.intel);
 }
 
 // ---------- Для HUD ----------
@@ -418,6 +427,22 @@ function applyMemoryLinks(sim, incoming) {
   for (const e of L.events) sim.addLog(e.text, e.type);
   return L;
 }
+
+// Разведка: знание о соседях как ресурс со сроком годности.
+function applyIntelLinks(sim) {
+  if (!sim.linkIntel) sim.linkIntel = INT.createIntel();
+  const L = INT.intelLinks(sim);
+  sim.linkIntel = L.flags.memory;
+  sim.sys.intelLinks = L;
+  for (const e of L.events) sim.addLog(e.text, e.type);
+  return L;
+}
+
+// Что мы знаем о соседе — для карточки и панели дипломатии. Именно ЭТО должен
+// читать интерфейс вместо f.armyPts: симуляция видит правду, игрок — вести.
+export function intelOf(sim, fid) { return INT.knownOf(sim, fid); }
+export function intelRows(sim) { return INT.intelReport(sim); }
+export function intelTrustWord(trust) { return INT.trustWord(trust); }
 
 // Строки для панели «Летопись»: что помнит народ и во что это обходится.
 export function memoryPanel(sim) {
