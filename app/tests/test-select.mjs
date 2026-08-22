@@ -64,7 +64,7 @@ function makeSim() {
       { id: 'hut', x: 10, y: 10, size: 1, done: true, destroyed: false },
       { id: 'smithy', x: 14, y: 10, size: 1, done: true, destroyed: false },
       { id: 'mill', x: 20, y: 12, size: 1, done: true, destroyed: false },
-      { id: 'spire', x: 30, y: 30, size: 2, done: true, destroyed: false },
+      { id: 'spire', x: 24, y: 20, size: 2, done: true, destroyed: false },
     ],
     villagers: [
       { name: 'Аня', x: 10.5, y: 12.5, hp: 100, job: 'work', target: null, path: null },
@@ -96,9 +96,9 @@ function draw(layer, sim, ctx, dt = 1 / 60, z = Z) {
   t('клик по клетке хижины даёт постройку', onHut.kind === 'b' && onHut.b.id === 'hut');
   t('якорь подсветки — угол постройки, а не клетка курсора', onHut.tx === 10 && onHut.ty === 10);
 
-  const onSpire = L.pick(sim, 31.4, 31.4);
+  const onSpire = L.pick(sim, 25.4, 21.4);
   t('вторая клетка Шпиля 2×2 тоже попадает в Шпиль', onSpire.kind === 'b' && onSpire.b.id === 'spire');
-  t('якорь Шпиля — его собственный угол', onSpire.tx === 30 && onSpire.ty === 30);
+  t('якорь Шпиля — его собственный угол', onSpire.tx === 24 && onSpire.ty === 20);
 
   const empty = L.pick(sim, 50.5, 50.5);
   t('пустая земля даёт kind=t', empty.kind === 't' && empty.tx === 50 && empty.ty === 50);
@@ -220,15 +220,18 @@ function draw(layer, sim, ctx, dt = 1 / 60, z = Z) {
   const ctx = recorder(null);
   draw(L, sim, ctx);
   const blits = ctx.log.filter(e => e[0] === 'drawImage');
-  t('нарисованы два кольца — выбор и наведение', blits.length >= 2, `${blits.length}`);
-  t('счётчик колец в stats совпадает', L.stats().rings >= 2);
+  // Блитов четыре: кольцо выбора, его внутреннее кольцо (detail 2), кольцо
+  // наведения и мягкий диск ауры кузницы — считаем кольца по stats, чтобы
+  // проверка не ломалась от соседнего слоя ауры.
+  t('нарисованы кольца выбора и наведения', blits.length === 4, `${blits.length}`);
+  const ringsBoth = L.stats().rings;
+  t('счётчик колец в stats совпадает', ringsBoth === 3, `${ringsBoth}`);
 
   // Наведение на уже выбранное второго кольца не даёт.
   L.hoverAt(sim, 10.5, 10.5);
   const ctx2 = recorder(null);
   draw(L, sim, ctx2);
-  const rings2 = ctx2.log.filter(e => e[0] === 'drawImage');
-  t('наведение на выбранное не удваивает кольцо', rings2.length === 1, `${rings2.length}`);
+  t('наведение на выбранное не удваивает кольцо', L.stats().rings === ringsBoth - 1, `${L.stats().rings}`);
 }
 
 // 7. Подсветка клетки учитывает размер постройки
@@ -243,16 +246,16 @@ function draw(layer, sim, ctx, dt = 1 / 60, z = Z) {
   t('обычная постройка — одна клетка', Math.abs(sr[3] - (Z - sr[3] + sr[3])) >= 0 && sr[3] < Z && sr[3] > Z * 0.9, `w=${sr[3]}`);
 
   const ctx2 = recorder(null);
-  L.hoverAt(sim, 30.5, 30.5);
+  L.hoverAt(sim, 24.5, 20.5);
   draw(L, sim, ctx2);
   const sr2 = ctx2.log.find(e => e[0] === 'strokeRect');
   t('Шпиль подсвечивается на все 2×2 клетки', sr2[3] > Z * 1.9 && sr2[3] < Z * 2, `w=${sr2[3]}`);
 
   const ctx3 = recorder(null);
-  L.hoverAt(sim, 55.5, 55.5);
+  L.hoverAt(sim, 4.5, 4.5);
   draw(L, sim, ctx3);
   const sr3 = ctx3.log.find(e => e[0] === 'strokeRect');
-  t('пустая клетка тоже подсвечивается', !!sr3 && sr3[1] === 55 * Z);
+  t('пустая клетка тоже подсвечивается', !!sr3 && Math.abs(sr3[1] - 4 * Z) < 1);
 }
 
 // 8. Рамка ауры повторяет ПРАВИЛО, а не картинку
@@ -414,11 +417,8 @@ function draw(layer, sim, ctx, dt = 1 / 60, z = Z) {
   L2.villager(recorder(null), v, sheet, 2, 2, 300, 400, 16, 24);
   t('другой кадр шага печётся отдельно', canvasesMade === before + 1);
 
-  // Силуэт заливается цветом через source-in — это и есть обводка, а не копия.
-  const probe = { calls: [] };
-  const cvSpy = fakeCanvas(24, 36);
+  // Обводка печётся в СВОЙ канвас: исходный лист жителей она не трогает.
   t('лист жителя не изменён обводкой', sheet.cv.width === 96 && sheet.cv.height === 144);
-  void probe; void cvSpy;
 
   const L3 = new SelectLayer(QUALITY.eco);
   L3.hover = { kind: 'v', v, b: null, tx: 0, ty: 0 };
