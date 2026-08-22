@@ -93,8 +93,9 @@ const SMOKE_R0 = 0.16;     // стартовый радиус клуба в до
 const SMOKE_GROW = 1.5;    // во сколько раз клуб распухает к концу жизни
 
 // Высота руины в долях ширины тайла. Груда обломков — это не здание: она
-// низкая и плоская. 0.55 взято от самого низкого архетипа в sprites.ARCH_H
-// (quarry 0.42) с запасом на торчащие балки.
+// низкая и плоская. 0.62 — самый низкий архетип в sprites.ARCH_H (quarry 0.42)
+// плюс запас на торчащие из груды балки. Выше делать нельзя: развалины начнут
+// спорить силуэтом с целыми домами вокруг.
 const RUBBLE_HFACT = 0.62;
 
 // Базовое разрешение выпечки руины на один тайл ширины по q.detail — те же
@@ -562,8 +563,10 @@ export function bakeOverlay(spr, stage, variant, detail = 2) {
     strokePath(d, pts, `rgba(28,22,18,${0.45 + 0.09 * stage})`, k * 1.15);
     strokePath(d, pts, 'rgba(255,244,226,0.16)', k * 0.7, k * 0.8, k * 0.5);
     // Ответвление — только у заметных трещин: сеть паутинок на ступени 1
-    // выглядит как разбитое стекло, а не как усталая стена.
-    if (stage >= 2 && rnd() < 0.7) {
+    // выглядит как разбитое стекло, а не как усталая стена. На eco (detail 0)
+    // спрайт печётся в 56 px на тайл — ответвление там неотличимо от самой
+    // трещины и стоит лишнего пути в выпечке.
+    if (stage >= 2 && detail > 0 && rnd() < 0.7) {
       const j = 2 + Math.floor(rnd() * Math.max(1, pts.length - 3));
       const br = crackPath(pts[j][0], pts[j][1], len * 0.45, W * 0.1, rnd);
       strokePath(d, br, `rgba(28,22,18,${0.35 + 0.07 * stage})`, k * 0.85);
@@ -583,14 +586,16 @@ export function bakeOverlay(spr, stage, variant, detail = 2) {
     // Выбитое окно — не чёрная дыра, а тёмный проём с холодным небом внутри.
     w.fillStyle = 'rgba(20,17,16,0.88)';
     w.fillRect(0, 0, W, H);
-    // Стираем горизонтальными полосами: этажи бьёт не подряд, а вперемешку.
+    // Стираем прямоугольниками сетки: бьёт не подряд, а вперемешку.
+    // Сетка 4x7 на обычных пресетах и 2x4 на eco — там окно занимает 3-4 px,
+    // и разбирать его на семь этажей не по чему.
     w.globalCompositeOperation = 'destination-out';
     const keep = stage >= 4 ? 0.15 : stage === 3 ? 0.42 : 0.66; // доля уцелевших
-    const rows = 7;
+    const rows = detail === 0 ? 4 : 7, cols = detail === 0 ? 2 : 4;
     for (let r = 0; r < rows; r++) {
-      for (let col = 0; col < 4; col++) {
+      for (let col = 0; col < cols; col++) {
         if (rnd() > keep) continue;
-        w.fillRect(W * col / 4, H * r / rows, W / 4 + 1, H / rows + 1);
+        w.fillRect(W * col / cols, H * r / rows, W / cols + 1, H / rows + 1);
       }
     }
     d.drawImage(wnd, 0, 0);
@@ -626,7 +631,7 @@ export function bakeOverlay(spr, stage, variant, detail = 2) {
     // Балки перекрытия, повисшие в проломе.
     d.strokeStyle = 'rgba(52,40,30,0.9)';
     d.lineWidth = k * 1.4;
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0, nb = detail === 0 ? 1 : 2; i < nb; i++) {
       const y = yTop + (bot - yTop) * (0.3 + i * 0.3);
       d.beginPath();
       d.moveTo(x0 + (right ? -w0 * 0.9 : w0 * 0.9), y);
@@ -645,7 +650,7 @@ export function bakeOverlay(spr, stage, variant, detail = 2) {
 
   // 6) Обломки у цоколя — ПОСЛЕ обрезки: они лежат на земле, снаружи силуэта.
   if (stage >= 3) {
-    const n = stage === 4 ? 7 : 4;
+    const n = (stage === 4 ? 7 : 4) * (detail === 0 ? 0.5 : 1);
     for (let i = 0; i < n; i++) {
       const x = W * (0.1 + rnd() * 0.8);
       const y = groundY - W * 0.02 + rnd() * W * 0.07;

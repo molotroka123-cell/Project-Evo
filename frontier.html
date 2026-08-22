@@ -1491,10 +1491,10 @@
       for (let i = 0; i < n; i++) names.push("Житель");
       return names;
     }
-    const alive = villagers.filter((v) => v.hp === void 0 || v.hp > 0);
-    for (let i = 0; i < n && alive.length > 1; i++) {
-      const idx = rng ? rng.int(0, alive.length - 1) : alive.length - 1;
-      const v = alive.splice(idx, 1)[0];
+    const alive2 = villagers.filter((v) => v.hp === void 0 || v.hp > 0);
+    for (let i = 0; i < n && alive2.length > 1; i++) {
+      const idx = rng ? rng.int(0, alive2.length - 1) : alive2.length - 1;
+      const v = alive2.splice(idx, 1)[0];
       v.hp = 0;
       names.push(v.name || "Житель");
     }
@@ -2648,11 +2648,11 @@
     state.day = day;
     syncVillagers(state, villagers, rng);
     const report = { day, events: [], born: [], died: [], pop: 0 };
-    const alive = villagers.filter((v) => v.hp > 0);
-    const byPid = new Map(alive.map((v) => [v.pid, v]));
-    _tickSkills(alive);
-    _tickDeaths(state, alive, byPid, ctx, rng, report);
-    const living = alive.filter((v) => v.hp > 0);
+    const alive2 = villagers.filter((v) => v.hp > 0);
+    const byPid = new Map(alive2.map((v) => [v.pid, v]));
+    _tickSkills(alive2);
+    _tickDeaths(state, alive2, byPid, ctx, rng, report);
+    const living = alive2.filter((v) => v.hp > 0);
     _tickPairs(state, living, byPid, rng);
     _tickBirths(state, living, villagers, byPid, ctx, rng, report);
     _tickRequest(state, living, ctx, rng, report);
@@ -2665,8 +2665,8 @@
     _writeYearRow(state, day, report);
     return report;
   }
-  function _tickSkills(alive) {
-    for (const v of alive) {
+  function _tickSkills(alive2) {
+    for (const v of alive2) {
       const worked = v.wprof;
       const forget = TRAIT_BY_ID[v.trait]?.forget ?? 1;
       for (const key of Object.keys(v.exp)) {
@@ -2685,10 +2685,10 @@
       v.wprof = null;
     }
   }
-  function _tickDeaths(state, alive, byPid, ctx, rng, report) {
+  function _tickDeaths(state, alive2, byPid, ctx, rng, report) {
     const globalMort = ctx.mortalityMult ?? 1;
     const hunger = (ctx.foodDays ?? 99) < 2 ? 3 : (ctx.foodDays ?? 99) < 5 ? 1.5 : 1;
-    for (const v of alive) {
+    for (const v of alive2) {
       const years = ageYears(v);
       const trait = TRAIT_BY_ID[v.trait]?.mort ?? 1;
       const q = annualMortality(years) * trait * globalMort * hunger;
@@ -3174,10 +3174,10 @@
     return v;
   }
   function _sweepPartners(villagers) {
-    const alive = /* @__PURE__ */ new Set();
-    for (const v of villagers) if (v.hp > 0 && v.pid) alive.add(v.pid);
+    const alive2 = /* @__PURE__ */ new Set();
+    for (const v of villagers) if (v.hp > 0 && v.pid) alive2.add(v.pid);
     for (const v of villagers) {
-      if (v.partner && !alive.has(v.partner)) v.partner = null;
+      if (v.partner && !alive2.has(v.partner)) v.partner = null;
     }
   }
   function inviteCost(sim2) {
@@ -5161,22 +5161,22 @@
     return UNIT_BY_ID[uid].power + bonus2;
   }
   function roleMix(force) {
-    const mix3 = { inf: 0, cav: 0, range: 0, siege: 0 };
+    const mix4 = { inf: 0, cav: 0, range: 0, siege: 0 };
     let total = 0;
     for (const [uid, n] of Object.entries(force.units || {})) {
       if (n <= 0) continue;
       const p = n * powerOf(uid, force.powerBonus || 0);
-      mix3[UNIT_BY_ID[uid].role] += p;
+      mix4[UNIT_BY_ID[uid].role] += p;
       total += p;
     }
     for (const [eid, n] of Object.entries(force.engines || {})) {
       if (n <= 0) continue;
       const p = n * SIEGE_ENGINES[eid].fieldPower;
-      mix3.siege += p;
+      mix4.siege += p;
       total += p;
     }
-    if (total > 0) for (const k of Object.keys(mix3)) mix3[k] /= total;
-    return mix3;
+    if (total > 0) for (const k of Object.keys(mix4)) mix4[k] /= total;
+    return mix4;
   }
   function counterMult(role, enemyMix) {
     const row = COUNTERS[role];
@@ -5927,11 +5927,11 @@
   }
   function _detectBattles(before, army, atWar2) {
     const battles = [];
-    const alive = army.squads.filter((s) => squadAlive(s));
-    const aliveIds = new Set(alive.map((s) => s.id));
-    for (let i = 0; i < alive.length; i++) {
-      for (let j = i + 1; j < alive.length; j++) {
-        const a = alive[i], b = alive[j];
+    const alive2 = army.squads.filter((s) => squadAlive(s));
+    const aliveIds = new Set(alive2.map((s) => s.id));
+    for (let i = 0; i < alive2.length; i++) {
+      for (let j = i + 1; j < alive2.length; j++) {
+        const a = alive2[i], b = alive2[j];
         if (a.side === b.side || !atWar2(a.side, b.side)) continue;
         if (Math.hypot(a.x - b.x, a.y - b.y) > ENGAGE_DIST + 0.01) continue;
         const ba = before.get(a.id), bb = before.get(b.id);
@@ -5945,7 +5945,7 @@
     for (const [id, rec] of before) {
       if (aliveIds.has(id) || rec.n <= 0) continue;
       let winner = null, bd = MAX_CHASE;
-      for (const s of alive) {
+      for (const s of alive2) {
         if (s.side === rec.side || !atWar2(rec.side, s.side)) continue;
         const d = Math.hypot(s.x - rec.x, s.y - rec.y);
         if (d < bd) {
@@ -6046,10 +6046,10 @@
   function computeFront(state, army, atWar2) {
     const hostile = atWar2 || (() => true);
     const cells = [], seen = /* @__PURE__ */ new Set();
-    const alive = army.squads.filter((s) => squadAlive(s));
-    for (let i = 0; i < alive.length; i++) {
-      for (let j = i + 1; j < alive.length; j++) {
-        const a = alive[i], b = alive[j];
+    const alive2 = army.squads.filter((s) => squadAlive(s));
+    for (let i = 0; i < alive2.length; i++) {
+      for (let j = i + 1; j < alive2.length; j++) {
+        const a = alive2[i], b = alive2[j];
         if (a.side === b.side || !hostile(a.side, b.side)) continue;
         if (Math.hypot(a.x - b.x, a.y - b.y) > FRONT_CONTACT) continue;
         const x = Math.round((a.x + b.x) / 2), y = Math.round((a.y + b.y) / 2);
@@ -12069,11 +12069,11 @@
     return -LOSS_MIL_SPAN * share * weight;
   }
   function desertPlan(squads, total) {
-    const alive = [...squads].filter((s) => squadSize(s) > 0).sort((a, b) => squadSize(b) - squadSize(a) || a.id - b.id);
-    const men = alive.reduce((n, s) => n + squadSize(s), 0);
+    const alive2 = [...squads].filter((s) => squadSize(s) > 0).sort((a, b) => squadSize(b) - squadSize(a) || a.id - b.id);
+    const men = alive2.reduce((n, s) => n + squadSize(s), 0);
     if (!men || total <= 0) return [];
     let left = Math.min(Math.floor(total), men);
-    const plan2 = alive.map((s) => ({ id: s.id, name: s.name, size: squadSize(s), take: 0 }));
+    const plan2 = alive2.map((s) => ({ id: s.id, name: s.name, size: squadSize(s), take: 0 }));
     for (const p of plan2) {
       if (left <= 0) break;
       const take2 = Math.min(p.size, Math.floor(Math.min(total, men) * p.size / men));
@@ -13934,15 +13934,15 @@
     const N = { v: 1, day, crafts: {} };
     for (const [k, c] of Object.entries(M.crafts)) N.crafts[k] = { ...c };
     const byCraft = workersByCraft(sim2);
-    const alive = aliveNames(sim2);
+    const alive2 = aliveNames(sim2);
     const ids = /* @__PURE__ */ new Set([...Object.keys(N.crafts), ...byCraft.keys()]);
     for (const id of ids) {
       const workers = byCraft.get(id) || [];
       let c = N.crafts[id];
       if (!c) c = N.crafts[id] = { level: 0, master: null, since: day, apprentice: null, appSince: 0, idle: 0 };
-      const masterAlive = c.master && alive.has(c.master);
+      const masterAlive = c.master && alive2.has(c.master);
       if (c.master && !masterAlive) {
-        const heir = c.apprentice && alive.has(c.apprentice) ? c.apprentice : null;
+        const heir = c.apprentice && alive2.has(c.apprentice) ? c.apprentice : null;
         const before = c.level;
         if (heir) {
           c.level = c.level * KEEP_WITH_HEIR;
@@ -13970,8 +13970,8 @@
       if (!workers.length) {
         c.idle = (c.idle || 0) + 1;
         if (c.idle <= IDLE_GRACE) {
-          if (c.master && !alive.has(c.master)) c.master = null;
-          if (c.apprentice && !alive.has(c.apprentice)) c.apprentice = null;
+          if (c.master && !alive2.has(c.master)) c.master = null;
+          if (c.apprentice && !alive2.has(c.apprentice)) c.apprentice = null;
           continue;
         }
         c.level = Math.max(0, c.level - MAX_LEVEL / (LEARN_DAYS * 3));
@@ -13981,13 +13981,13 @@
         continue;
       }
       c.idle = 0;
-      if (!c.master || !alive.has(c.master)) {
+      if (!c.master || !alive2.has(c.master)) {
         const first = workers[0];
         c.master = first.v.name;
         c.since = day;
         out.flags.promoted.push({ id, name: c.master });
       }
-      if (c.apprentice && !alive.has(c.apprentice)) {
+      if (c.apprentice && !alive2.has(c.apprentice)) {
         c.apprentice = null;
         c.appSince = 0;
       }
@@ -14803,7 +14803,7 @@
     S.day = ctx.day;
     const winter = ctx.seasonIdx === WINTER;
     const fearKeep = Math.pow(0.5, 1 / FEAR_HALF_LIFE);
-    const alive = [];
+    const alive2 = [];
     const born = {};
     const lost = {};
     const newborns = [];
@@ -14845,11 +14845,11 @@
         });
         continue;
       }
-      alive.push(h);
+      alive2.push(h);
     }
-    for (const h of alive.slice()) {
+    for (const h of alive2.slice()) {
       const sp = SPECIES[h.kind];
-      const count2 = alive.reduce((a, g3) => a + (g3.kind === h.kind ? 1 : 0), 0);
+      const count2 = alive2.reduce((a, g3) => a + (g3.kind === h.kind ? 1 : 0), 0);
       if (count2 >= sp.maxHerds) continue;
       const K = capacityAt(ctx, h.kind, h.cx, h.cy);
       if (K < 1 || h.n < K * SPLIT_SHARE) continue;
@@ -14864,7 +14864,7 @@
         h.cy,
         sp.radius * SPLIT_MIN_DIST,
         sp.radius * SPLIT_MAX_DIST,
-        alive.map((g3) => ({ x: g3.cx, y: g3.cy }))
+        alive2.map((g3) => ({ x: g3.cx, y: g3.cy }))
       );
       if (!p) continue;
       h.n -= take2;
@@ -14879,7 +14879,7 @@
         cause: "split"
       });
     }
-    S.herds = alive.concat(newborns);
+    S.herds = alive2.concat(newborns);
     const extinctNow = [];
     for (const kind of KINDS) {
       if (!S.seen[kind] || S.gone[kind] != null) continue;
@@ -15535,8 +15535,8 @@
       }
     }
     sim2.armyState.squads = sim2.armyState.squads.filter((s) => {
-      const alive = Object.values(s.units || {}).some((n) => n > 0) || Object.values(s.engines || {}).some((n) => n > 0);
-      return alive;
+      const alive2 = Object.values(s.units || {}).some((n) => n > 0) || Object.values(s.engines || {}).some((n) => n > 0);
+      return alive2;
     });
     if (L.flags.desert.reserve > 0) {
       sim2.army.soldiers = Math.max(0, sim2.army.soldiers - L.flags.desert.reserve);
@@ -23117,6 +23117,7 @@ ${s}`, "console");
 
   // app/src/render/quality.js
   var QUALITY_ORDER = ["eco", "medium", "high", "ultra"];
+  var FAR_ZOOM = 0.7;
   function resolveDpr(q, devicePixelRatio, cssW, cssH) {
     const dpr = Math.max(0.5, devicePixelRatio || 1);
     const area = Math.max(1, (cssW || 1280) * (cssH || 720));
@@ -23395,6 +23396,32 @@ ${s}`, "console");
       budget: { frameMs: 16.6, farFrameMs: 16 }
     })
   };
+  function lodForZoom(q, zoom) {
+    const z = zoom || 1;
+    const L = q.lod;
+    const far = z < FAR_ZOOM;
+    return {
+      far,
+      // разрешение выпечки чанка: вдали кладём вдвое грубее — на экране тайл
+      // всё равно меньше 22 px, разницы не видно, а блита вдвое меньше
+      tilePx: far ? q.tilePxFar : q.tilePx,
+      people: z >= L.peopleMinZoom,
+      // 0/1/2 — сколько деталей у человечка; вдали хватает силуэта
+      peopleDetail: z >= L.peopleDetail2Zoom ? Math.min(2, q.detail) : z >= L.peopleMinZoom ? Math.min(1, q.detail) : 0,
+      // жителей не видно — вместо толпы тёплое пятно над кварталом
+      crowdGlow: L.crowdGlow && z < L.peopleMinZoom,
+      beasts: z >= L.beastMinZoom,
+      props: q.ambientProps && z >= L.propsMinZoom,
+      shadows: q.shadows && z >= L.shadowMinZoom,
+      foam: q.shoreFoam && z >= L.foamMinZoom,
+      water: q.water && z >= L.waterMinZoom,
+      buildingGlow: z >= L.buildingGlowMinZoom,
+      maxPeople: far ? 0 : q.caps.people,
+      maxBeasts: far ? Math.round(q.caps.beasts * 0.3) : q.caps.beasts,
+      maxBuildings: q.caps.buildings,
+      frameBudgetMs: far ? q.budget.farFrameMs : q.budget.frameMs
+    };
+  }
   function touch(map, key) {
     if (!map.has(key)) return;
     const v = map.get(key);
@@ -26005,7 +26032,7 @@ ${s}`, "console");
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
       const em = eraMul[clamp16(sim2.eraIndex | 0, 0, 9)];
-      const weightOf = (id) => {
+      const weightOf2 = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
         if (id === "factory" || id === "workshop" || id === "foundry" || id === "power_plant" || id === "npp") return 0.95;
@@ -26022,7 +26049,7 @@ ${s}`, "console");
             if (xx >= 0 && yy >= 0 && xx < W && yy < H) blk.add(yy * W + xx);
           }
         }
-        const w = weightOf(b.id) * em;
+        const w = weightOf2(b.id) * em;
         const R = 6;
         const gx = (b.x + sz * 0.5) / S, gy = (b.y + sz * 0.5) / S;
         const gr = R / S;
@@ -28969,8 +28996,1223 @@ ${s}`, "console");
     }
   };
 
-  // app/src/render/renderer.js
+  // app/src/render/select.js
   var TILE_PX3 = 32;
+  var SELECT_LIMITS = {
+    auras: 8,
+    // рамок ауры в кадре; штатно их 1-2, потолок нужен для showAllAuras
+    ringMB: 1,
+    // память под выпеченные кольца и диск; фактически ~0,2 МБ
+    pickR: 0.45,
+    // радиус попадания по жителю, в клетках (см. pick)
+    minZoomPx: 6
+    // ниже 6 px на клетку слой молчит: рисовать нечего и незачем
+  };
+  var COL2 = {
+    hover: "236,242,255",
+    pick: "255,198,92",
+    aura: "125,227,255"
+  };
+  var PULSE = { hover: 1.15, pick: 1.9, aura: 2.6 };
+  var FLAT2 = 0.5;
+  var RING_PX = [64, 128, 128];
+  function phaseOf(seed, x, y) {
+    return hash2((x | 0) + (seed & 1023), (y | 0) - (seed >> 10 & 1023));
+  }
+  function makeCanvas2(w, h) {
+    if (typeof document !== "undefined" && document.createElement) {
+      const cv = document.createElement("canvas");
+      cv.width = w;
+      cv.height = h;
+      return cv;
+    }
+    if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(w, h);
+    return null;
+  }
+  var SelectLayer = class {
+    constructor(quality) {
+      this.q = quality;
+      this.enabled = true;
+      this.showAllAuras = false;
+      this.time = 0;
+      this.hover = null;
+      this.sel = null;
+      this.bakes = /* @__PURE__ */ new Map();
+      this.sils = /* @__PURE__ */ new WeakMap();
+      this.seed = 0;
+      this.stat = { rings: 0, auras: 0, outlines: 0, bakes: 0 };
+    }
+    setQuality(q) {
+      this.q = q;
+      this.bakes.clear();
+      this.sils = /* @__PURE__ */ new WeakMap();
+      this.stat.bakes = 0;
+    }
+    // -------------------------------------------------------------------------
+    // ВВОД. Три метода, которые дёргает main.js. Все берут МИРОВЫЕ координаты
+    // (renderer.screenToWorld), потому что слой ничего не знает про камеру.
+    // Кто находится под точкой (wx, wy). Житель выигрывает у здания намеренно:
+    // он на порядок мельче, и при обратном приоритете жителя, стоящего на клетке
+    // своего дома (а он там стоит почти всегда), нельзя было бы ткнуть вообще.
+    pick(sim2, wx, wy) {
+      const tx = Math.floor(wx), ty = Math.floor(wy);
+      let best = null;
+      let bestD = SELECT_LIMITS.pickR * SELECT_LIMITS.pickR;
+      const vs = sim2 && sim2.villagers || [];
+      for (let i = 0; i < vs.length; i++) {
+        const v = vs[i];
+        if (v.hp <= 0) continue;
+        const dx = v.x - wx, dy = v.y - 0.17 - wy;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) {
+          bestD = d;
+          best = v;
+        }
+      }
+      if (best) return { kind: "v", b: null, v: best, tx, ty };
+      const b = sim2 && sim2.buildingAt ? sim2.buildingAt(tx, ty) : null;
+      if (b) return { kind: "b", b, v: null, tx: b.x, ty: b.y };
+      return { kind: "t", b: null, v: null, tx, ty };
+    }
+    hoverAt(sim2, wx, wy) {
+      this.hover = this.pick(sim2, wx, wy);
+      return this.hover;
+    }
+    clearHover() {
+      this.hover = null;
+    }
+    // Клик. Повторный клик по уже выбранному объекту снимает выбор — иначе от
+    // подсветки нельзя избавиться, не открыв меню.
+    selectAt(sim2, wx, wy) {
+      const p = this.pick(sim2, wx, wy);
+      const s = this.sel;
+      if (p.kind === "t") {
+        this.sel = null;
+        return null;
+      }
+      if (s && (p.b && s.b === p.b || p.v && s.v === p.v)) {
+        this.sel = null;
+        return null;
+      }
+      this.sel = p;
+      return p;
+    }
+    select(p) {
+      this.sel = p || null;
+      return this.sel;
+    }
+    clear() {
+      this.sel = null;
+      this.hover = null;
+    }
+    get selection() {
+      return this.sel;
+    }
+    // Объект мог исчезнуть между кадрами: дом снесли рейдом, житель умер, игрок
+    // начал новую партию. Проверка стоит два сравнения, а её отсутствие — это
+    // кольцо, висящее над пустым местом до следующего клика.
+    validate(sim2) {
+      if (this.hover && !alive(this.hover, sim2)) this.hover = null;
+      if (this.sel && !alive(this.sel, sim2)) this.sel = null;
+    }
+    // -------------------------------------------------------------------------
+    // КАДР, ЧАСТЬ 1 — всё, что лежит НА ЗЕМЛЕ и обязано уйти под спрайты:
+    // кольца, подсветка клетки, рамки ауры. Вызывается перед Y-проходом.
+    drawGround(sim2, ctx, ox, oy, z, cw, ch, dt) {
+      this.time += Math.min(0.1, Math.max(0, dt || 0));
+      this.stat.rings = 0;
+      this.stat.auras = 0;
+      this.stat.outlines = 0;
+      if (!this.enabled || z < SELECT_LIMITS.minZoomPx) return;
+      this.seed = sim2 && sim2.world && sim2.world.seed | 0 || 0;
+      this.validate(sim2);
+      const hov = sim2 && sim2.placing ? null : this.hover;
+      const sel = this.sel;
+      if (!hov && !sel && !this.showAllAuras) return;
+      const lod = lodForZoom(this.q, z / TILE_PX3);
+      if (hov) this.tileMark(ctx, ox, oy, z, cw, ch, hov);
+      if (sel) this.markerFor(ctx, ox, oy, z, cw, ch, sel, "pick", lod);
+      if (hov && !sameTarget(hov, sel)) this.markerFor(ctx, ox, oy, z, cw, ch, hov, "hover", lod);
+      this.auras(sim2, ctx, ox, oy, z, cw, ch, hov, sel);
+    }
+    // КАДР, ЧАСТЬ 2 — то, что должно лечь ПОВЕРХ сцены: след пути выбранного
+    // жителя. Под спрайтами он бы прятался за домами ровно там, где интересен.
+    drawTop(sim2, ctx, ox, oy, z, cw, ch) {
+      if (!this.enabled || z < SELECT_LIMITS.minZoomPx) return;
+      const s = this.sel;
+      if (!s || s.kind !== "v") return;
+      const v = s.v;
+      const t = v.target;
+      if (!t) return;
+      if (this.q.detail === 0 && z < 14) return;
+      const pts = [[v.x, v.y]];
+      if (Array.isArray(v.path)) for (const p of v.path) pts.push([p.x + 0.5, p.y + 0.5]);
+      pts.push([t.x + 0.5, t.y + 0.5]);
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of pts) {
+        const sx = ox + p[0] * z, sy = oy + p[1] * z;
+        if (sx < minX) minX = sx;
+        if (sx > maxX) maxX = sx;
+        if (sy < minY) minY = sy;
+        if (sy > maxY) maxY = sy;
+      }
+      if (maxX < 0 || maxY < 0 || minX > cw || minY > ch) return;
+      ctx.save();
+      ctx.strokeStyle = `rgba(${COL2.pick},0.75)`;
+      ctx.lineWidth = Math.max(1.5, z * 0.055);
+      ctx.lineCap = "round";
+      const dash = Math.max(4, z * 0.28);
+      ctx.setLineDash([dash, dash * 0.9]);
+      ctx.lineDashOffset = this.q.detail === 0 ? 0 : -(this.time * z * 1.1) % 4096;
+      ctx.beginPath();
+      ctx.moveTo(ox + pts[0][0] * z, oy + pts[0][1] * z);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(ox + pts[i][0] * z, oy + pts[i][1] * z);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      const end = pts[pts.length - 1];
+      const ex = ox + end[0] * z, ey = oy + end[1] * z;
+      if (ex > -z && ey > -z && ex < cw + z && ey < ch + z) {
+        this.ring(ctx, ex, ey, Math.max(5, z * 0.34), "pick", phaseOf(this.seed, t.x, t.y));
+      }
+    }
+    // КАДР, ЧАСТЬ 3 — обводка силуэта жителя. Вызывается ИЗ Y-прохода
+    // (renderer.drawVillager), потому что только там известны лист, кадр шага и
+    // направление: своё состояние анимации слой заводить не имеет права —
+    // оно разошлось бы с тем, что реально нарисовано, и обводка «поплыла» бы
+    // относительно фигуры на кадр-два.
+    villager(ctx, v, sheet, frame2, dir, sx, sy, w, h) {
+      if (!this.enabled || !sheet || !sheet.cv) return;
+      const key = this.sel && this.sel.v === v ? "pick" : this.hover && this.hover.v === v ? "hover" : null;
+      if (!key) return;
+      if (this.q.detail === 0 && key === "hover") return;
+      const sil = this.silhouette(sheet, frame2, dir, key);
+      if (!sil) return;
+      const d = Math.max(1, Math.min(3, Math.round(h * 0.07)));
+      const dx = Math.round(sx - w / 2), dy = Math.round(sy - h * 0.955);
+      const dw = Math.round(w), dh = Math.round(h);
+      const offs = this.q.detail >= 2 ? OFFS8 : OFFS4;
+      const ph = phaseOf(this.seed, Math.floor(v.x), Math.floor(v.y));
+      const s = Math.sin((this.time / PULSE[key] + ph) * Math.PI * 2);
+      ctx.save();
+      ctx.globalAlpha = 0.62 + 0.26 * s;
+      for (let i = 0; i < offs.length; i += 2) {
+        ctx.drawImage(sil, dx + offs[i] * d, dy + offs[i + 1] * d, dw, dh);
+      }
+      ctx.restore();
+      this.stat.outlines++;
+    }
+    // -------------------------------------------------------------------------
+    // Кольцо/подсветка для одного выбранного объекта.
+    markerFor(ctx, ox, oy, z, cw, ch, m, key, lod) {
+      if (m.kind === "b") {
+        const b = m.b;
+        const size = (b.size || 1) * z;
+        const cx = ox + b.x * z + size / 2;
+        const cy = oy + b.y * z + size * 0.88;
+        if (cx < -size || cy < -size || cx > cw + size || cy > ch + size) return;
+        const rx = size * 0.6;
+        const ph = phaseOf(this.seed, b.x, b.y);
+        this.ring(ctx, cx, cy, rx, key, ph);
+        if (this.q.detail >= 2 && key === "pick") this.ring(ctx, cx, cy, rx * 0.72, key, ph + 0.5, 0.45);
+      } else if (m.kind === "v") {
+        if (lod && !lod.people) return;
+        const cx = ox + m.v.x * z, cy = oy + m.v.y * z;
+        if (cx < -z || cy < -z || cx > cw + z || cy > ch + z) return;
+        this.ring(
+          ctx,
+          cx,
+          cy,
+          Math.max(5, z * 0.3),
+          key,
+          phaseOf(this.seed, Math.floor(m.v.x), Math.floor(m.v.y))
+        );
+      }
+    }
+    // Подсветка клетки под курсором. Для постройки — всё пятно застройки
+    // (b.size), для пустой земли — одна клетка.
+    tileMark(ctx, ox, oy, z, cw, ch, m) {
+      const n = m.kind === "b" ? m.b.size || 1 : 1;
+      const x = ox + m.tx * z, y = oy + m.ty * z, s = n * z;
+      if (x + s < 0 || y + s < 0 || x > cw || y > ch) return;
+      const a = 0.5 + 0.2 * Math.sin(this.time / PULSE.hover * Math.PI * 2);
+      ctx.save();
+      if (this.q.detail > 0) {
+        ctx.fillStyle = `rgba(${COL2.hover},0.05)`;
+        ctx.fillRect(x, y, s, s);
+      }
+      ctx.strokeStyle = `rgba(${COL2.hover},${a.toFixed(3)})`;
+      ctx.lineWidth = Math.max(1, z * 0.045);
+      const p = ctx.lineWidth / 2;
+      ctx.strokeRect(x + p, y + p, s - p * 2, s - p * 2);
+      ctx.restore();
+    }
+    // Рамки зон действия. Штатно их две (наведение + выбор); showAllAuras
+    // включает показ всех, и вот там нужен потолок.
+    auras(sim2, ctx, ox, oy, z, cw, ch, hov, sel) {
+      const cap = Math.min(SELECT_LIMITS.auras, this.q.caps.buildings);
+      let n = 0;
+      if (this.showAllAuras) {
+        for (const b of sim2.buildings) {
+          if (n >= cap) break;
+          if (b.destroyed || !b.done) continue;
+          if (this.aura(sim2, ctx, ox, oy, z, cw, ch, b, 0.55)) n++;
+        }
+        return;
+      }
+      for (const m of [sel, hov]) {
+        if (!m || m.kind !== "b" || n >= cap) continue;
+        if (sameTarget(m, sel) && m !== sel) continue;
+        if (this.aura(sim2, ctx, ox, oy, z, cw, ch, m.b, 1)) n++;
+      }
+    }
+    // Одна рамка. Возвращает true, если что-то нарисовали.
+    aura(sim2, ctx, ox, oy, z, cw, ch, b, k) {
+      const def = BUILDINGS[b.id];
+      if (!def || !def.aura || !def.aura.r) return false;
+      let r = def.aura.r;
+      if (def.aura.farm && sim2.hasBuilding && sim2.hasBuilding("train_station")) r += 2;
+      const size = (b.size || 1) * z;
+      const cx = ox + b.x * z + z / 2, cy = oy + b.y * z + z / 2;
+      const R = r * z;
+      if (cx + R < 0 || cy + R < 0 || cx - R > cw || cy - R > ch) return false;
+      ctx.save();
+      if (this.q.detail > 0) {
+        const disc = this.bake("disc");
+        if (disc) {
+          ctx.globalAlpha = 0.16 * k;
+          ctx.drawImage(disc, cx - R, cy - R, R * 2, R * 2);
+          ctx.globalAlpha = 1;
+        }
+      }
+      const s = Math.sin((this.time / PULSE.aura + phaseOf(this.seed, b.x, b.y)) * Math.PI * 2);
+      ctx.strokeStyle = `rgba(${COL2.aura},${(0.5 + 0.18 * s) * k})`;
+      ctx.lineWidth = Math.max(1, z * 0.05);
+      const dash = Math.max(5, z * 0.35);
+      ctx.setLineDash([dash, dash * 0.75]);
+      ctx.lineDashOffset = this.q.detail === 0 ? 0 : this.time * z * 0.5 % 4096;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      this.stat.auras++;
+      return true;
+    }
+    // -------------------------------------------------------------------------
+    // Блит выпеченного кольца. Вся «мягкость» уже в картинке; здесь только
+    // пульсация масштабом и прозрачностью и сплющивание по вертикали.
+    ring(ctx, cx, cy, rx, key, phase, mul2 = 1) {
+      const cv = this.bake(key);
+      if (!cv) return;
+      const s = Math.sin((this.time / PULSE[key] + (phase || 0)) * Math.PI * 2);
+      const RX = rx * (1 + 0.035 * s);
+      const RY = RX * FLAT2;
+      ctx.save();
+      ctx.globalAlpha = (0.62 + 0.28 * s) * mul2;
+      ctx.drawImage(cv, cx - RX, cy - RY, RX * 2, RY * 2);
+      ctx.restore();
+      this.stat.rings++;
+    }
+    // Выпечка по требованию: 'hover' | 'pick' — кольцо, 'disc' — заливка ауры.
+    bake(key) {
+      const d = Math.max(0, Math.min(2, this.q.detail | 0));
+      const S = RING_PX[d];
+      const id = `${key}|${S}`;
+      let cv = this.bakes.get(id);
+      if (cv !== void 0) return cv;
+      cv = makeCanvas2(S, S);
+      if (!cv) {
+        this.bakes.set(id, null);
+        return null;
+      }
+      const c = cv.getContext("2d");
+      const col = key === "disc" ? COL2.aura : COL2[key];
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      if (key === "disc") {
+        g2.addColorStop(0, `rgba(${col},0.55)`);
+        g2.addColorStop(0.6, `rgba(${col},0.30)`);
+        g2.addColorStop(1, `rgba(${col},0)`);
+      } else {
+        g2.addColorStop(0, `rgba(${col},0.10)`);
+        g2.addColorStop(0.55, `rgba(${col},0.07)`);
+        g2.addColorStop(0.74, `rgba(${col},0.42)`);
+        g2.addColorStop(0.84, `rgba(${col},0.95)`);
+        g2.addColorStop(0.93, `rgba(${col},0.40)`);
+        g2.addColorStop(1, `rgba(${col},0)`);
+      }
+      c.fillStyle = g2;
+      c.fillRect(0, 0, S, S);
+      this.bakes.set(id, cv);
+      this.stat.bakes++;
+      prune(this.bakes, {
+        maxEntries: 8,
+        maxBytes: SELECT_LIMITS.ringMB * 1e6,
+        bytesOf: canvasBytes
+      });
+      return cv;
+    }
+    // Силуэт одного кадра листа жителей, залитый цветом выделения. Печётся один
+    // раз на (лист, кадр, направление) и живёт ровно столько же, сколько лист.
+    // Наивный путь — красить кадр в кадре через ctx.filter или попиксельно —
+    // стоил бы больше, чем весь остальной слой вместе взятый.
+    silhouette(sheet, frame2, dir, key) {
+      let arr = this.sils.get(sheet.cv);
+      if (!arr) {
+        arr = new Array(32);
+        this.sils.set(sheet.cv, arr);
+      }
+      const i = (key === "pick" ? 0 : 16) + (dir & 3) * 4 + (frame2 & 3);
+      let cv = arr[i];
+      if (cv !== void 0) return cv;
+      cv = makeCanvas2(sheet.fw, sheet.fh);
+      if (!cv) {
+        arr[i] = null;
+        return null;
+      }
+      const c = cv.getContext("2d");
+      c.drawImage(
+        sheet.cv,
+        frame2 * sheet.fw,
+        dir * sheet.fh,
+        sheet.fw,
+        sheet.fh,
+        0,
+        0,
+        sheet.fw,
+        sheet.fh
+      );
+      c.globalCompositeOperation = "source-in";
+      c.fillStyle = `rgb(${COL2[key]})`;
+      c.fillRect(0, 0, sheet.fw, sheet.fh);
+      arr[i] = cv;
+      this.stat.bakes++;
+      return cv;
+    }
+    stats() {
+      return {
+        rings: this.stat.rings,
+        auras: this.stat.auras,
+        outlines: this.stat.outlines,
+        bakes: this.stat.bakes,
+        hover: this.hover ? this.hover.kind : null,
+        sel: this.sel ? this.sel.kind : null
+      };
+    }
+  };
+  var OFFS4 = [-1, 0, 1, 0, 0, -1, 0, 1];
+  var OFFS8 = [-1, 0, 1, 0, 0, -1, 0, 1, -1, -1, 1, -1, -1, 1, 1, 1];
+  function alive(m, sim2) {
+    if (!m) return false;
+    if (m.kind === "b") return !!m.b && !m.b.destroyed;
+    if (m.kind === "v") return !!m.v && m.v.hp > 0 && (!sim2 || !sim2.villagers || sim2.villagers.indexOf(m.v) >= 0);
+    return true;
+  }
+  function sameTarget(a, b) {
+    if (!a || !b) return false;
+    return a.b && a.b === b.b || a.v && a.v === b.v;
+  }
+
+  // app/src/render/icons.js
+  var ICON_KINDS = [
+    { id: "damage", prio: 100, color: "#c8412f", ru: "Повреждено" },
+    { id: "idle", prio: 90, color: "#d8a119", ru: "Нет рабочих" },
+    { id: "stuck", prio: 80, color: "#8e6fc4", ru: "Цепочка встала" },
+    { id: "full", prio: 70, color: "#dd7a1e", ru: "Склад полон" },
+    { id: "noheir", prio: 50, color: "#3d86b3", ru: "Мастер без ученика" },
+    { id: "build", prio: 20, color: "#7c8a99", ru: "Идёт стройка" }
+  ];
+  var KIND_IDX = Object.fromEntries(ICON_KINDS.map((k, i) => [k.id, i]));
+  var HP_WARN = 0.8;
+  var HP_SEVERE = 0.45;
+  var EMPTY_GRACE_DAYS = 2;
+  var FULL_AT = 0.995;
+  var HEIR_LEVEL = 0.45;
+  var MAX_PER_CHAIN = 3;
+  var CAP_MARKS = 96;
+  var SCAN_SEC = 0.35;
+  var ICON_MIN_PX = 14;
+  var ICON_MAX_PX = 28;
+  var ICON_K = 0.5;
+  var CELL = 56;
+  var BOB_W = 1.5;
+  var BOB_A = 0.08;
+  var PULSE_W = 3.4;
+  var PULSE_A = 0.08;
+  var H_FACTOR = 1.16 * 1.12;
+  var H_CAP = 3.6;
+  function minZoomFor(q) {
+    const p = q && q.lod ? q.lod.propsMinZoom : 1;
+    return Math.min(p, 1);
+  }
+  function capFor(q) {
+    const d = q && typeof q.detail === "number" ? q.detail : 1;
+    return [12, 18, 24][Math.max(0, Math.min(2, d))];
+  }
+  function maxHpOf(def) {
+    return def && def.wall || 100;
+  }
+  function isCraft(def) {
+    return !!(def && def.workers > 0 && def.out && Object.keys(def.out).length);
+  }
+  function outputWasted(def, res, cap) {
+    const out = def && def.out;
+    if (!out || !res || !cap) return false;
+    let any = false;
+    for (const r of Object.keys(out)) {
+      if (!out[r]) continue;
+      const c = cap[r];
+      if (!(c > 0) || c >= 99999) return false;
+      if ((res[r] || 0) < c * FULL_AT) return false;
+      any = true;
+    }
+    return any;
+  }
+  var _chainLen = -1;
+  var _chainMap = /* @__PURE__ */ new Map();
+  function chainBuildings() {
+    if (CHAINS.length === _chainLen) return _chainMap;
+    _chainLen = CHAINS.length;
+    _chainMap = /* @__PURE__ */ new Map();
+    for (const c of CHAINS) {
+      const set = /* @__PURE__ */ new Set();
+      for (const st of c.stages || []) for (const p of st.by || []) set.add(p.b);
+      _chainMap.set(c.id, set);
+    }
+    return _chainMap;
+  }
+  function createMemory2() {
+    return {
+      day: -1,
+      // sim.day на прошлом пересчёте
+      empty: /* @__PURE__ */ new WeakMap()
+      // постройка → сколько игровых дней стоит без рабочих
+    };
+  }
+  function dayStep(sim2, mem) {
+    const day = sim2 && typeof sim2.day === "number" ? sim2.day : 0;
+    const prev = mem.day;
+    mem.day = day;
+    if (prev < 0) return 0;
+    return Math.max(0, Math.min(1, day - prev));
+  }
+  function scanMarks(sim2, mem) {
+    const marks = [];
+    if (!sim2 || !Array.isArray(sim2.buildings)) return marks;
+    const dDay = dayStep(sim2, mem);
+    const staff = /* @__PURE__ */ new Map();
+    for (const v of sim2.villagers || []) {
+      if (!v || v.hp !== void 0 && v.hp <= 0) continue;
+      const t = v.target;
+      if (!t || t.kind !== "work" || !t.b) continue;
+      staff.set(t.b, (staff.get(t.b) || 0) + 1);
+    }
+    const stuckIds = /* @__PURE__ */ new Set();
+    const flags = sim2.sys && sim2.sys.indLinks && sim2.sys.indLinks.flags;
+    if (flags && Array.isArray(flags.bottlenecks) && flags.bottlenecks.length) {
+      const map = chainBuildings();
+      for (const row of flags.bottlenecks) {
+        const set = row && map.get(row.id);
+        if (set) for (const id of set) stuckIds.add(id);
+      }
+    }
+    const stuckLeft = /* @__PURE__ */ new Map();
+    const heirIds = /* @__PURE__ */ new Set();
+    const crafts2 = sim2.linkMasters && sim2.linkMasters.crafts;
+    if (crafts2) {
+      for (const [id, c] of Object.entries(crafts2)) {
+        if (c && c.master && !c.apprentice && c.level >= HEIR_LEVEL) heirIds.add(id);
+      }
+    }
+    const heirUsed = /* @__PURE__ */ new Set();
+    const res = sim2.res, cap = sim2.resCap;
+    for (const b of sim2.buildings) {
+      if (!b || b.destroyed) continue;
+      const def = BUILDINGS[b.id];
+      if (!def) continue;
+      let emptyDays = 0;
+      if (isCraft(def) && b.done) {
+        const busy = staff.get(b) || 0;
+        emptyDays = busy > 0 ? 0 : (mem.empty.get(b) || 0) + dDay;
+        mem.empty.set(b, emptyDays);
+      } else if (mem.empty.has(b)) {
+        mem.empty.set(b, 0);
+      }
+      let kind = null, sev = 0;
+      if (!b.done) {
+        kind = "build";
+      } else {
+        const hpK = (b.hp === void 0 ? 1 : b.hp) / maxHpOf(def);
+        if (hpK < HP_WARN) {
+          kind = "damage";
+          sev = hpK < HP_SEVERE ? 2 : 1;
+        } else if (emptyDays >= EMPTY_GRACE_DAYS) {
+          kind = "idle";
+        } else if (stuckIds.has(b.id)) {
+          const left = stuckLeft.has(b.id) ? stuckLeft.get(b.id) : MAX_PER_CHAIN;
+          if (left > 0) {
+            kind = "stuck";
+            stuckLeft.set(b.id, left - 1);
+          }
+        }
+        if (!kind && outputWasted(def, res, cap)) kind = "full";
+        if (!kind && heirIds.has(b.id) && !heirUsed.has(b.id)) {
+          heirUsed.add(b.id);
+          kind = "noheir";
+        }
+      }
+      if (!kind) continue;
+      const size = b.size || 1;
+      marks.push({
+        kind,
+        sev,
+        // Центр пятна застройки и высота конька — всё, что нужно кадру.
+        x: b.x + size / 2,
+        y: b.y,
+        size,
+        top: Math.min(H_CAP, H_FACTOR * archHeight(ARCH[b.id] || "house")) * size,
+        b
+      });
+    }
+    marks.sort((p, q) => {
+      const d = weightOf(q) - weightOf(p);
+      if (d) return d;
+      return p.y - q.y || p.x - q.x;
+    });
+    if (marks.length > CAP_MARKS) marks.length = CAP_MARKS;
+    return marks;
+  }
+  function weightOf(m) {
+    return ICON_KINDS[KIND_IDX[m.kind]].prio + (m.sev || 0);
+  }
+  function iconPxFor(z) {
+    return Math.max(ICON_MIN_PX, Math.min(ICON_MAX_PX, z * ICON_K));
+  }
+  function phaseOf2(seed, x, y) {
+    return hash2((seed | 0) ^ Math.round(x * 4) | 0, Math.round(y * 4)) * 6.2831853;
+  }
+  var IconLayer = class {
+    constructor(quality) {
+      this.q = quality;
+      this.enabled = true;
+      this.atlas = null;
+      this.mem = createMemory2();
+      this.marks = [];
+      this.acc = SCAN_SEC;
+      this.drawn = 0;
+      this.bakes = 0;
+    }
+    // Пресет меняется — атлас снимаем. Он и правда зависит от пресета: толщина
+    // обводки глифа берётся от q.detail, а на eco рисуется упрощённый значок.
+    setQuality(q) {
+      this.q = q;
+      this.atlas = null;
+    }
+    stats() {
+      return { marks: this.marks.length, drawn: this.drawn, bakes: this.bakes, bytes: this.bytes() };
+    }
+    bytes() {
+      return this.atlas ? this.atlas.width * this.atlas.height * 4 : 0;
+    }
+    // Единственный вход из renderer. ox/oy — смещение камеры в пикселях,
+    // z — пикселей на клетку, time — this.time рендера (реальные секунды).
+    draw(sim2, ctx, ox, oy, z, cw, ch, time, dtReal) {
+      this.drawn = 0;
+      if (!this.enabled || !sim2) return;
+      this.acc += dtReal || 0;
+      if (this.acc >= SCAN_SEC) {
+        this.acc = 0;
+        this.marks = scanMarks(sim2, this.mem);
+      }
+      const zoom = z / 32;
+      if (zoom < minZoomFor(this.q)) return;
+      if (!this.marks.length) return;
+      if (!this.atlas) {
+        this.atlas = bakeAtlas(this.q);
+        this.bakes++;
+      }
+      const atlas = this.atlas;
+      const px = iconPxFor(z);
+      const cap = capFor(this.q);
+      const seed = (sim2.world && sim2.world.seed) | 0;
+      ctx.save();
+      for (let i = 0; i < this.marks.length && this.drawn < cap; i++) {
+        const m = this.marks[i];
+        const sx = ox + m.x * z;
+        const sy = oy + (m.y + m.size - m.top) * z - px * 0.55;
+        if (sx < -px || sy < -px || sx > cw + px || sy > ch + px) continue;
+        const ph = phaseOf2(seed, m.x, m.y);
+        const bob = Math.sin(time * BOB_W + ph) * px * BOB_A;
+        const k = m.kind === "damage" && m.sev >= 2 ? 1 + PULSE_A * (0.5 + 0.5 * Math.sin(time * PULSE_W + ph)) : 1;
+        const w = px * k;
+        const cell = KIND_IDX[m.kind] * CELL;
+        ctx.drawImage(
+          atlas,
+          cell,
+          0,
+          CELL,
+          CELL,
+          Math.round(sx - w / 2),
+          Math.round(sy + bob - w / 2),
+          Math.round(w),
+          Math.round(w)
+        );
+        this.drawn++;
+      }
+      ctx.restore();
+    }
+  };
+  var TAU = Math.PI * 2;
+  function bakeAtlas(q) {
+    const detail = q && typeof q.detail === "number" ? q.detail : 1;
+    const cv = document.createElement("canvas");
+    cv.width = CELL * ICON_KINDS.length;
+    cv.height = CELL;
+    const c = cv.getContext("2d");
+    for (let i = 0; i < ICON_KINDS.length; i++) {
+      c.save();
+      c.translate(i * CELL, 0);
+      bakeOne(c, ICON_KINDS[i], detail);
+      c.restore();
+    }
+    return cv;
+  }
+  function bakeOne(c, kind, detail) {
+    const cx = CELL / 2, cy = CELL / 2 - 1;
+    const R = 20;
+    c.fillStyle = "rgba(0,0,0,0.32)";
+    c.beginPath();
+    c.arc(cx, cy + 2.5, R + 1, 0, TAU);
+    c.fill();
+    const g2 = c.createLinearGradient(0, cy - R, 0, cy + R);
+    g2.addColorStop(0, mix3(kind.color, 255, 0.28));
+    g2.addColorStop(1, mix3(kind.color, 0, 0.22));
+    c.fillStyle = g2;
+    c.beginPath();
+    c.arc(cx, cy, R, 0, TAU);
+    c.fill();
+    c.strokeStyle = "rgba(0,0,0,0.55)";
+    c.lineWidth = 2.5;
+    c.beginPath();
+    c.arc(cx, cy, R - 1.2, 0, TAU);
+    c.stroke();
+    if (detail > 0) {
+      c.strokeStyle = "rgba(255,255,255,0.30)";
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(cx, cy, R - 4, Math.PI * 1.15, Math.PI * 1.85);
+      c.stroke();
+    }
+    c.save();
+    c.translate(cx, cy);
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    c.fillStyle = "#fff";
+    c.strokeStyle = "#fff";
+    (GLYPH[kind.id] || (() => {
+    }))(c);
+    c.restore();
+  }
+  var GLYPH = {
+    // Трещина: ломаная сверху вниз. Самый узнаваемый знак «сломано» без текста.
+    damage(c) {
+      c.lineWidth = 4.2;
+      c.beginPath();
+      c.moveTo(-4.5, -12);
+      c.lineTo(2, -4.5);
+      c.lineTo(-3, 0.5);
+      c.lineTo(3.5, 12);
+      c.stroke();
+      c.lineWidth = 3;
+      c.beginPath();
+      c.moveTo(-3, 0.5);
+      c.lineTo(-8.5, 4.5);
+      c.stroke();
+    },
+    // Человек под запретом: рабочее место есть, человека нет.
+    idle(c) {
+      c.beginPath();
+      c.arc(0, -7.5, 4, 0, TAU);
+      c.fill();
+      c.beginPath();
+      c.moveTo(-6.5, 9);
+      c.lineTo(-4.5, -1.5);
+      c.lineTo(4.5, -1.5);
+      c.lineTo(6.5, 9);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = "rgba(40,26,0,0.85)";
+      c.lineWidth = 4.5;
+      c.beginPath();
+      c.moveTo(-11, 11);
+      c.lineTo(11, -11);
+      c.stroke();
+    },
+    // Разорванное звено цепи: две дуги, смотрящие друг на друга, с зазором.
+    stuck(c) {
+      c.lineWidth = 4;
+      c.beginPath();
+      c.arc(-5.5, 0, 7.5, Math.PI * 0.42, Math.PI * 1.58);
+      c.stroke();
+      c.beginPath();
+      c.arc(5.5, 0, 7.5, Math.PI * 1.42, Math.PI * 0.58);
+      c.stroke();
+    },
+    // Упёрлось в потолок: стрелка вверх, над ней перекладина.
+    full(c) {
+      c.fillRect(-11, -13, 22, 3.6);
+      c.beginPath();
+      c.moveTo(0, -8.5);
+      c.lineTo(7.5, -1);
+      c.lineTo(2.6, -1);
+      c.lineTo(2.6, 11.5);
+      c.lineTo(-2.6, 11.5);
+      c.lineTo(-2.6, -1);
+      c.lineTo(-7.5, -1);
+      c.closePath();
+      c.fill();
+    },
+    // Песочные часы: умение утекает вместе с мастером, передать некому.
+    noheir(c) {
+      c.fillRect(-9.5, -13, 19, 3.2);
+      c.fillRect(-9.5, 9.8, 19, 3.2);
+      c.beginPath();
+      c.moveTo(-7.5, -9.8);
+      c.lineTo(7.5, -9.8);
+      c.lineTo(0, 0);
+      c.closePath();
+      c.fill();
+      c.beginPath();
+      c.moveTo(-7.5, 9.8);
+      c.lineTo(7.5, 9.8);
+      c.lineTo(0, 0);
+      c.closePath();
+      c.fill();
+    },
+    // Каска: единственный значок, который НЕ беда. Поэтому и форма мирная, и цвет
+    // серо-синий — глаз проходит мимо, пока не начнёт искать стройку намеренно.
+    build(c) {
+      c.beginPath();
+      c.arc(0, 2, 9.5, Math.PI, 0);
+      c.closePath();
+      c.fill();
+      c.fillRect(-12.5, 2, 25, 3.6);
+      c.fillRect(-2, -9.5, 4, 5);
+    }
+  };
+  function mix3(hex, to, k) {
+    const v = parseInt(hex.slice(1), 16);
+    const r = Math.round((v >> 16 & 255) + (to - (v >> 16 & 255)) * k);
+    const g2 = Math.round((v >> 8 & 255) + (to - (v >> 8 & 255)) * k);
+    const b = Math.round((v & 255) + (to - (v & 255)) * k);
+    return `rgb(${r},${g2},${b})`;
+  }
+
+  // app/src/render/city_lights.js
+  var TILE_PX4 = 32;
+  var clamp016 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  function hashB(seed, x, y, salt) {
+    let h = x * 374761393 + y * 668265263 + seed * 1442695041 + salt * 2246822519 | 0;
+    h = (h ^ h >>> 13) * 1274126177 | 0;
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+  function makeRnd6(seed) {
+    let s = seed | 0 || 1374496523;
+    return () => {
+      s ^= s << 13;
+      s |= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      s |= 0;
+      return (s >>> 0) / 4294967296;
+    };
+  }
+  var WINDOW_CLASS = ["fire", "fire", "lamp", "lamp", "lamp", "lamp", "grid", "grid", "strip", "strip"];
+  function windowClass(era) {
+    return WINDOW_CLASS[Math.max(0, Math.min(9, era | 0))];
+  }
+  function warmEra(era) {
+    return (era | 0) < 7;
+  }
+  var STEPS = 6;
+  var FRAME = 48;
+  var VARIANTS = 3;
+  var BAKES_PER_FRAME = 3;
+  var THR_LO = 0.1;
+  var THR_HI = 0.52;
+  var SPAN = 0.45;
+  var DUSK_BIAS = -0.07;
+  var DAWN_BIAS = 0.07;
+  function phaseBias(dayTime) {
+    const t = (dayTime % 1 + 1) % 1;
+    return t > 0.5 ? DUSK_BIAS : DAWN_BIAS;
+  }
+  function litFill(seed, x, y, night, bias) {
+    const thr = THR_LO + (THR_HI - THR_LO) * hashB(seed, x, y, 1) + (bias || 0);
+    return clamp016((night - thr) / SPAN);
+  }
+  function frameIndex(fill) {
+    return Math.max(0, Math.min(STEPS, Math.ceil(clamp016(fill) * STEPS)));
+  }
+  var WEATHER_LIGHT = {
+    sun: { pool: 1, radius: 1, win: 1 },
+    cloud: { pool: 1.05, radius: 1.02, win: 1 },
+    rain: { pool: 1.18, radius: 1.08, win: 0.92 },
+    storm: { pool: 1.22, radius: 1.1, win: 0.88 },
+    snow: { pool: 1.12, radius: 1.06, win: 0.96 },
+    fog: { pool: 1.3, radius: 1.28, win: 0.8 },
+    heat: { pool: 1, radius: 1, win: 1 }
+  };
+  var WEATHER_DEFAULT2 = WEATHER_LIGHT.sun;
+  var TOWER_ASPECT = 1.6;
+  function facadeRect(dx, dy, dw, dh) {
+    const tower = dh > dw * TOWER_ASPECT;
+    const top = tower ? 0.18 : 0.3;
+    const height = tower ? 0.64 : 0.52;
+    return {
+      x: dx + dw * 0.2,
+      y: dy + dh * top,
+      w: dw * 0.6,
+      h: dh * height
+    };
+  }
+  var CLASS_SALT = { fire: 1, lamp: 2, grid: 3, strip: 4 };
+  function layoutWindows(cls, variant) {
+    const rnd = makeRnd6(2654435761 ^ variant * 2654435761 ^ (CLASS_SALT[cls] || 0) * 40503);
+    const out = [];
+    const push = (x, y, w, h, soft) => out.push({ x, y, w, h, soft, rank: rnd() });
+    if (cls === "fire") {
+      const n = 2 + variant % 2;
+      for (let i = 0; i < n; i++) {
+        const w = 0.16 + rnd() * 0.06;
+        push(0.3 + (i - (n - 1) / 2) * 0.26 + (rnd() - 0.5) * 0.06, 0.58 + rnd() * 0.18, w, w * 0.9, true);
+      }
+      return out;
+    }
+    if (cls === "lamp") {
+      const cols = 2 + variant % 2;
+      const rows2 = 2;
+      const w = 0.13, h = 0.17;
+      for (let r = 0; r < rows2; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (rnd() < 0.18) continue;
+          const cx = (c + 0.5) / cols, cy = 0.28 + r * 0.34;
+          push(cx - w / 2 + (rnd() - 0.5) * 0.06, cy + (rnd() - 0.5) * 0.05, w, h, false);
+        }
+      }
+      return out;
+    }
+    if (cls === "grid") {
+      const cols = 4 + variant % 2;
+      const rows2 = 3;
+      const w = 0.11, h = 0.13;
+      for (let r = 0; r < rows2; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (rnd() < 0.12) continue;
+          push((c + 0.5) / cols - w / 2, 0.16 + r * 0.28, w, h, false);
+        }
+      }
+      return out;
+    }
+    const rows = 4;
+    for (let r = 0; r < rows; r++) {
+      const y = 0.14 + r * 0.2;
+      const gap = 0.24 + rnd() * 0.34;
+      push(0.02, y, gap - 0.06, 0.055, false);
+      push(gap + 0.02, y, 0.96 - gap, 0.055, false);
+    }
+    return out;
+  }
+  var CityLights = class {
+    constructor(quality) {
+      this.q = quality;
+      this.atlas = /* @__PURE__ */ new Map();
+      this.pool = null;
+      this.poolCtx = null;
+      this.poolW = 0;
+      this.poolH = 0;
+      this.poolScale = 0.5;
+      this.blob = /* @__PURE__ */ new Map();
+      this.on = false;
+      this.hasPool = false;
+      this.seed = 0;
+      this.night = 0;
+      this.bias = 0;
+      this.time = 0;
+      this.wl = WEATHER_DEFAULT2;
+      this.maxWindows = 0;
+      this.bakesLeft = 0;
+      this.win = [];
+      this.winN = 0;
+      this.stat = { pools: 0, windows: 0, bakes: 0 };
+    }
+    setQuality(q) {
+      this.q = q;
+      this.trimCaches();
+    }
+    // -------------------------------------------------------------------
+    // Готовит кадр: решает, работает ли слой вообще, и печёт слой пятен.
+    // Вызывается ДО прохода по зданиям — пятна лежат на земле, здания должны
+    // накрывать их, а не наоборот.
+    //
+    // opts: { zoom, time }. time — это renderer.this.time (секунды с запуска),
+    // нужен только для мерцания костров; на sim.dayTime мерцание не сделать,
+    // сутки идут слишком медленно.
+    begin(sim2, ox, oy, z, cw, ch, L, opts) {
+      this.on = false;
+      this.hasPool = false;
+      this.winN = 0;
+      this.stat.pools = 0;
+      this.stat.windows = 0;
+      this.stat.bakes = 0;
+      this.bakesLeft = BAKES_PER_FRAME;
+      if (!sim2 || !L) return;
+      this.night = L.glow;
+      if (this.night <= 0.03) return;
+      const zoom = z / TILE_PX4;
+      const lod = lodForZoom(this.q, zoom);
+      if (!lod.buildingGlow) return;
+      this.on = true;
+      this.seed = (sim2.world && sim2.world.seed) | 0 || 31836798;
+      this.bias = phaseBias(sim2.dayTime);
+      this.time = opts && opts.time || 0;
+      this.wl = WEATHER_LIGHT[sim2.weather] || WEATHER_DEFAULT2;
+      this.maxWindows = Math.min(lod.maxBuildings, 260);
+      if (this.q.detail < 1) return;
+      this.ensurePool(cw, ch);
+      if (!this.poolCtx) return;
+      const pc = this.poolCtx;
+      const s = this.poolScale;
+      pc.setTransform(1, 0, 0, 1, 0, 0);
+      pc.clearRect(0, 0, this.poolW, this.poolH);
+      pc.globalCompositeOperation = "lighter";
+      const cap = Math.min(lod.maxBuildings, 160);
+      const list = this.collect(sim2, ox, oy, z, cw, ch, cap);
+      const warmBlob = this.blobSprite(true);
+      const coldBlob = this.blobSprite(false);
+      if (!warmBlob || !coldBlob) return;
+      for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        const r = (it.size * 0.75 + z * 1.5) * (0.55 + 0.45 * it.fill) * this.wl.radius * s;
+        const cx = (it.sx + it.size / 2) * s;
+        const cy = (it.sy + it.size * 0.82) * s;
+        pc.globalAlpha = clamp016(0.28 * it.fill * this.wl.pool);
+        const blob2 = it.warm ? warmBlob : coldBlob;
+        pc.drawImage(blob2, cx - r, cy - r, r * 2, r * 2);
+      }
+      pc.globalAlpha = 1;
+      pc.globalCompositeOperation = "source-over";
+      this.stat.pools = list.length;
+      this.hasPool = list.length > 0;
+    }
+    // Собирает освещённые постройки в кадре. Отдельный метод, потому что тут
+    // единственное место, где может понадобиться сортировка, и её хочется
+    // держать на виду.
+    collect(sim2, ox, oy, z, cw, ch, cap) {
+      const out = [];
+      const bl = sim2.buildings || [];
+      for (let i = 0; i < bl.length; i++) {
+        const b = bl[i];
+        if (b.destroyed || !b.done) continue;
+        const size = (b.size || 1) * z;
+        const sx = ox + b.x * z, sy = oy + b.y * z;
+        const m = size + z * 1.5;
+        if (sx < -m || sy < -m || sx > cw + m || sy > ch + m) continue;
+        const fill = litFill(this.seed, b.x, b.y, this.night, this.bias);
+        if (fill <= 0.02) continue;
+        const own = BUILDING_ERA_IDX[b.id] || 0;
+        const era = Math.max(own, Math.min(9, Math.min(sim2.eraIndex | 0, own + 3)));
+        out.push({ sx, sy, size, fill, warm: warmEra(era) });
+      }
+      if (out.length > cap) {
+        const mx = cw / 2, my = ch / 2;
+        out.sort((p, q) => (p.sx - mx) ** 2 + (p.sy - my) ** 2 - ((q.sx - mx) ** 2 + (q.sy - my) ** 2));
+        out.length = cap;
+      }
+      return out;
+    }
+    // Блит слоя пятен. Ставится ПЕРЕД проходом по зданиям.
+    drawGround(ctx) {
+      if (!this.on || !this.hasPool || !this.pool) return;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = clamp016(this.night) * 0.85;
+      ctx.drawImage(
+        this.pool,
+        0,
+        0,
+        this.poolW,
+        this.poolH,
+        0,
+        0,
+        this.poolW / this.poolScale,
+        this.poolH / this.poolScale
+      );
+      ctx.restore();
+    }
+    // -------------------------------------------------------------------
+    // Заявка на окна одной постройки. Вызывается из drawBuilding с тем же
+    // прямоугольником, в который лёг спрайт (нарисованный или процедурный) —
+    // модулю всё равно, какой именно.
+    note(b, dx, dy, dw, dh, era) {
+      if (!this.on || this.winN >= this.maxWindows) return;
+      if (!(dw > 0) || !(dh > 0)) return;
+      const fill = litFill(this.seed, b.x, b.y, this.night, this.bias);
+      if (fill <= 0.02) return;
+      const k = frameIndex(fill);
+      if (k <= 0) return;
+      const e = Math.max(0, Math.min(9, era | 0));
+      const cls = windowClass(e);
+      const variant = hashB(this.seed, b.x, b.y, 2) * VARIANTS | 0;
+      const at = this.atlasFor(e, variant, cls);
+      if (!at) return;
+      let a = fill * this.wl.win;
+      if (cls === "fire" && this.q.detail >= 1) {
+        const ph = hashB(this.seed, b.x, b.y, 3) * 6.283;
+        a *= 0.8 + 0.2 * (0.5 + 0.5 * Math.sin(this.time * 5.7 + ph));
+      }
+      const r = facadeRect(dx, dy, dw, dh);
+      let rec = this.win[this.winN];
+      if (!rec) rec = this.win[this.winN] = { at: null, k: 0, x: 0, y: 0, w: 0, h: 0, a: 0 };
+      rec.at = at;
+      rec.k = k;
+      rec.x = r.x;
+      rec.y = r.y;
+      rec.w = r.w;
+      rec.h = r.h;
+      rec.a = clamp016(a);
+      this.winN++;
+    }
+    // Выливает все заявки. Ставится ПОСЛЕ прохода по зданиям — ровно там же,
+    // где renderer выливает свой _pendingGlow, и по той же причине: одно
+    // переключение режима наложения на весь город вместо ста пятидесяти.
+    drawWindows(ctx) {
+      if (!this.on || !this.winN) return;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const nk = clamp016(this.night);
+      for (let i = 0; i < this.winN; i++) {
+        const w = this.win[i];
+        ctx.globalAlpha = w.a * nk;
+        ctx.drawImage(w.at, w.k * FRAME - FRAME, 0, FRAME, FRAME, w.x, w.y, w.w, w.h);
+      }
+      ctx.restore();
+      this.stat.windows = this.winN;
+    }
+    stats() {
+      return { ...this.stat, atlases: this.atlas.size, on: this.on };
+    }
+    // -------------------------------------------------------------------
+    // Слой пятен. Половинное разрешение: пятно — это плавный градиент без
+    // единой резкой границы, на нём половинное разрешение не отличить от
+    // полного, а закраска и очистка стоят вчетверо дешевле.
+    ensurePool(cw, ch) {
+      const w = Math.max(1, Math.round(cw * this.poolScale));
+      const h = Math.max(1, Math.round(ch * this.poolScale));
+      if (this.pool && this.poolW === w && this.poolH === h) return;
+      if (typeof document === "undefined") return;
+      this.pool = document.createElement("canvas");
+      this.pool.width = w;
+      this.pool.height = h;
+      this.poolCtx = this.pool.getContext("2d");
+      this.poolW = w;
+      this.poolH = h;
+    }
+    // Круглое пятно света — ОДИН раз в offscreen, дальше только блит.
+    // Спад не линейный: 0,45 на трети радиуса даёт «ядро под окном плюс
+    // длинный хвост», линейный градиент читается как плоский диск.
+    blobSprite(warm) {
+      const key = warm ? "warm" : "cold";
+      const have = this.blob.get(key);
+      if (have) return have;
+      if (typeof document === "undefined") return null;
+      const S = 96;
+      const cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      const col = warm ? "255,182,96" : "150,214,255";
+      g2.addColorStop(0, `rgba(${col},0.90)`);
+      g2.addColorStop(0.33, `rgba(${col},0.45)`);
+      g2.addColorStop(0.7, `rgba(${col},0.13)`);
+      g2.addColorStop(1, `rgba(${col},0)`);
+      c.fillStyle = g2;
+      c.fillRect(0, 0, S, S);
+      this.blob.set(key, cv);
+      return cv;
+    }
+    // -------------------------------------------------------------------
+    // Атлас узора окон: STEPS кадров FRAME×FRAME подряд по горизонтали.
+    // Кадр k (нумерация с 1) содержит окна с rank < k/STEPS, то есть кадры
+    // вложены друг в друга — уже зажжённое окно не гаснет при переходе к
+    // следующему кадру.
+    atlasFor(era, variant, cls) {
+      const key = `${era}|${variant}|${cls}`;
+      const have = this.atlas.get(key);
+      if (have) {
+        this.atlas.delete(key);
+        this.atlas.set(key, have);
+        return have;
+      }
+      if (this.bakesLeft <= 0 || typeof document === "undefined") return null;
+      this.bakesLeft--;
+      this.stat.bakes++;
+      const cv = this.bakeAtlas(era, variant, cls);
+      this.atlas.set(key, cv);
+      this.trimCaches();
+      return cv;
+    }
+    bakeAtlas(era, variant, cls) {
+      const cv = document.createElement("canvas");
+      cv.width = FRAME * STEPS;
+      cv.height = FRAME;
+      const c = cv.getContext("2d");
+      const pal = ERA_PALETTE[Math.max(0, Math.min(9, era))];
+      const rgb2 = hex2rgb(pal.glow);
+      const core = `rgb(${rgb2[0]},${rgb2[1]},${rgb2[2]})`;
+      const wins = layoutWindows(cls, variant);
+      c.shadowColor = `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.85)`;
+      for (let k = 1; k <= STEPS; k++) {
+        const ox = (k - 1) * FRAME;
+        const thr = k / STEPS;
+        for (let i = 0; i < wins.length; i++) {
+          const w = wins[i];
+          if (w.rank >= thr) continue;
+          const x = ox + w.x * FRAME, y = w.y * FRAME;
+          const ww = Math.max(1, w.w * FRAME), hh = Math.max(1, w.h * FRAME);
+          if (w.soft) {
+            const g2 = c.createRadialGradient(x + ww / 2, y + hh / 2, 0, x + ww / 2, y + hh / 2, ww);
+            g2.addColorStop(0, `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},1)`);
+            g2.addColorStop(0.45, `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0.42)`);
+            g2.addColorStop(1, `rgba(${rgb2[0]},${rgb2[1]},${rgb2[2]},0)`);
+            c.shadowBlur = 0;
+            c.fillStyle = g2;
+            c.fillRect(x - ww / 2, y - hh / 2, ww * 2, hh * 2);
+          } else {
+            c.shadowBlur = FRAME * 0.06;
+            c.fillStyle = core;
+            c.fillRect(x, y, ww, hh);
+          }
+        }
+      }
+      return cv;
+    }
+    // Потолки кэшей берём из пресета. Атласы мелкие (48*288*4 ≈ 55 КБ), но
+    // при живой игре через десять эпох их набирается тридцать, и без потолка
+    // это единственная в модуле утечка, которая копится молча.
+    trimCaches() {
+      const caps = this.q && this.q.caps || {};
+      prune(this.atlas, {
+        maxEntries: Math.max(6, Math.round((caps.spriteEntries || 80) / 4)),
+        maxBytes: Math.max(1, caps.spriteMB || 18) * 1024 * 1024 * 0.08,
+        bytesOf: canvasBytes
+      });
+    }
+  };
+
+  // app/src/render/renderer.js
+  var TILE_PX5 = 32;
   var Renderer = class {
     constructor(canvas2) {
       this.canvas = canvas2;
@@ -29001,6 +30243,9 @@ ${s}`, "console");
       this.relief = new ReliefLayer(this.quality);
       this.shadows = new ShadowLayer(this.quality);
       this.fx = new FxLayer(this.quality);
+      this.select = new SelectLayer(this.quality);
+      this.icons = new IconLayer(this.quality);
+      this.cityLights = new CityLights(this.quality);
     }
     // id ∈ QUALITY_ORDER или 'auto'
     setQuality(id) {
@@ -29023,6 +30268,9 @@ ${s}`, "console");
       this.relief.setQuality(this.quality);
       this.shadows.setQuality(this.quality);
       this.fx.setQuality(this.quality);
+      this.select.setQuality(this.quality);
+      this.icons.setQuality(this.quality);
+      this.cityLights.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
@@ -29035,14 +30283,14 @@ ${s}`, "console");
     }
     screenToWorld(sx, sy) {
       return {
-        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX3 * this.cam.zoom),
-        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX3 * this.cam.zoom)
+        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX5 * this.cam.zoom),
+        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX5 * this.cam.zoom)
       };
     }
     worldToScreen(wx, wy) {
       return {
-        x: (wx - this.cam.x) * TILE_PX3 * this.cam.zoom + this.canvas.width / this.dpr / 2,
-        y: (wy - this.cam.y) * TILE_PX3 * this.cam.zoom + this.canvas.height / this.dpr / 2
+        x: (wx - this.cam.x) * TILE_PX5 * this.cam.zoom + this.canvas.width / this.dpr / 2,
+        y: (wy - this.cam.y) * TILE_PX5 * this.cam.zoom + this.canvas.height / this.dpr / 2
       };
     }
     // ---------------------------------------------------------------------
@@ -29056,7 +30304,7 @@ ${s}`, "console");
       const L = lightAt(sim2.dayTime);
       ctx.fillStyle = L.sky;
       ctx.fillRect(0, 0, cw, ch);
-      const z = TILE_PX3 * this.cam.zoom;
+      const z = TILE_PX5 * this.cam.zoom;
       const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
       this.terrain.draw(ctx, sim2, ox, oy, z, cw, ch);
       if (this.quality.richRelief) this.relief.draw(sim2, ctx, ox, oy, z, cw, ch, L);
@@ -29080,6 +30328,8 @@ ${s}`, "console");
         }
       }
       this.drawSortedEntities(sim2, ctx, ox, oy, z, cw, ch, L);
+      this.cityLights.begin(sim2, ox, oy, z, cw, ch, L, { zoom: this.cam.zoom, time: this.time });
+      this.select.drawGround(sim2, ctx, ox, oy, z, cw, ch, dtReal);
       this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
       if (sim2.placing) {
         const g2 = sim2.placing;
@@ -29134,6 +30384,7 @@ ${s}`, "console");
         ctx.fillStyle = grad;
         ctx.fillRect(sx - z * 0.12, 0, z * 0.24, sy);
       }
+      this.icons.draw(sim2, ctx, ox, oy, z, cw, ch, this.time, dtReal);
       if (this.quality.vignette) this.drawVignette(ctx, cw, ch);
       if (this.quality.grain > 0) this.drawGrain(ctx, cw, ch);
       this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
@@ -29155,6 +30406,9 @@ ${s}`, "console");
         this.relief.setQuality(this.quality);
         this.shadows.setQuality(this.quality);
         this.fx.setQuality(this.quality);
+        this.select.setQuality(this.quality);
+        this.icons.setQuality(this.quality);
+        this.cityLights.setQuality(this.quality);
         this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
         this.resize();
       }
@@ -29916,10 +31170,10 @@ ${s}`, "console");
           ctx.fill();
         }
       }
-      const vx = mx + (this.cam.x - this.canvas.width / this.dpr / 2 / (TILE_PX3 * this.cam.zoom)) * scale;
-      const vy = my + (this.cam.y - this.canvas.height / this.dpr / 2 / (TILE_PX3 * this.cam.zoom)) * scale;
-      const vw = this.canvas.width / this.dpr / (TILE_PX3 * this.cam.zoom) * scale;
-      const vh = this.canvas.height / this.dpr / (TILE_PX3 * this.cam.zoom) * scale;
+      const vx = mx + (this.cam.x - this.canvas.width / this.dpr / 2 / (TILE_PX5 * this.cam.zoom)) * scale;
+      const vy = my + (this.cam.y - this.canvas.height / this.dpr / 2 / (TILE_PX5 * this.cam.zoom)) * scale;
+      const vw = this.canvas.width / this.dpr / (TILE_PX5 * this.cam.zoom) * scale;
+      const vh = this.canvas.height / this.dpr / (TILE_PX5 * this.cam.zoom) * scale;
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 1;
       ctx.strokeRect(vx, vy, vw, vh);
@@ -29995,7 +31249,7 @@ ${s}`, "console");
   var BUY_MARKUP = 1.25;
   var CARAVAN_PERIOD = 15;
   var HIST_LEN = 12;
-  var FLAT2 = 0.02;
+  var FLAT3 = 0.02;
   var RES_META3 = Object.fromEntries(RES.map((r) => [r.id, r]));
   function createMarketPanelState() {
     return { v: 1, hist: [] };
@@ -30027,7 +31281,7 @@ ${s}`, "console");
       base,
       ratio,
       pct: Math.round((ratio - 1) * 100),
-      dir: ratio > 1 + FLAT2 ? 1 : ratio < 1 - FLAT2 ? -1 : 0,
+      dir: ratio > 1 + FLAT3 ? 1 : ratio < 1 - FLAT3 ? -1 : 0,
       recent: 0,
       days: 0
     };
@@ -30037,7 +31291,7 @@ ${s}`, "console");
       const was = Number(first.p[resId]);
       if (was > 0) {
         const d = price / was - 1;
-        out.recent = d > FLAT2 ? 1 : d < -FLAT2 ? -1 : 0;
+        out.recent = d > FLAT3 ? 1 : d < -FLAT3 ? -1 : 0;
         out.days = Math.max(1, Math.floor(sim2.day || 0) - first.day);
       }
     }
@@ -31710,7 +32964,7 @@ ${out}`;
   var modalOpen = () => !!document.getElementById("modalWrap")?.classList.contains("show");
   var tabSel = (id) => [`#sideTabs [data-tab="${id}"]`, `#sheetTabs [data-tab="${id}"]`];
   var cardSel = (attr, id) => [`#sideContent [data-${attr}="${id}"]`, `#sheetContent [data-${attr}="${id}"]`];
-  var STEPS = [
+  var STEPS2 = [
     {
       id: "villager",
       title: "Познакомься с жителем",
@@ -32005,7 +33259,7 @@ ${out}`;
       this.flags.event = null;
       this._seenLog.clear();
       this._pick = null;
-      for (const s of STEPS) {
+      for (const s of STEPS2) {
         if (this.doneIds.has(s.id)) continue;
         if (["gather", "hut", "store"].includes(s.id) && this.safe(() => s.done(this), false)) this.doneIds.add(s.id);
       }
@@ -32209,7 +33463,7 @@ ${out}`;
       if (!this.step) {
         this.step = this.nextStep();
         if (!this.step) {
-          const rest = STEPS.filter((s) => !this.doneIds.has(s.id));
+          const rest = STEPS2.filter((s) => !this.doneIds.has(s.id));
           this.finish(!rest.length);
           return;
         }
@@ -32231,7 +33485,7 @@ ${out}`;
       this.place(t, false);
     }
     nextStep() {
-      for (const s of STEPS) {
+      for (const s of STEPS2) {
         if (this.doneIds.has(s.id)) continue;
         if (this.safe(() => s.moot?.(this), false)) {
           this.doneIds.add(s.id);
@@ -32261,15 +33515,15 @@ ${out}`;
       return null;
     }
     renderCard(step, ok) {
-      const idx = STEPS.indexOf(step) + 1;
+      const idx = STEPS2.indexOf(step) + 1;
       let text = typeof step.text === "function" ? this.safe(() => step.text(this), "") : step.text;
       if (step.build && this.sim.placing) {
         text = this.sim.placing.valid ? "Место годится — жми зелёную ✓." : `Ткни по свободному месту на карте: ${this.sim.placing.reason || "здесь нельзя"}.`;
       }
       const note = step.note ? this.safe(() => step.note(this), "") : "";
-      const dots = STEPS.map((s) => `<span class="${this.doneIds.has(s.id) ? "on" : s === step ? "cur" : ""}"></span>`).join("");
+      const dots = STEPS2.map((s) => `<span class="${this.doneIds.has(s.id) ? "on" : s === step ? "cur" : ""}"></span>`).join("");
       const card = this._el.card;
-      const html = `<div class="c-head"><span class="c-step">Шаг ${idx} из ${STEPS.length}</span>
+      const html = `<div class="c-head"><span class="c-step">Шаг ${idx} из ${STEPS2.length}</span>
         <button class="c-skip">Пропустить обучение</button></div>
       <div class="c-title">${ok ? "✓ Готово" : step.title}</div>
       <div class="c-text">${ok ? "Отлично. Дальше." : text}</div>

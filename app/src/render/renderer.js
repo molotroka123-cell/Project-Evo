@@ -14,6 +14,9 @@ import { Vegetation } from './vegetation.js';
 import { ReliefLayer } from './relief.js';
 import { ShadowLayer } from './shadows.js';
 import { FxLayer } from './fx.js';
+import { SelectLayer } from './select.js';
+import { IconLayer } from './icons.js';
+import { CityLights } from './city_lights.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 
 const TILE_PX = 32; // мировая единица «тайл→экран» при zoom=1 — НЕ зависит от пресета графики
@@ -53,6 +56,9 @@ export class Renderer {
     this.relief = new ReliefLayer(this.quality);
     this.shadows = new ShadowLayer(this.quality);
     this.fx = new FxLayer(this.quality);
+    this.select = new SelectLayer(this.quality);       // наведение и выделение
+    this.icons = new IconLayer(this.quality);          // значки состояния
+    this.cityLights = new CityLights(this.quality);    // окна и фонари ночью
   }
 
   // id ∈ QUALITY_ORDER или 'auto'
@@ -76,6 +82,9 @@ export class Renderer {
     this.relief.setQuality(this.quality);
     this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
+    this.select.setQuality(this.quality);
+    this.icons.setQuality(this.quality);
+    this.cityLights.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
   }
@@ -171,6 +180,8 @@ export class Renderer {
 
     // --- единый проход по глубине: здания + жители + животные, сортировка по Y ---
     this.drawSortedEntities(sim, ctx, ox, oy, z, cw, ch, L);
+    this.cityLights.begin(sim, ox, oy, z, cw, ch, L, { zoom: this.cam.zoom, time: this.time });
+    this.select.drawGround(sim, ctx, ox, oy, z, cw, ch, dtReal);
     this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
 
     // --- призрак стройки ---
@@ -238,6 +249,7 @@ export class Renderer {
     }
 
     // --- пост-обработка: виньетка, зерно ---
+    this.icons.draw(sim, ctx, ox, oy, z, cw, ch, this.time, dtReal);
     if (this.quality.vignette) this.drawVignette(ctx, cw, ch);
     if (this.quality.grain > 0) this.drawGrain(ctx, cw, ch);
 
@@ -262,6 +274,9 @@ export class Renderer {
     this.relief.setQuality(this.quality);
     this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
+    this.select.setQuality(this.quality);
+    this.icons.setQuality(this.quality);
+    this.cityLights.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
