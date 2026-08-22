@@ -999,7 +999,7 @@ import * as GH from './link_ghost.js';
 import * as HERD from './herds.js';
 import { tileAt } from '../world.js';
 
-    (если tileAt уже импортирован в integrate.js — вторую строку не добавлять)
+    (проверено: `grep -c tileAt integrate.js` даёт 0 — вторая строка нужна)
 
 A2. УСТАНОВКА. Якорь (1 совпадение в integrate.js):
 
@@ -1068,18 +1068,22 @@ export function herdsSustainable(sim) {
   return HERD.sustainableFood(sim.herds, HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y)));
 }
 
-A7. ВЫМИРАНИЕ В ЛЕТОПИСЬ. Якорь (1 совпадение в integrate.js):
+A7. ВЫМИРАНИЕ В ЛЕТОПИСЬ. Якорь (1 совпадение в integrate.js) — строка ВНУТРИ
+    harvestScars(), сразу после которой собирается список шрамов:
 
-function harvestScars(sim, outs) {
+  if (sim.starvedDay === day) out.push({ kind: 'famine', scale: 0.55 });
 
-    ВСТАВИТЬ ПЕРВОЙ строкой тела функции (после этой строки), чтобы вымирание
-    вида ложилось в память как беда наравне с голодом:
+    ВСТАВИТЬ ПОСЛЕ (памяти сюда достаточно одной породы: выбитая дичь — это
+    будущий голод, и народ помнит её именно так):
 
+  // Выбитый вид — это не «минус зверь», а утраченный источник еды навсегда.
   const HR = sim.sys && sim.sys.herdsReport;
-  const herdScars = HR && HR.flags.extinctNow && HR.flags.extinctNow.length
-    ? HR.flags.extinctNow.map(() => ({ kind: 'famine', scale: 0.8 })) : [];
+  if (HR && HR.flags && HR.flags.extinctNow) {
+    for (let i = 0; i < HR.flags.extinctNow.length; i++) out.push({ kind: 'famine', scale: 0.8 });
+  }
 
-    и добавить herdScars в возвращаемый список (в существующий return-массив).
+    (объемлющая функция объявлена как `function harvestScars(sim, ctx) {` —
+    1 совпадение; переменные out и day в ней уже есть)
 
 ── B. app/src/core/simulation.js ─────────────────────────────────────────────
 
@@ -1131,16 +1135,22 @@ B2. САМА ОХОТА. Якорь — весь блок целиком (1 со
       return;
     }
 
-B3. ИМПОРТ в simulation.js. Якорь (1 совпадение в simulation.js):
+B3. ИМПОРТ в simulation.js. Якорь (1 совпадение в simulation.js, строка 7):
 
-import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsPopCapMod, systemsWorkMult, systemsSerialize, systemsRestore } from './systems/integrate.js';
+import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
 
-    ВНИМАНИЕ: строку проверить grep-ом перед правкой — список имён в ней
-    меняется от версии к версии. Добавить в этот же импорт herdsNearest и
-    herdsHunt, а в integrate.js завести их обёртками:
+    ЗАМЕНИТЬ НА ту же строку с двумя добавленными именами:
+
+import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore, herdsNearest, herdsHunt } from './systems/integrate.js';
+
+    ВНИМАНИЕ: порядок имён в этой строке уже менялся — перед правкой сверить
+    grep -cxF. Обёртки завести в integrate.js:
 
 export function herdsNearest(sim, x, y) {
-  return HERD.nearestHerd(sim.herds, x, y, { minHeads: 1 });
+  // maxDist обязателен. Без него охотник уходит за пуганым стадом на другой
+  // конец карты и не возвращается неделю, пока поселение голодает рядом с
+  // ягодником. Дальше 26 клеток охота не окупается — пусть идёт собирать.
+  return HERD.nearestHerd(sim.herds, x, y, { minHeads: 1, maxDist: 26 });
 }
 export function herdsHunt(sim, id, opts) {
   const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));

@@ -533,6 +533,10 @@ export function huntLinks(sim) {
       // Давление всего промысла добавляет общего беспокойства: стада уходят не
       // только от своих ловчих ям, но и оттуда, где рядом бьют соседей.
       if (pressure >= PRESSURE_FLEE) dFear += FEAR_CALM;
+      // Потолок ставится ПОСЛЕ всех слагаемых, а не внутри первого: иначе общее
+      // беспокойство прибавлялось поверх уже ограниченного залпа и суточная
+      // прибавка выходила за FEAR_DAY_CAP (ловилось тестом на 0.29 против 0.25).
+      dFear = clamp(dFear, -FEAR_CALM, FEAR_DAY_CAP);
       const newFear = clamp(h.fear + dFear, 0, 1);
       const step = fleeStep(h, newFear, st.cx, st.cy);
       const dF = round2(newFear - h.fear);
@@ -1075,11 +1079,12 @@ function cap1(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
 ═══ simulation.js ═══
 
-8) ИМПОРТ. Якорь (1 совпадение):
+8) ИМПОРТ. Якорь — строка 7, импорт интеграции (1 совпадение):
 
-     import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsSerialize, systemsRestore, winterPanel, territoryPanel, PANELS } from './systems/integrate.js';
+     import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
 
-   (если строка импорта в вашей версии другая — добавить рядом отдельной строкой)
+   ДОБАВИТЬ строкой ниже (отдельной строкой, а не в тот же список: связь берётся
+   напрямую из своего файла — integrate.js её не переэкспортирует):
 
      import { huntYieldMult, huntLodgeMult } from './systems/link_hunt.js';
 
