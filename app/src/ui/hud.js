@@ -4,6 +4,7 @@ import { DAY_SECONDS } from '../core/simulation.js';
 import { QUALITY, QUALITY_ORDER } from '../render/quality.js';
 import { FileSave } from '../save/saveSystem.js';
 import { renderMarketPanel, bindMarketPanel, createMarketPanelState } from './panel_market.js';
+import { renderDynastyPanel, bindDynastyPanel } from './panel_dynasty.js';
 import { PANELS, memoryPanel, mastersPanel, ghostPanel, intelOf, intelTrustWord } from '../core/systems/integrate.js';
 
 // Ядро не хранит скоростей добычи: производство размазано по жителям, погоде и
@@ -26,6 +27,9 @@ const TABS = [
   { id: 'war', ru: 'Война', ic: '🛡' },
   { id: 'politics', ru: 'Держава', ic: '⚖' },
   { id: 'empire', ru: 'Города', ic: '🏛' },
+  // Род стоит сразу за «Державой» и «Городами»: это тот же куст власти,
+  // и игрок ищет его там.
+  { id: 'dynasty', ru: 'Род', ic: '♛' },
   { id: 'labor', ru: 'Труд', ic: '👷' },
   { id: 'goals', ru: 'Цели', ic: '🎯' },
   // Летопись — не архив, а действующая механика: что народ помнит, тем и
@@ -559,6 +563,15 @@ export class Hud {
       audio: this.audio,
       refresh: () => this.renderPanel(),
     });
+    // Панель рода привязывается отдельно, а не через реестр PANELS: реестр
+    // живёт в core/systems/integrate.js, и запись в него заставила бы ядро
+    // импортировать файл из ui/. Панель об этом сама предупреждает в своём
+    // блоке подключения и разрешает обойтись hud.js — обходимся.
+    bindDynastyPanel(root, this.sim, {
+      toast: (t, k) => this.toast(t, k),
+      audio: this.audio,
+      refresh: () => this.renderPanel(),
+    });
     // Экраны новых систем: у каждого свои data-атрибуты, пересечься не могут.
     const panelCtx = {
       toast: (t, k) => this.toast(t, k),
@@ -912,6 +925,7 @@ export class Hud {
   panel_war()      { return PANELS.war.render(this.sim); }
   panel_politics() { return PANELS.politics.render(this.sim); }
   panel_empire()   { return PANELS.empire.render(this.sim); }
+  panel_dynasty()  { return renderDynastyPanel(this.sim); }
 
   panel_memory() {
     const s = this.sim;

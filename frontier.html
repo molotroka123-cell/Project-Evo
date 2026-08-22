@@ -364,6 +364,12 @@
 
 <script>
 (() => {
+  var __defProp = Object.defineProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+
   // app/src/core/rng.js
   function createRng(seed) {
     let a = seed >>> 0;
@@ -1056,6 +1062,57 @@
     return spawns;
   }
 
+  // app/src/core/systems/integrate.js
+  var integrate_exports = {};
+  __export(integrate_exports, {
+    PANELS: () => PANELS,
+    buildBest: () => buildBest,
+    buildCanUpgrade: () => buildCanUpgrade,
+    buildCancel: () => buildCancel,
+    buildMove: () => buildMove,
+    buildPlan: () => buildPlan,
+    buildPlanArea: () => buildPlanArea,
+    buildQueue: () => buildQueue,
+    buildRepair: () => buildRepair,
+    buildRepairAll: () => buildRepairAll,
+    buildRepairList: () => buildRepairList,
+    buildScore: () => buildScore,
+    buildUpgrade: () => buildUpgrade,
+    civPanel: () => civPanel,
+    dynastyClearHeir: () => dynastyClearHeir,
+    dynastyHeirAllowed: () => dynastyHeirAllowed,
+    dynastyLinkPanel: () => dynastyLinkPanel,
+    dynastyMarry: () => dynastyMarry,
+    dynastyNameHeir: () => dynastyNameHeir,
+    dynastyOverthrow: () => dynastyOverthrow,
+    dynastyPanel: () => dynastyPanel,
+    dynastyPatronize: () => dynastyPatronize,
+    dynastyRows: () => dynastyRows2,
+    dynastySetCourt: () => dynastySetCourt,
+    ghostPanel: () => ghostPanel,
+    ghostSeal: () => ghostSeal,
+    herdPoints: () => herdPoints2,
+    herdsHunt: () => herdsHunt,
+    herdsNearest: () => herdsNearest,
+    herdsPanel: () => herdsPanel,
+    herdsSustainable: () => herdsSustainable,
+    installSystems: () => installSystems,
+    intelOf: () => intelOf,
+    intelRows: () => intelRows,
+    intelTrustWord: () => intelTrustWord,
+    mastersPanel: () => mastersPanel,
+    memoryPanel: () => memoryPanel,
+    systemsFactions: () => systemsFactions,
+    systemsHappyMod: () => systemsHappyMod,
+    systemsNewDay: () => systemsNewDay,
+    systemsPopCapMod: () => systemsPopCapMod,
+    systemsRestore: () => systemsRestore,
+    systemsSerialize: () => systemsSerialize,
+    systemsWorkMult: () => systemsWorkMult,
+    territoryPanel: () => territoryPanel,
+    winterPanel: () => winterPanel
+  });
+
   // app/src/core/systems/winter.js
   var WINTER_SEASON = 3;
   var WINTER_DAYS = DAYS_PER_SEASON;
@@ -1208,6 +1265,22 @@
     if (!c.isWinter) return 0;
     return baseDemand(ctx) * severity(c.dayInSeason) * (HEAT_WEATHER[c.weather] ?? 1);
   }
+  function demandBreakdown(ctx) {
+    const c = readCtx(ctx);
+    const ins = insulationMult(ctx);
+    const homeless = Math.max(0, c.pop - c.housingCap);
+    return {
+      pop: c.pop,
+      hearths: c.hearths,
+      homeless,
+      people: round2(c.pop * WOOD_PER_POP * ins),
+      hearth: round2(c.hearths * WOOD_PER_HEARTH * ins),
+      street: round2(homeless * WOOD_PER_HOMELESS * ins),
+      insulation: round2(ins),
+      perDayNow: round2(heatDemand(ctx)),
+      perDayPeak: round2(baseDemand(ctx) * SEV_PEAK * WINTER_WEATHER_AVG)
+    };
+  }
   function winterForecast(ctx) {
     const c = readCtx(ctx);
     const base = baseDemand(ctx);
@@ -1353,6 +1426,24 @@
   function happyMod(state) {
     if (!state) return 0;
     return Math.round(Math.min(0, state.happy));
+  }
+  function winterStatus(state, ctx) {
+    const f = winterForecast(ctx);
+    const s = state || createWinter();
+    const st = stageOf(s.cold, s.cold > 0 ? 1 : 0);
+    return {
+      level: st === "ok" ? f.level : st === "chill" ? "warn" : "bad",
+      stage: st,
+      cold: round2(s.cold),
+      sick: s.sick,
+      happyMod: happyMod(s),
+      coverDays: f.coverDays,
+      forecast: f,
+      text: f.text + (s.sick > 0 ? ` Больных от холода: ${s.sick}.` : "")
+    };
+  }
+  function winterHistory(state) {
+    return state && state.history ? state.history.map((h) => ({ ...h })) : [];
   }
   function stageOf(cold, d) {
     if (cold >= COLD_DEATH) return "death";
@@ -2121,6 +2212,13 @@
     state.civ[f.id] = c;
     return c;
   }
+  function buildingCount(state, fid) {
+    const c = state.civ[fid];
+    if (!c) return 0;
+    let n = 0;
+    for (const k of Object.keys(c.buildings)) n += c.buildings[k];
+    return n;
+  }
   function tickCivAi(state, ctx) {
     const out = { logs: [], built: [], researched: [], founded: [], warsOpened: [], warOnPlayer: [], alliances: [] };
     const day = ctx.day || 0;
@@ -2510,6 +2608,28 @@
     f.knowPts = c.res.knowledge;
     f.goldPts = c.res.gold;
     f.P = Math.max(0, f.P);
+  }
+  function civReport(state, factions) {
+    return (factions || []).map((f) => {
+      const c = state.civ[f.id] || { res: emptyRes(), techs: [], buildings: {}, troops: 0, founded: 0, warsDeclared: 0, alliesMade: 0, built: 0, tr: traits(f) };
+      return {
+        id: f.id,
+        name: f.def && f.def.name || f.id,
+        alive: !!f.alive,
+        pop: Math.round(f.P || 0),
+        towns: (f.settlements || []).length,
+        buildings: buildingCount(state, f.id),
+        techs: c.techs.length,
+        era: f.era || 0,
+        army: Math.round(f.armyPts || 0),
+        troops: Math.round(c.troops),
+        gold: Math.round(c.res.gold),
+        wars: c.warsDeclared,
+        allies: c.alliesMade,
+        founded: c.founded,
+        traits: c.tr
+      };
+    });
   }
   function serializeCivAi(state) {
     const civ = {};
@@ -5802,12 +5922,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num15 = 1;
+    let num16 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num15++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num16++}`));
     }
     return out;
   }
@@ -13861,6 +13981,25 @@
     if (trust >= 0.25) return "сведения устарели";
     return "верить нечему";
   }
+  function intelReport(sim2) {
+    const rows = [];
+    for (const f of sim2.factions || []) {
+      if (!f || f.alive === false) continue;
+      const k = knownOf(sim2, f.id);
+      const ch = sim2.sys && sim2.sys.intelLinks ? sim2.sys.intelLinks.flags.channels[f.id] : null;
+      rows.push({
+        fid: f.id,
+        name: f.def ? f.def.name : f.id,
+        armyText: k.armyText,
+        ageText: k.ageText,
+        trust: k.trust,
+        trustText: trustWord(k.trust),
+        sourceText: k.sourceText || "",
+        period: ch ? ch.period : null
+      });
+    }
+    return rows;
+  }
   function clamp11(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
@@ -14233,14 +14372,1733 @@
     return Number.isFinite(v) ? v : def;
   }
 
+  // app/src/core/systems/dynasty.js
+  var YEAR5 = DAYS_PER_SEASON * 4;
+  var ADULT_YEARS = 16;
+  var MARRY_MIN = 17;
+  var MARRY_MAX = 55;
+  var FERT_MIN2 = 18;
+  var FERT_MAX2 = 42;
+  var ROYAL_MORT = 0.85;
+  var BIRTH_BASE2 = 6e-3;
+  var BIRTH_CD2 = 200;
+  var MARRY_CHANCE = 0.02;
+  var TRAIT_INHERIT = 0.35;
+  var MAX_MEMBERS = 40;
+  var GRAVE_KEEP = 12;
+  var LEG_START = 50;
+  var LEG_MIN = 0;
+  var LEG_MAX = 100;
+  var LEG_DRIFT = 0.06;
+  var LEG_BASE_CAP = 75;
+  var LEG_ODD_HEIR = 0.1;
+  var LEG_NO_HEIR = 0.08;
+  var LEG_INTERREGNUM = 0.5;
+  var LEG_EVENT = {
+    victory: 6,
+    // выигранное сражение
+    triumph: 10,
+    // взятый город, конец войны в свою пользу
+    city_won: 8,
+    defeat: -8,
+    city_lost: -12,
+    // потерянная провинция — самый тяжёлый удар по праву на трон
+    famine: -7,
+    plague: -5,
+    revolt: -10
+  };
+  var SEEN_WINDOW = DAYS_PER_SEASON;
+  var LEG_PER_STAB = 0.5;
+  var CLAIM_BELOW = 35;
+  var CLAIM_CLEAR = 55;
+  var CLAIM_CHANCE = 0.01;
+  var CLAIM_FADE = 0.02;
+  var MAX_CLAIMANTS = 2;
+  var CLAIM_STAB = 0.15;
+  var INTERREGNUM_DAYS = 30;
+  var INTERREGNUM_STAB = 1.2;
+  var REGENCY_STAB = 0.25;
+  var COUP_LEG = 20;
+  var COUP_STAB = 25;
+  var COUP_NEED_NOBLES = 40;
+  var COUP_NEED_MILITARY = 45;
+  var COURT = [
+    { id: 0, ru: "Скупо", leg: -0.05, gold: 0, nobles: -0.03, commons: 0.02, happy: 0 },
+    { id: 1, ru: "По обычаю", leg: 0.03, gold: 0.6, nobles: 0.01, commons: 0, happy: 0 },
+    { id: 2, ru: "Пышный двор", leg: 0.12, gold: 1.8, nobles: 0.05, commons: -0.05, happy: -1 }
+  ];
+  var COURT_PER_POP = 0.02;
+  var COURT_UNPAID_LEG = 0.15;
+  var PATRON_COST = 60;
+  var PATRON_PER_POP = 2;
+  var PATRON_LEG = 6;
+  var PATRON_CD = 60;
+  var MARRY_REL = 12;
+  var MARRY_LEG = 2;
+  var FOREIGN_CLAIM = 35;
+  var NAME_HEIR_NOBLES = -6;
+  var NAME_HEIR_LEG = -4;
+  var SUCCESSION_LAW = {
+    chiefdom: { law: "strongest", ru: "сильнейший из рода" },
+    monarchy: { law: "eldest_son", ru: "старший сын" },
+    republic: { law: "election", ru: "выборы: наследника нет" },
+    empire: { law: "appointed", ru: "назначенный" },
+    federation: { law: "council", ru: "совет земель" }
+  };
+  var TRAIT_POWER = {
+    warlord: 3,
+    beloved: 2,
+    just: 2,
+    cruel: 1,
+    builder: 1,
+    sage: 1,
+    trader: 1,
+    weak: -3
+  };
+  var TRAIT_CONFLICTS2 = [["just", "cruel"], ["weak", "warlord"], ["cruel", "beloved"]];
+  var TRAIT_IDS = RULER_TRAITS.map((t) => t.id);
+  var TRAIT_BY_ID4 = Object.fromEntries(RULER_TRAITS.map((t) => [t.id, t]));
+  var MALE_EXCEPTIONS2 = /* @__PURE__ */ new Set(["Добрыня"]);
+  var FEMALE_NAMES2 = NAMES.filter((n) => /[ая]$/.test(n) && !MALE_EXCEPTIONS2.has(n));
+  var MALE_NAMES2 = NAMES.filter((n) => !FEMALE_NAMES2.includes(n));
+  function createDynasty(rng, opts = {}) {
+    const day = numOf2(opts.day, 0);
+    const st = {
+      v: 1,
+      day: -1,
+      // последние посчитанные сутки; -1 = ещё ни одних
+      nextId: 1,
+      fam: "—",
+      founder: "—",
+      foundedDay: day,
+      generations: 1,
+      members: [],
+      graves: [],
+      // погост: кого помнит летопись
+      rulerId: null,
+      namedHeirId: null,
+      // назначенный игроком; перебивает закон
+      legitimacy: numOf2(opts.legitimacy, LEG_START),
+      court: 1,
+      patronCd: 0,
+      claimants: [],
+      ties: [],
+      // браки с родами соседей
+      interregnum: 0,
+      seen: [],
+      // [{key, day}] — какие удары уже учтены
+      stats: { rulers: 0, births: 0, deaths: 0, coups: 0, interregnums: 0, houses: 1 }
+    };
+    if (!rng) return st;
+    st.fam = opts.fam || rng.pick(NICKNAMES);
+    const founder = _makeMember(st, rng, {
+      sex: rng.chance(0.75) ? "м" : "ж",
+      // вождём чаще, но не всегда, становится мужчина
+      ageYears: rng.int(28, 45),
+      day,
+      gen: 1,
+      blood: true
+    });
+    st.founder = founder.name;
+    st.rulerId = founder.id;
+    st.stats.rulers = 1;
+    const spouse = _makeMember(st, rng, {
+      sex: founder.sex === "м" ? "ж" : "м",
+      ageYears: Math.max(MARRY_MIN, ageYearsOf(founder) - rng.int(0, 6)),
+      day,
+      gen: 1,
+      blood: false,
+      origin: "married"
+    });
+    _wed(founder, spouse);
+    const kids = rng.int(1, 2);
+    for (let i = 0; i < kids; i++) {
+      const child = _makeMember(st, rng, {
+        sex: rng.chance(0.5) ? "м" : "ж",
+        ageYears: rng.int(0, 14),
+        day,
+        gen: 2,
+        blood: true,
+        father: founder.sex === "м" ? founder : spouse,
+        mother: founder.sex === "ж" ? founder : spouse
+      });
+      child.fam = st.fam;
+    }
+    return st;
+  }
+  function serializeDynasty(state) {
+    return state ? JSON.parse(JSON.stringify(state)) : null;
+  }
+  function restoreDynasty(data) {
+    const st = createDynasty(null);
+    if (!data || typeof data !== "object") return st;
+    st.day = numOf2(data.day, -1);
+    st.nextId = Math.max(1, Math.round(numOf2(data.nextId, 1)));
+    st.fam = strOf(data.fam, "—");
+    st.founder = strOf(data.founder, "—");
+    st.foundedDay = numOf2(data.foundedDay, 0);
+    st.generations = Math.max(1, Math.round(numOf2(data.generations, 1)));
+    st.legitimacy = clamp13(numOf2(data.legitimacy, LEG_START), LEG_MIN, LEG_MAX);
+    st.court = clampInt(Math.round(numOf2(data.court, 1)), 0, COURT.length - 1);
+    st.patronCd = Math.max(0, numOf2(data.patronCd, 0));
+    st.interregnum = Math.max(0, numOf2(data.interregnum, 0));
+    if (Array.isArray(data.members)) {
+      for (const m of data.members) {
+        const r = _restoreMember(m);
+        if (r) st.members.push(r);
+      }
+    }
+    const ids = new Set(st.members.map((m) => m.id));
+    for (const m of st.members) {
+      if (m.spouse != null && !ids.has(m.spouse)) m.spouse = null;
+      if (m.father != null && !ids.has(m.father)) m.father = null;
+      if (m.mother != null && !ids.has(m.mother)) m.mother = null;
+      st.nextId = Math.max(st.nextId, m.id + 1);
+    }
+    st.rulerId = ids.has(data.rulerId) ? data.rulerId : null;
+    st.namedHeirId = ids.has(data.namedHeirId) ? data.namedHeirId : null;
+    if (Array.isArray(data.graves)) {
+      st.graves = data.graves.filter((g2) => g2 && typeof g2 === "object").map((g2) => ({ name: strOf(g2.name, "—"), day: numOf2(g2.day, 0), years: Math.max(0, Math.round(numOf2(g2.years, 0))), text: strOf(g2.text, "") })).slice(-GRAVE_KEEP);
+    }
+    if (Array.isArray(data.claimants)) {
+      for (const c of data.claimants.slice(0, MAX_CLAIMANTS)) {
+        if (!c || typeof c !== "object") continue;
+        st.claimants.push({
+          name: strOf(c.name, "Безымянный"),
+          fam: strOf(c.fam, "—"),
+          sex: c.sex === "ж" ? "ж" : "м",
+          age: Math.max(0, numOf2(c.age, 30 * YEAR5)),
+          strength: clamp13(numOf2(c.strength, 40), 0, 100),
+          fid: c.fid == null ? null : String(c.fid),
+          since: numOf2(c.since, 0)
+        });
+      }
+    }
+    if (Array.isArray(data.ties)) {
+      st.ties = data.ties.filter((t) => t && typeof t === "object" && t.fid != null).map((t) => ({ fid: String(t.fid), house: strOf(t.house, "—"), since: numOf2(t.since, 0), memberId: numOf2(t.memberId, 0), claim: clamp13(numOf2(t.claim, FOREIGN_CLAIM), 0, 100) }));
+    }
+    if (Array.isArray(data.seen)) {
+      st.seen = data.seen.filter((s) => s && typeof s === "object" && typeof s.key === "string").map((s) => ({ key: s.key, day: numOf2(s.day, 0) })).slice(-40);
+    }
+    if (data.stats && typeof data.stats === "object") {
+      for (const k of Object.keys(st.stats)) st.stats[k] = Math.max(0, Math.round(numOf2(data.stats[k], st.stats[k])));
+    }
+    return st;
+  }
+  function _restoreMember(m) {
+    if (!m || typeof m !== "object" || !Number.isFinite(m.id)) return null;
+    return {
+      id: Math.round(m.id),
+      name: strOf(m.name, "Безымянный"),
+      fam: strOf(m.fam, "—"),
+      sex: m.sex === "ж" ? "ж" : "м",
+      age: Math.max(0, numOf2(m.age, 20 * YEAR5)),
+      born: numOf2(m.born, 0),
+      gen: Math.max(1, Math.round(numOf2(m.gen, 1))),
+      blood: !!m.blood,
+      origin: ["blood", "married", "foreign"].includes(m.origin) ? m.origin : m.blood ? "blood" : "married",
+      fid: m.fid == null ? null : String(m.fid),
+      traits: Array.isArray(m.traits) ? m.traits.filter((t) => TRAIT_BY_ID4[t]).slice(0, 3) : [],
+      father: Number.isFinite(m.father) ? m.father : null,
+      mother: Number.isFinite(m.mother) ? m.mother : null,
+      spouse: Number.isFinite(m.spouse) ? m.spouse : null,
+      fertCd: Math.max(0, numOf2(m.fertCd, 0)),
+      since: numOf2(m.since, 0)
+    };
+  }
+  function memberOf(state, id) {
+    if (!state || id == null) return null;
+    return state.members.find((m) => m.id === id) || null;
+  }
+  function ruler(state) {
+    return memberOf(state, state && state.rulerId);
+  }
+  function bloodMembers(state) {
+    return state.members.filter((m) => m.blood);
+  }
+  function ageYearsOf(m) {
+    return ageYears(m);
+  }
+  function powerOf2(m) {
+    if (!m) return 0;
+    const y = ageYears(m);
+    let p = y < ADULT_YEARS ? y / ADULT_YEARS * 3 : y <= 45 ? 10 : Math.max(3, 10 - (y - 45) * 0.2);
+    for (const t of m.traits) p += TRAIT_POWER[t] || 0;
+    return Math.round(p * 10) / 10;
+  }
+  function heirOf(state, ctx, from) {
+    const c = readCtx5(ctx);
+    const lawDef = SUCCESSION_LAW[c.gov] || SUCCESSION_LAW.chiefdom;
+    const rl = from || ruler(state);
+    const pool = bloodMembers(state).filter((m) => m.id !== state.rulerId && (!rl || m.id !== rl.id));
+    const named = memberOf(state, state.namedHeirId);
+    if (named && named.blood && named.id !== state.rulerId) {
+      const odd = lawDef.law !== "appointed";
+      return {
+        id: named.id,
+        name: named.name,
+        member: named,
+        law: lawDef.law,
+        lawRu: lawDef.ru,
+        why: odd ? "назначен волей правителя вопреки обычаю" : "назначен волей правителя",
+        odd,
+        minor: ageYears(named) < ADULT_YEARS
+      };
+    }
+    if (lawDef.law === "election") {
+      return null;
+    }
+    let pick3 = null, why = "";
+    if (lawDef.law === "eldest_son") {
+      if (rl) {
+        const sons = pool.filter((m) => m.sex === "м" && _isChildOf(m, rl)).sort((a, b) => b.age - a.age);
+        if (sons.length) {
+          pick3 = sons[0];
+          why = "старший сын правителя";
+        }
+        if (!pick3) {
+          const daughters = pool.filter((m) => m.sex === "ж" && _isChildOf(m, rl)).sort((a, b) => b.age - a.age);
+          if (daughters.length) {
+            pick3 = daughters[0];
+            why = "сыновей нет, наследует старшая дочь";
+          }
+        }
+      }
+      if (!pick3) {
+        const kin = pool.slice().sort((a, b) => a.gen - b.gen || b.age - a.age);
+        if (kin.length) {
+          pick3 = kin[0];
+          why = "детей нет, трон уходит к старшему в роду";
+        }
+      }
+    } else if (lawDef.law === "strongest") {
+      const adults = pool.filter((m) => ageYears(m) >= ADULT_YEARS);
+      const src = adults.length ? adults : pool;
+      pick3 = src.slice().sort((a, b) => powerOf2(b) - powerOf2(a) || a.id - b.id)[0] || null;
+      why = adults.length ? "сильнейший из рода" : "взрослых в роду нет, встанет отрок";
+    } else if (lawDef.law === "council" || lawDef.law === "appointed") {
+      const adults = pool.filter((m) => ageYears(m) >= ADULT_YEARS).sort((a, b) => b.age - a.age);
+      pick3 = adults[0] || pool.slice().sort((a, b) => b.age - a.age)[0] || null;
+      why = lawDef.law === "council" ? "старший в роду — так решит совет" : "преемник не назначен, трон возьмёт старший";
+    }
+    if (!pick3) return null;
+    return {
+      id: pick3.id,
+      name: pick3.name,
+      member: pick3,
+      law: lawDef.law,
+      lawRu: lawDef.ru,
+      why,
+      odd: lawDef.law === "eldest_son" && pick3.sex === "ж",
+      minor: ageYears(pick3) < ADULT_YEARS
+    };
+  }
+  function _isChildOf(m, parent) {
+    return m.father === parent.id || m.mother === parent.id;
+  }
+  function baseLegitimacy(state, day) {
+    const years = Math.max(0, (numOf2(day, 0) - numOf2(state.foundedDay, 0)) / YEAR5);
+    return clamp13(30 + 6 * (state.generations - 1) + years * 0.15, 0, LEG_BASE_CAP);
+  }
+  function legitimacyWord(v) {
+    if (v >= 80) return "непререкаемая";
+    if (v >= 60) return "крепкая";
+    if (v >= 40) return "спорная";
+    if (v >= 20) return "шаткая";
+    return "ничтожная";
+  }
+  function dynastyNewDay(state, ctx, rng) {
+    const c = readCtx5(ctx);
+    const S = clone(state);
+    const out = { state: S, mods: zeroMods(), reasons: [], events: [], flags: {}, counted: false };
+    if (!S || !S.members) return out;
+    if (S.day === c.day) {
+      out.flags = summaryFlags(S, c);
+      return out;
+    }
+    S.day = c.day;
+    out.counted = true;
+    _tickAges(S);
+    _tickDeaths2(S, c, rng, out);
+    _tickWeddings(S, c, rng, out);
+    _tickBirths2(S, c, rng, out);
+    _tickSuccession(S, c, rng, out);
+    _tickInterregnum(S, c, rng, out);
+    _tickLegitimacy(S, c, out);
+    _tickClaimants(S, c, rng, out);
+    _tickCourt(S, c, out);
+    _tickStanding(S, c, out);
+    _trimMembers(S);
+    Object.assign(out.flags, summaryFlags(S, c));
+    return out;
+  }
+  function _tickAges(S) {
+    for (const m of S.members) {
+      m.age++;
+      if (m.fertCd > 0) m.fertCd--;
+    }
+    for (const cl of S.claimants) cl.age++;
+    if (S.patronCd > 0) S.patronCd--;
+  }
+  function _tickDeaths2(S, c, rng, out) {
+    const hunger = c.foodDays < 2 ? 2 : c.foodDays < 5 ? 1.3 : 1;
+    for (const m of S.members.slice()) {
+      const q = annualMortality(ageYears(m)) * ROYAL_MORT * c.mortalityMult * hunger;
+      if (!rng.chance(q / YEAR5)) continue;
+      _bury(S, m, c.day, out);
+    }
+  }
+  function _bury(S, m, day, out) {
+    const y = ageYears(m);
+    const idx = S.members.indexOf(m);
+    if (idx >= 0) S.members.splice(idx, 1);
+    S.stats.deaths++;
+    for (const o of S.members) {
+      if (o.spouse === m.id) o.spouse = null;
+    }
+    if (S.namedHeirId === m.id) S.namedHeirId = null;
+    const text = `✝ ${m.name} умер${m.sex === "ж" ? "ла" : ""} в ${y} ${plural2(y, "год", "года", "лет")}.`;
+    S.graves.push({ name: m.name, day, years: y, text });
+    if (S.graves.length > GRAVE_KEEP) S.graves.splice(0, S.graves.length - GRAVE_KEEP);
+    if (m.id !== S.rulerId && y >= ADULT_YEARS) {
+      out.events.push({ text: `${text} Род ${S.fam} провожает своего.`, type: "info", cause: "kin_death" });
+    }
+    if (m.id === S.rulerId) {
+      S.rulerId = null;
+      out.flags.rulerDiedToday = m;
+    }
+  }
+  function _tickWeddings(S, c, rng, out) {
+    if (S.members.length >= MAX_MEMBERS) return;
+    const single = S.members.filter((m) => m.spouse == null && ageYears(m) >= MARRY_MIN && ageYears(m) <= MARRY_MAX);
+    for (const m of single) {
+      if (!rng.chance(MARRY_CHANCE)) continue;
+      if (S.members.length >= MAX_MEMBERS) break;
+      const spouse = _makeMember(S, rng, {
+        sex: m.sex === "м" ? "ж" : "м",
+        ageYears: clamp13(ageYears(m) + rng.int(-6, 6), MARRY_MIN, MARRY_MAX),
+        day: c.day,
+        gen: m.gen,
+        blood: false,
+        origin: "married"
+      });
+      _wed(m, spouse);
+      out.events.push({
+        text: `⚭ ${m.name} берёт в супруги ${spouse.name} из поселения. У рода ${S.fam} прибыло.`,
+        type: "good",
+        cause: "wedding"
+      });
+    }
+  }
+  function _tickBirths2(S, c, rng, out) {
+    if (S.members.length >= MAX_MEMBERS) return;
+    for (const w of S.members.slice()) {
+      if (w.sex !== "ж" || w.spouse == null || w.fertCd > 0) continue;
+      const y = ageYears(w);
+      if (y < FERT_MIN2 || y > FERT_MAX2) continue;
+      const father = memberOf(S, w.spouse);
+      if (!father) continue;
+      if (!rng.chance(BIRTH_BASE2)) continue;
+      const child = _makeMember(S, rng, {
+        sex: rng.chance(0.5) ? "м" : "ж",
+        ageYears: 0,
+        day: c.day,
+        gen: Math.max(w.gen, father.gen) + 1,
+        // Кровь наследуется от того из родителей, кто сам кровный. Ребёнок
+        // княжны и пришлого — кровный: род продолжается по любой линии, иначе
+        // династия из одного сына обрывалась бы на первой же девочке.
+        blood: w.blood || father.blood,
+        father: father.sex === "м" ? father : w,
+        mother: father.sex === "ж" ? father : w
+      });
+      child.fam = S.fam;
+      w.fertCd = BIRTH_CD2;
+      S.stats.births++;
+      out.events.push({
+        text: `☺ В роду ${S.fam} ${child.sex === "ж" ? "родилась" : "родился"} ${child.name}.`,
+        type: "good",
+        cause: "birth"
+      });
+      if (S.members.length >= MAX_MEMBERS) break;
+    }
+  }
+  function _tickSuccession(S, c, rng, out) {
+    const dead = out.flags.rulerDiedToday;
+    if (!dead) return;
+    const suc = SUCCESSION[c.gov] || SUCCESSION.chiefdom;
+    const lawDef = SUCCESSION_LAW[c.gov] || SUCCESSION_LAW.chiefdom;
+    if (lawDef.law === "election") {
+      const cand = bloodMembers(S).filter((m2) => ageYears(m2) >= ADULT_YEARS).sort((a, b) => powerOf2(b) - powerOf2(a) || a.id - b.id)[0];
+      if (cand && S.legitimacy >= 60) {
+        _enthrone(S, cand, c);
+        out.events.push({ text: `⚖ ${dead.name} умер. Выборы: голоса снова за род ${S.fam} — правит ${cand.name}.`, type: "info", cause: "succession" });
+      } else {
+        const rep = _newHouse(S, c, rng, { legitimacy: 45, why: "выборы" });
+        out.events.push({ text: `⚖ ${dead.name} умер. Выборы отдали власть другому роду: ${rep.name} из рода ${S.fam}.`, type: "warn", cause: "house_change" });
+        out.reasons.push(`Республика не наследует власть: род сменился по итогам выборов.`);
+      }
+      _legHit(S, suc.stab * LEG_PER_STAB, out, `Смена власти: ${suc.ru}.`);
+      return;
+    }
+    const heir = heirOf(S, c, dead);
+    if (!heir) {
+      S.rulerId = null;
+      S.interregnum = INTERREGNUM_DAYS;
+      S.stats.interregnums++;
+      out.events.push({
+        text: `☠ ${dead.name} умер, не оставив наследника. Род ${S.fam} пресёкся — междуцарствие.`,
+        type: "bad",
+        cause: "interregnum"
+      });
+      out.reasons.push(`Междуцарствие: трон пуст, наследовать некому (${INTERREGNUM_DAYS} дн.).`);
+      _legHit(S, 25, out, "Род пресёкся: права на трон не осталось ни у кого.");
+      out.flags.interregnumStarted = true;
+      return;
+    }
+    const m = heir.member;
+    _enthrone(S, m, c);
+    if (S.namedHeirId === m.id) S.namedHeirId = null;
+    const minor = ageYears(m) < ADULT_YEARS;
+    out.events.push({
+      text: `👑 ${dead.name} умер. Трон принял ${m.name} (${heir.why}). ${suc.ru}.`,
+      type: minor ? "warn" : "info",
+      cause: "succession"
+    });
+    _legHit(S, suc.stab * LEG_PER_STAB, out, `Смена власти: ${suc.ru}.`);
+    if (heir.odd) _legHit(S, 6, out, `Преемник сомнителен: ${heir.why}.`);
+    if (minor) {
+      out.events.push({ text: `Правитель — дитя: ${m.name}, ${ageYears(m)} лет. При нём правят опекуны.`, type: "warn", cause: "regency" });
+    }
+  }
+  function _enthrone(S, m, c) {
+    S.rulerId = m.id;
+    m.since = c.day;
+    S.generations = Math.max(S.generations, m.gen);
+    S.stats.rulers++;
+  }
+  function _tickInterregnum(S, c, rng, out) {
+    if (S.interregnum <= 0) return;
+    S.interregnum--;
+    out.mods.stability -= INTERREGNUM_STAB;
+    out.reasons.push(`Междуцарствие: трон пуст, стабильность −${INTERREGNUM_STAB.toFixed(1)} в сутки (осталось ${Math.round(S.interregnum)} дн.).`);
+    if (S.interregnum > 0) return;
+    const cl = S.claimants.slice().sort((a, b) => b.strength - a.strength)[0];
+    if (cl) {
+      const rep = _newHouse(S, c, rng, { legitimacy: COUP_LEG, fam: cl.fam, name: cl.name, sex: cl.sex, age: cl.age, why: "претендент занял пустой трон" });
+      S.claimants = S.claimants.filter((x) => x !== cl);
+      out.events.push({ text: `👑 Междуцарствие кончилось: трон взял ${rep.name}. Правит род ${S.fam}.`, type: "warn", cause: "house_change" });
+    } else {
+      const rep = _newHouse(S, c, rng, { legitimacy: 35, why: "новый род из поселения" });
+      out.events.push({ text: `👑 Междуцарствие кончилось: власть взял ${rep.name}, старейшина рода ${S.fam}.`, type: "warn", cause: "house_change" });
+    }
+    out.reasons.push("Междуцарствие завершено: держава снова имеет правителя.");
+  }
+  function _tickLegitimacy(S, c, out) {
+    const before = S.legitimacy;
+    const base = baseLegitimacy(S, c.day);
+    const parts = [];
+    const pull = clamp13(base - S.legitimacy, -LEG_DRIFT, LEG_DRIFT);
+    S.legitimacy += pull;
+    if (Math.abs(pull) > 1e-9) {
+      parts.push(pull > 0 ? `род на троне ${S.generations} ${plural2(S.generations, "поколение", "поколения", "поколений")}: привычка к власти +${pull.toFixed(2)}` : `род зазнался выше своего веса: ${pull.toFixed(2)}`);
+    }
+    for (const ev of c.events) {
+      const d = LEG_EVENT[ev.kind];
+      if (d == null) continue;
+      if (_alreadySeen(S, ev.kind, ev.key, c.day)) continue;
+      S.seen.push({ key: ev.key ? `${ev.kind}:${ev.key}` : ev.kind, day: c.day });
+      const v = d * (ev.scale != null && Number.isFinite(ev.scale) ? clamp13(ev.scale, 0.25, 2) : 1);
+      S.legitimacy += v;
+      out.reasons.push(`${_eventWord(ev.kind)}: законность ${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}.`);
+      out.events.push({
+        text: `${v > 0 ? "✦" : "✖"} ${_eventWord(ev.kind)} — право рода ${S.fam} на трон ${v > 0 ? "окрепло" : "пошатнулось"}.`,
+        type: v > 0 ? "good" : "warn",
+        cause: "legitimacy"
+      });
+    }
+    S.seen = S.seen.filter((s) => c.day - s.day <= SEEN_WINDOW * 2);
+    const heir = heirOf(S, c);
+    if (S.interregnum > 0) {
+      S.legitimacy -= LEG_INTERREGNUM;
+      parts.push(`междуцарствие −${LEG_INTERREGNUM}`);
+    } else if (!heir && (SUCCESSION_LAW[c.gov] || {}).law !== "election") {
+      S.legitimacy -= LEG_NO_HEIR;
+      parts.push(`наследника нет −${LEG_NO_HEIR}`);
+      out.reasons.push("Наследника нет: народ гадает, что будет после правителя. Женить или родить — и это уйдёт.");
+    } else if (heir && heir.odd) {
+      S.legitimacy -= LEG_ODD_HEIR;
+      parts.push(`сомнительный преемник −${LEG_ODD_HEIR}`);
+      out.reasons.push(`Преемник сомнителен (${heir.why}): знать шепчется. Отменить назначение — и шёпот стихнет.`);
+    }
+    S.legitimacy = clamp13(S.legitimacy, LEG_MIN, LEG_MAX);
+    out.flags.legParts = parts;
+    out.flags.legDelta = Math.round((S.legitimacy - before) * 100) / 100;
+  }
+  function _alreadySeen(S, kind, key, day) {
+    const full = key ? `${kind}:${key}` : kind;
+    return S.seen.some((s) => s.key === full && day - s.day < SEEN_WINDOW);
+  }
+  function _eventWord(kind) {
+    return {
+      victory: "Победа в поле",
+      triumph: "Триумф",
+      city_won: "Взят город",
+      defeat: "Поражение",
+      city_lost: "Потеряна провинция",
+      famine: "Голод",
+      plague: "Мор",
+      revolt: "Восстание"
+    }[kind] || kind;
+  }
+  function _legHit(S, v, out, why) {
+    S.legitimacy = clamp13(S.legitimacy - v, LEG_MIN, LEG_MAX);
+    out.reasons.push(`${why} Законность −${v.toFixed(1)}.`);
+  }
+  function _tickClaimants(S, c, rng, out) {
+    for (const cl2 of S.claimants.slice()) {
+      const y = ageYears(cl2);
+      if (rng.chance(annualMortality(y) / YEAR5)) {
+        S.claimants = S.claimants.filter((x) => x !== cl2);
+        out.events.push({ text: `Претендент ${cl2.name} умер. Одной угрозой троном меньше.`, type: "good", cause: "claimant_gone" });
+        continue;
+      }
+      if (S.legitimacy > CLAIM_CLEAR && rng.chance(CLAIM_FADE)) {
+        S.claimants = S.claimants.filter((x) => x !== cl2);
+        out.events.push({ text: `Претендент ${cl2.name} отступился: право рода ${S.fam} признано.`, type: "good", cause: "claimant_gone" });
+      }
+    }
+    if (S.claimants.length) {
+      const d = CLAIM_STAB * S.claimants.length;
+      out.mods.stability -= d;
+      out.mods.estates.nobles -= 0.02 * S.claimants.length;
+      out.reasons.push(`Претенденты на трон (${S.claimants.length}): стабильность −${d.toFixed(2)} в сутки. Поднимите законность выше ${CLAIM_CLEAR} — разойдутся.`);
+    }
+    if (S.claimants.length >= MAX_CLAIMANTS) return;
+    if (S.legitimacy >= CLAIM_BELOW) return;
+    const p = CLAIM_CHANCE * (1 + (CLAIM_BELOW - S.legitimacy) / CLAIM_BELOW);
+    if (!rng.chance(Math.min(p, CLAIM_CHANCE * 2))) return;
+    const tie = S.ties.find((t) => !S.claimants.some((x) => x.fid === t.fid));
+    const sex = rng.chance(0.7) ? "м" : "ж";
+    const cl = {
+      name: `${_pickName(rng, sex)} ${tie ? tie.house : rng.pick(NICKNAMES)}`,
+      fam: tie ? tie.house : rng.pick(NICKNAMES),
+      sex,
+      age: rng.int(22, 48) * YEAR5,
+      strength: Math.round(clamp13((tie ? tie.claim : 25) + (CLAIM_BELOW - S.legitimacy), 10, 90)),
+      fid: tie ? tie.fid : null,
+      since: c.day
+    };
+    S.claimants.push(cl);
+    out.events.push({
+      text: tie ? `⚑ ${cl.name} заявил права на трон: его род породнился с нашим, а законность рода ${S.fam} ${legitimacyWord(S.legitimacy)}.` : `⚑ ${cl.name} заявил права на трон: законность рода ${S.fam} ${legitimacyWord(S.legitimacy)}, и знать слушает.`,
+      type: "bad",
+      cause: "claimant"
+    });
+    out.flags.newClaimant = cl;
+  }
+  function _tickCourt(S, c, out) {
+    const lvl = COURT[clampInt(S.court, 0, COURT.length - 1)];
+    const gold = lvl.gold * (1 + c.pop * COURT_PER_POP);
+    if (gold > 0 && c.gold < gold) {
+      S.legitimacy = clamp13(S.legitimacy - COURT_UNPAID_LEG, LEG_MIN, LEG_MAX);
+      out.mods.estates.nobles -= 0.05;
+      out.reasons.push(`Двору не заплатили (нужно ${gold.toFixed(1)} 🪙 в сутки): законность −${COURT_UNPAID_LEG}, знать недовольна. Понизьте содержание двора.`);
+      out.flags.courtUnpaid = true;
+    } else {
+      out.mods.goldPerDay -= gold;
+      S.legitimacy = clamp13(S.legitimacy + lvl.leg, LEG_MIN, LEG_MAX);
+      out.mods.estates.nobles += lvl.nobles;
+      out.mods.estates.commons += lvl.commons;
+      out.mods.happy += lvl.happy;
+      if (gold > 0) out.reasons.push(`Двор (${lvl.ru}): ${gold.toFixed(1)} 🪙 в сутки, законность ${lvl.leg > 0 ? "+" : "−"}${Math.abs(lvl.leg)}.`);
+      else out.reasons.push(`Двор (${lvl.ru}): казна не тратится, но и почёта роду нет: законность ${lvl.leg.toFixed(2)}.`);
+    }
+  }
+  function _tickStanding(S, c, out) {
+    const rl = ruler(S);
+    if (rl && ageYears(rl) < ADULT_YEARS) {
+      out.mods.stability -= REGENCY_STAB;
+      const left = Math.ceil((ADULT_YEARS * YEAR5 - rl.age) / YEAR5);
+      out.reasons.push(`Правитель — дитя (${ageYears(rl)} лет): стабильность −${REGENCY_STAB} в сутки. Кончится само через ${left} ${plural2(left, "год", "года", "лет")}.`);
+      out.flags.regency = true;
+    }
+    const d = (S.legitimacy - 50) / 50 * 0.3;
+    out.mods.stability += d;
+    if (Math.abs(d) >= 0.02) {
+      out.reasons.push(`Законность рода ${S.fam} ${legitimacyWord(S.legitimacy)} (${Math.round(S.legitimacy)}): стабильность ${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(2)} в сутки.`);
+    }
+    out.mods.estates.nobles += (S.legitimacy - 50) / 50 * 0.04;
+    out.mods.estates.military += (S.legitimacy - 50) / 50 * 0.02;
+  }
+  function _trimMembers(S) {
+    if (S.members.length <= MAX_MEMBERS) return;
+    const keep = new Set([S.rulerId, S.namedHeirId].filter((x) => x != null));
+    const rl = ruler(S);
+    if (rl && rl.spouse != null) keep.add(rl.spouse);
+    const rank = (m) => (keep.has(m.id) ? -1e3 : 0) + (m.blood ? -10 : 0) + m.gen * 5 - ageYears(m) / 50;
+    S.members.sort((a, b) => rank(a) - rank(b));
+    S.members.length = MAX_MEMBERS;
+    const ids = new Set(S.members.map((m) => m.id));
+    for (const m of S.members) {
+      if (m.spouse != null && !ids.has(m.spouse)) m.spouse = null;
+      if (m.father != null && !ids.has(m.father)) m.father = null;
+      if (m.mother != null && !ids.has(m.mother)) m.mother = null;
+    }
+    if (!ids.has(S.namedHeirId)) S.namedHeirId = null;
+  }
+  function patronCost(ctx) {
+    const c = readCtx5(ctx);
+    return Math.round(PATRON_COST + c.pop * PATRON_PER_POP);
+  }
+  function canPatronize(state, ctx) {
+    const c = readCtx5(ctx);
+    if (!state) return { ok: false, reason: "Рода нет" };
+    if (state.interregnum > 0) return { ok: false, reason: "Междуцарствие: двора нет, одаривать некого" };
+    if (state.patronCd > 0) return { ok: false, reason: `Двор одарён недавно, ждать ${Math.ceil(state.patronCd)} дн.` };
+    const cost = patronCost(c);
+    if (c.gold < cost) return { ok: false, reason: `Не хватает золота: нужно ${cost} 🪙` };
+    if (state.legitimacy >= LEG_MAX) return { ok: false, reason: "Законность и так непререкаема" };
+    return { ok: true, cost };
+  }
+  function patronizeCourt(state, ctx) {
+    const chk = canPatronize(state, ctx);
+    if (!chk.ok) return { ...chk, state };
+    const S = clone(state);
+    S.legitimacy = clamp13(S.legitimacy + PATRON_LEG, LEG_MIN, LEG_MAX);
+    S.patronCd = PATRON_CD;
+    return {
+      ok: true,
+      state: S,
+      cost: chk.cost,
+      mods: { gold: -chk.cost, estates: { nobles: 4, commons: -3 } },
+      reasons: [`Двору поднесены дары на ${chk.cost} 🪙: законность +${PATRON_LEG}, знать довольна, простолюдины видят роскошь.`],
+      events: [{ text: `♛ Род ${S.fam} держит двор на широкую ногу: пиры, дары, послы. Законность ${Math.round(S.legitimacy)}.`, type: "good", cause: "patron" }]
+    };
+  }
+  function canSetCourt(state, level) {
+    const l = Math.round(numOf2(level, -1));
+    if (!state) return { ok: false, reason: "Рода нет" };
+    if (!COURT[l]) return { ok: false, reason: "Такого содержания двора не бывает" };
+    if (state.court === l) return { ok: false, reason: `${COURT[l].ru} — уже так и есть` };
+    return { ok: true };
+  }
+  function setCourt(state, level) {
+    const chk = canSetCourt(state, level);
+    if (!chk.ok) return { ...chk, state };
+    const S = clone(state);
+    S.court = Math.round(level);
+    return {
+      ok: true,
+      state: S,
+      reasons: [`Содержание двора: ${COURT[S.court].ru}.`],
+      events: [{ text: `♛ Двор рода ${S.fam} переведён на содержание «${COURT[S.court].ru}».`, type: "info", cause: "court" }]
+    };
+  }
+  function canNameHeir(state, id, ctx) {
+    const c = readCtx5(ctx);
+    if (!state) return { ok: false, reason: "Рода нет" };
+    const law = (SUCCESSION_LAW[c.gov] || SUCCESSION_LAW.chiefdom).law;
+    if (law === "election") return { ok: false, reason: "Республика наследников не назначает — там выборы" };
+    const m = memberOf(state, id);
+    if (!m) return { ok: false, reason: "Такого человека в роду нет" };
+    if (!m.blood) return { ok: false, reason: `${m.name} вошёл в род через брак и наследовать не может` };
+    if (m.id === state.rulerId) return { ok: false, reason: "Он и так на троне" };
+    if (state.namedHeirId === m.id) return { ok: false, reason: `${m.name} уже назначен` };
+    return { ok: true, member: m, odd: law !== "appointed" };
+  }
+  function nameHeir(state, id, ctx) {
+    const chk = canNameHeir(state, id, ctx);
+    if (!chk.ok) return { ...chk, state };
+    const S = clone(state);
+    S.namedHeirId = chk.member.id;
+    const odd = chk.odd;
+    if (odd) S.legitimacy = clamp13(S.legitimacy + NAME_HEIR_LEG, LEG_MIN, LEG_MAX);
+    return {
+      ok: true,
+      state: S,
+      mods: { estates: { nobles: odd ? NAME_HEIR_NOBLES : 0 } },
+      reasons: odd ? [`Наследником назван ${chk.member.name} вопреки обычаю: законность ${NAME_HEIR_LEG}, знать оскорблена (${NAME_HEIR_NOBLES}).`] : [`Наследником назван ${chk.member.name} — так и положено при этом строе.`],
+      events: [{ text: `📜 Наследником объявлен ${chk.member.name}${odd ? " — старшинство обойдено, и двор это запомнит." : "."}`, type: odd ? "warn" : "info", cause: "heir" }]
+    };
+  }
+  function clearHeir(state) {
+    if (!state || state.namedHeirId == null) return { ok: false, reason: "Наследник и не назначался", state };
+    const S = clone(state);
+    const m = memberOf(S, S.namedHeirId);
+    S.namedHeirId = null;
+    return {
+      ok: true,
+      state: S,
+      reasons: [`Назначение отменено: трон снова наследуется по обычаю.`],
+      events: [{ text: `📜 ${m ? m.name : "Наследник"} лишён права наследовать. Обычай восстановлен.`, type: "info", cause: "heir" }]
+    };
+  }
+  function canMarryHeir(state, ctx, opts = {}) {
+    const c = readCtx5(ctx);
+    if (!state) return { ok: false, reason: "Рода нет" };
+    if (opts.fid == null) return { ok: false, reason: "Не сказано, с каким родом роднимся" };
+    if (state.ties.some((t) => t.fid === String(opts.fid))) return { ok: false, reason: "С этим родом уже породнились" };
+    const heir = heirOf(state, c);
+    const m = heir ? heir.member : bloodMembers(state).filter((x) => x.id !== state.rulerId && x.spouse == null).sort((a, b) => b.age - a.age)[0];
+    if (!m) return { ok: false, reason: "В роду некого женить: свободных наследников нет" };
+    if (m.spouse != null) return { ok: false, reason: `${m.name} уже в браке` };
+    if (ageYears(m) < MARRY_MIN) return { ok: false, reason: `${m.name} слишком юн: женить можно с ${MARRY_MIN} лет` };
+    if (numOf2(opts.rel, 0) < 0) return { ok: false, reason: "Сосед враждебен — сватов не примут" };
+    return { ok: true, member: m };
+  }
+  function marryHeir(state, ctx, opts, rng) {
+    const chk = canMarryHeir(state, ctx, opts);
+    if (!chk.ok) return { ...chk, state };
+    const c = readCtx5(ctx);
+    const S = clone(state);
+    const m = memberOf(S, chk.member.id);
+    const house = strOf(opts.house, null) || (rng ? rng.pick(NICKNAMES) : "Соседний");
+    const sex = m.sex === "м" ? "ж" : "м";
+    const spouse = _makeMember(S, rng, {
+      sex,
+      ageYears: clamp13(ageYears(m) + (rng ? rng.int(-4, 4) : 0), MARRY_MIN, MARRY_MAX),
+      day: c.day,
+      gen: m.gen,
+      blood: false,
+      origin: "foreign",
+      fid: String(opts.fid),
+      fam: house
+    });
+    _wed(m, spouse);
+    S.ties.push({ fid: String(opts.fid), house, since: c.day, memberId: m.id, claim: FOREIGN_CLAIM });
+    S.legitimacy = clamp13(S.legitimacy + MARRY_LEG, LEG_MIN, LEG_MAX);
+    return {
+      ok: true,
+      state: S,
+      member: m,
+      spouse,
+      mods: { relations: { [String(opts.fid)]: MARRY_REL }, estates: { nobles: 2 } },
+      reasons: [
+        `${m.name} женится на роде ${house}: отношения +${MARRY_REL}, законность +${MARRY_LEG}.`,
+        `Цена союза: род ${house} получил права на наш трон. Если законность рухнет ниже ${CLAIM_BELOW}, оттуда придёт претендент.`
+      ],
+      events: [{ text: `⚭ Свадьба: ${m.name} и ${spouse.name} из рода ${house}. Два рода стали одним домом.`, type: "good", cause: "alliance" }]
+    };
+  }
+  function canOverthrow(state, ctx, opts = {}) {
+    const c = readCtx5(ctx);
+    if (!state) return { ok: false, reason: "Рода нет" };
+    if (state.interregnum > 0) return { ok: false, reason: "Трон и так пуст: свергать некого" };
+    if (!state.rulerId) return { ok: false, reason: "Правителя нет" };
+    if (c.nobles < COUP_NEED_NOBLES) return { ok: false, reason: `Знать не пойдёт: нужно одобрение ${COUP_NEED_NOBLES}, есть ${Math.round(c.nobles)}` };
+    if (c.military < COUP_NEED_MILITARY) return { ok: false, reason: `Войско не пойдёт: нужно одобрение ${COUP_NEED_MILITARY}, есть ${Math.round(c.military)}` };
+    if (c.stability < COUP_STAB) return { ok: false, reason: `Слишком шатко: переворот стоит ${COUP_STAB} стабильности, а её ${Math.round(c.stability)}` };
+    if (state.legitimacy >= 75) return { ok: false, reason: `Законность рода ${state.fam} непререкаема (${Math.round(state.legitimacy)}): заговорщиков выдадут` };
+    if (opts.claimant != null && !state.claimants[opts.claimant]) return { ok: false, reason: "Такого претендента нет" };
+    return { ok: true };
+  }
+  function overthrow(state, ctx, opts = {}, rng) {
+    const chk = canOverthrow(state, ctx, opts);
+    if (!chk.ok) return { ...chk, state };
+    const c = readCtx5(ctx);
+    const S = clone(state);
+    const oldFam = S.fam;
+    const oldRuler = ruler(S);
+    const cl = opts.claimant != null ? S.claimants[opts.claimant] : null;
+    const rep = _newHouse(S, c, rng, cl ? { legitimacy: COUP_LEG, fam: cl.fam, name: cl.name, sex: cl.sex, age: cl.age, why: "переворот" } : { legitimacy: COUP_LEG, why: "переворот" });
+    if (cl) S.claimants = S.claimants.filter((x) => x !== cl);
+    S.stats.coups++;
+    return {
+      ok: true,
+      state: S,
+      ruler: rep,
+      mods: { stability: -COUP_STAB, estates: { nobles: -5, commons: -5, military: 3 } },
+      reasons: [
+        `Переворот: род ${oldFam} низложен, на трон сел ${rep.name} из рода ${S.fam}.`,
+        `Цена: стабильность −${COUP_STAB}, законность нового рода ${COUP_LEG} — придётся заслуживать заново.`
+      ],
+      events: [{
+        text: `⚔ ПЕРЕВОРОТ. ${oldRuler ? oldRuler.name : "Правитель"} низложен, род ${oldFam} отстранён от власти. Правит ${rep.name} (${S.fam}).`,
+        type: "bad",
+        cause: "coup"
+      }]
+    };
+  }
+  function _newHouse(S, c, rng, opts = {}) {
+    S.members.length = 0;
+    S.claimants = [];
+    S.ties = [];
+    S.namedHeirId = null;
+    S.seen = [];
+    S.fam = opts.fam || (rng ? rng.pick(NICKNAMES) : "Новый");
+    S.generations = 1;
+    S.foundedDay = c.day;
+    S.legitimacy = clamp13(numOf2(opts.legitimacy, COUP_LEG), LEG_MIN, LEG_MAX);
+    S.interregnum = 0;
+    S.court = 1;
+    S.stats.houses++;
+    const head2 = _makeMember(S, rng, {
+      sex: opts.sex === "ж" ? "ж" : "м",
+      ageYears: opts.age != null ? Math.floor(opts.age / YEAR5) : rng ? rng.int(26, 46) : 35,
+      day: c.day,
+      gen: 1,
+      blood: true,
+      name: opts.name
+    });
+    S.founder = head2.name;
+    S.rulerId = head2.id;
+    head2.since = c.day;
+    S.stats.rulers++;
+    if (rng) {
+      const spouse = _makeMember(S, rng, {
+        sex: head2.sex === "м" ? "ж" : "м",
+        ageYears: clamp13(ageYears(head2) + rng.int(-5, 3), MARRY_MIN, MARRY_MAX),
+        day: c.day,
+        gen: 1,
+        blood: false,
+        origin: "married"
+      });
+      _wed(head2, spouse);
+      const kid = _makeMember(S, rng, {
+        sex: rng.chance(0.5) ? "м" : "ж",
+        ageYears: rng.int(0, 12),
+        day: c.day,
+        gen: 2,
+        blood: true,
+        father: head2.sex === "м" ? head2 : spouse,
+        mother: head2.sex === "ж" ? head2 : spouse
+      });
+      kid.fam = S.fam;
+    }
+    return head2;
+  }
+  function dynastyCard(state, ctx) {
+    if (!state) return null;
+    const c = readCtx5(ctx);
+    const rl = ruler(state);
+    const heir = heirOf(state, c);
+    const lawDef = SUCCESSION_LAW[c.gov] || SUCCESSION_LAW.chiefdom;
+    const lines = [];
+    if (state.interregnum > 0) {
+      lines.push(`МЕЖДУЦАРСТВИЕ: трон пуст ещё ${Math.ceil(state.interregnum)} дн.`);
+    } else if (rl) {
+      const y = ageYears(rl);
+      lines.push(`${rl.name}, ${y} ${plural2(y, "год", "года", "лет")}, ${rl.sex === "ж" ? "правительница" : "правитель"}`);
+      if (rl.traits.length) lines.push("Черты: " + rl.traits.map((t) => TRAIT_BY_ID4[t].ru).join(", "));
+    }
+    lines.push(`Законность: ${Math.round(state.legitimacy)} — ${legitimacyWord(state.legitimacy)}`);
+    lines.push(`Закон наследования: ${lawDef.ru}`);
+    lines.push(heir ? `Наследник: ${heir.name} (${heir.why})` : "Наследника нет");
+    lines.push(`Поколений у власти: ${state.generations}; в роду ${state.members.length} ${plural2(state.members.length, "человек", "человека", "человек")}`);
+    lines.push(`Двор: ${COURT[clampInt(state.court, 0, COURT.length - 1)].ru}`);
+    if (state.claimants.length) lines.push("Претенденты: " + state.claimants.map((x) => `${x.name} (сила ${x.strength})`).join(", "));
+    if (state.ties.length) lines.push("Породнились: " + state.ties.map((t) => t.house).join(", "));
+    return {
+      title: `Род ${state.fam}`,
+      lines,
+      legitimacy: Math.round(state.legitimacy),
+      heir: heir ? { id: heir.id, name: heir.name, why: heir.why, odd: !!heir.odd, minor: !!heir.minor } : null,
+      interregnum: state.interregnum,
+      claimants: state.claimants.length,
+      // Прямой ответ на «чем я рискую»: что будет, если правитель умрёт сегодня.
+      risk: state.interregnum > 0 ? "междуцарствие уже идёт" : heir ? `трон примет ${heir.name}` : lawDef.law === "election" ? "выборы: власть может уйти из рода" : "РОД ПРЕСЕЧЁТСЯ — междуцарствие"
+    };
+  }
+  function dynastyRows(state, ctx) {
+    if (!state) return [];
+    const c = readCtx5(ctx);
+    const heir = heirOf(state, c);
+    return state.members.slice().sort((a, b) => b.blood - a.blood || a.gen - b.gen || b.age - a.age).map((m) => ({
+      id: m.id,
+      name: m.name,
+      sex: m.sex,
+      years: ageYears(m),
+      traits: m.traits.map((t) => TRAIT_BY_ID4[t].ru),
+      blood: m.blood,
+      origin: m.origin,
+      ruler: m.id === state.rulerId,
+      heir: !!heir && heir.id === m.id,
+      spouse: m.spouse != null ? (memberOf(state, m.spouse) || {}).name || null : null,
+      power: powerOf2(m)
+    }));
+  }
+  function politicsRuler(state) {
+    const rl = ruler(state);
+    if (!rl) return null;
+    return { name: rl.name, age: rl.age / YEAR5, since: rl.since, traits: rl.traits.slice() };
+  }
+  function summaryFlags(S, c) {
+    const heir = heirOf(S, c);
+    return {
+      fam: S.fam,
+      legitimacy: Math.round(S.legitimacy * 10) / 10,
+      ruler: S.rulerId,
+      heir: heir ? heir.id : null,
+      heirName: heir ? heir.name : null,
+      generations: S.generations,
+      members: S.members.length,
+      claimants: S.claimants.length,
+      interregnum: S.interregnum,
+      extinct: !S.rulerId && S.interregnum > 0
+    };
+  }
+  function _makeMember(S, rng, o) {
+    const sex = o.sex === "ж" ? "ж" : "м";
+    const fam = o.fam || S.fam;
+    const first = o.name ? String(o.name).split(" ")[0] : _pickName(rng, sex);
+    const parents = [o.father, o.mother].filter(Boolean);
+    const m = {
+      id: S.nextId++,
+      name: o.name && String(o.name).includes(" ") ? String(o.name) : `${first} ${fam}`,
+      fam,
+      sex,
+      age: Math.max(0, Math.round(numOf2(o.ageYears, 0) * YEAR5)),
+      born: numOf2(o.day, 0) - Math.max(0, Math.round(numOf2(o.ageYears, 0) * YEAR5)),
+      gen: Math.max(1, Math.round(numOf2(o.gen, 1))),
+      blood: !!o.blood,
+      origin: o.origin || (o.blood ? "blood" : "married"),
+      fid: o.fid == null ? null : String(o.fid),
+      traits: _makeTraits(rng, parents),
+      father: o.father ? o.father.id : null,
+      mother: o.mother ? o.mother.id : null,
+      spouse: null,
+      fertCd: 0,
+      since: numOf2(o.day, 0)
+    };
+    S.members.push(m);
+    return m;
+  }
+  function _makeTraits(rng, parents) {
+    const out = [];
+    const fits = (t) => !out.includes(t) && !TRAIT_CONFLICTS2.some(([a, b]) => t === a && out.includes(b) || t === b && out.includes(a));
+    if (!rng) return out;
+    for (const p of parents) {
+      for (const t of p.traits || []) {
+        if (out.length >= 3) break;
+        if (rng.chance(TRAIT_INHERIT) && fits(t)) out.push(t);
+      }
+    }
+    const want = rng.chance(0.4) ? 3 : 2;
+    let guard = 0;
+    while (out.length < want && guard++ < 50) {
+      const t = rng.pick(TRAIT_IDS);
+      if (fits(t)) out.push(t);
+    }
+    return out.slice(0, 3);
+  }
+  function _wed(a, b) {
+    a.spouse = b.id;
+    b.spouse = a.id;
+  }
+  function _pickName(rng, sex) {
+    const pool = sex === "ж" ? FEMALE_NAMES2 : MALE_NAMES2;
+    return rng ? rng.pick(pool.length ? pool : NAMES) : NAMES[0];
+  }
+  function readCtx5(ctx) {
+    const o = ctx || {};
+    const gov = SUCCESSION_LAW[o.gov] ? o.gov : "chiefdom";
+    return {
+      day: Math.max(0, Math.round(numOf2(o.day, 0))),
+      gov,
+      era: Math.max(0, Math.round(numOf2(o.era, 0))),
+      pop: Math.max(0, Math.round(numOf2(o.pop, 0))),
+      gold: Math.max(0, numOf2(o.gold, 0)),
+      foodDays: numOf2(o.foodDays, 99),
+      wars: Math.max(0, Math.round(numOf2(o.wars, 0))),
+      stability: clamp13(numOf2(o.stability, 50), 0, 100),
+      happy: clamp13(numOf2(o.happy, 50), 0, 100),
+      mortalityMult: Math.max(0, numOf2(o.mortalityMult, 1)),
+      nobles: clamp13(numOf2(o.nobles, 50), 0, 100),
+      military: clamp13(numOf2(o.military, 50), 0, 100),
+      events: Array.isArray(o.events) ? o.events.filter((e) => e && typeof e.kind === "string") : []
+    };
+  }
+  function zeroMods() {
+    return {
+      stability: 0,
+      happy: 0,
+      goldPerDay: 0,
+      estates: { nobles: 0, clergy: 0, merchants: 0, commons: 0, military: 0 },
+      relations: {}
+    };
+  }
+  function clone(s) {
+    return s ? JSON.parse(JSON.stringify(s)) : s;
+  }
+  function clamp13(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function clampInt(v, lo, hi) {
+    const n = Math.round(numOf2(v, lo));
+    return n < lo ? lo : n > hi ? hi : n;
+  }
+  function numOf2(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function strOf(v, def) {
+    return typeof v === "string" && v ? v : def;
+  }
+
+  // app/src/core/systems/link_dynasty.js
+  var YEAR6 = DAYS_PER_SEASON * 4;
+  var ESTATE_STEP_CAP2 = 0.35;
+  var STAB_FLOOR4 = -0.8;
+  var LEG_PIVOT = 50;
+  var LEG_HOLY = 60;
+  var LEG_USURP = 30;
+  var LEG_ESTATE = {
+    nobles: 0.12,
+    merchants: 0.03,
+    commons: 0.02,
+    military: 0.02,
+    clergy: 0
+    // жрецы считаются отдельно: у них не наклон, а два порога
+  };
+  var CLERGY_BLESS = 0.08;
+  var CLERGY_CURSE = 0.14;
+  var HOUSE_YOUNG_YEARS = 4;
+  var CLERGY_YOUNG = 0.06;
+  var FED_DAYS = 6;
+  var TRAIT_ESTATE = {
+    warlord: { military: 0.14, commons: -0.03, merchants: -0.03 },
+    builder: { nobles: 0.06, commons: 0.03, merchants: -0.02 },
+    sage: { clergy: 0.08, nobles: 0.03, military: -0.03 },
+    trader: { merchants: 0.14, clergy: -0.03, nobles: -0.02 },
+    just: { commons: 0.12, clergy: 0.05, nobles: -0.06 },
+    cruel: { commons: -0.16, nobles: 0.06, military: 0.06, clergy: -0.05 },
+    weak: { nobles: -0.1, military: -0.1, commons: 0.02 },
+    beloved: { commons: 0.16, nobles: -0.04 }
+  };
+  var COURT_LUX = [0, 0, 1];
+  var COURT_LUX_COMMONS = 0.18;
+  var COURT_LUX_BASE = 0.35;
+  var COURT_LUX_MERCH = 0.1;
+  var COURT_THIN_CLERGY = 0.06;
+  var COURT_UNPAID_CLERGY = 0.08;
+  var COURT_UNPAID_MERCH = 0.1;
+  var PLOT_MAX = 100;
+  var PLOT_STEP_MAX = 1.6;
+  var PLOT_LEG = 45;
+  var PLOT_GROW_LEG = 1;
+  var PLOT_ANGRY_NOBLES = 40;
+  var PLOT_ANGRY_MIL = 45;
+  var PLOT_GROW_NOBLES = 0.5;
+  var PLOT_GROW_MIL = 0.35;
+  var PLOT_GROW_CLAIM = 0.25;
+  var PLOT_GROW_INTER = 0.8;
+  var PLOT_CALM = 1.9;
+  var PLOT_CALM_LEG = 70;
+  var PLOT_CALM_ESTATES = 60;
+  var CRUEL_PLOT_DAMP = 0.45;
+  var KIND_PLOT_CALM = 0.35;
+  var PLOT_STEP_CALM = PLOT_CALM + KIND_PLOT_CALM;
+  var WEAK_PLOT_PUSH = 1.35;
+  var STAGE_MURMUR = 30;
+  var STAGE_MURMUR_CLEAR = 20;
+  var STAGE_PRETENDER = 60;
+  var STAGE_PRETENDER_CLEAR = 45;
+  var STAGE_COUP = 88;
+  var STAGE_COUP_CLEAR = 70;
+  var STAGE_RU = ["тихо", "ропот при дворе", "открытый претендент", "заговор созрел"];
+  var STAGE_STAB = [0, 0.12, 0.3, 0.55];
+  var STAGE_HAPPY = [0, 0, -1, -2];
+  var COUP_DAYS = 8;
+  var COUP_BLOCK_LEG = 75;
+  var COUP_CD = 120;
+  var COUP_FAIL_STAB = 8;
+  var COUP_FAIL_ESTATE = { nobles: -3, military: -2, commons: -1, clergy: -1, merchants: 0 };
+  var SAY_CD = 15;
+  var SAY_URGENT = 3;
+  var INTER_UNREST = 0.5;
+  var PLOT_UNREST = 0.2;
+  var INTER_ESTATE = { nobles: -0.25, clergy: -0.15, merchants: -0.2, commons: -0.15, military: -0.2 };
+  var NOBLE_VETO = 70;
+  var SCAR_TO_LEG = {
+    shame: "city_lost",
+    triumph: "triumph",
+    famine: "famine",
+    plague: "plague"
+  };
+  var SEEN_KEEP = YEAR6;
+  var DYN_EVENTS_CAP = 8;
+  function createDynastyLink() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного применения в одни сутки
+      plot: 0,
+      // 0…100 — насколько созрел заговор
+      stage: 0,
+      // 0…3, с гистерезисом (см. stageOf)
+      coupDays: 0,
+      // сколько суток идёт отсчёт до попытки
+      coupCd: 0,
+      // тишина после переворота
+      seen: [],
+      // [{key, day}] — какие шрамы уже отданы роду
+      lastSaid: {}
+      // ключ рассказа → день, чтобы не бубнить
+    };
+  }
+  function restoreDynastyLink(data) {
+    const L = createDynastyLink();
+    if (!data || typeof data !== "object") return L;
+    L.day = num12(data.day, -1);
+    L.plot = clamp14(num12(data.plot, 0), 0, PLOT_MAX);
+    L.stage = clampInt2(num12(data.stage, 0), 0, 3);
+    L.coupDays = Math.max(0, Math.round(num12(data.coupDays, 0)));
+    L.coupCd = Math.max(0, Math.round(num12(data.coupCd, 0)));
+    if (Array.isArray(data.seen)) {
+      L.seen = data.seen.filter((s) => s && typeof s === "object" && typeof s.key === "string").map((s) => ({ key: s.key, day: num12(s.day, 0) })).slice(-60);
+    }
+    if (data.lastSaid && typeof data.lastSaid === "object") {
+      for (const [k, v] of Object.entries(data.lastSaid)) {
+        if (Number.isFinite(v)) L.lastSaid[k] = v;
+      }
+    }
+    return L;
+  }
+  function serializeDynastyLink(state) {
+    return state ? JSON.parse(JSON.stringify(state)) : null;
+  }
+  function dynastyLinkState(sim2) {
+    const s = sim2 || {};
+    const day = Math.max(0, Math.round(num12(s.day, 0)));
+    const pol = s.politics && s.politics.state || null;
+    const dyn = s.dynasty || null;
+    const pop = aliveCount4(s);
+    const food = Math.max(0, num12(s.res && s.res.food, 0));
+    const foodDays = pop > 0 ? food / (pop * 0.7) : 99;
+    const factions = {};
+    for (const fid of Object.keys(SOCIAL_FACTIONS)) {
+      factions[fid] = pol && pol.factions ? clamp14(num12(pol.factions[fid], 50), 0, 100) : 50;
+    }
+    let traits2 = [];
+    if (pol && pol.ruler && Array.isArray(pol.ruler.traits)) traits2 = pol.ruler.traits.slice();
+    else if (dyn) {
+      const rl = safeRuler(dyn);
+      if (rl && Array.isArray(rl.traits)) traits2 = rl.traits.slice();
+    }
+    traits2 = traits2.filter((t) => TRAIT_ESTATE[t]);
+    const hasDyn = !!(dyn && typeof dyn === "object");
+    return {
+      day,
+      pop,
+      foodDays,
+      hasDyn,
+      fam: hasDyn ? str(dyn.fam, "—") : "—",
+      // Без рода законность равна точке равнодушия: связь молчит и не мешает.
+      legitimacy: hasDyn ? clamp14(num12(dyn.legitimacy, LEG_PIVOT), 0, 100) : LEG_PIVOT,
+      court: hasDyn ? clampInt2(num12(dyn.court, 1), 0, COURT_LUX.length - 1) : 1,
+      claimants: hasDyn && Array.isArray(dyn.claimants) ? dyn.claimants.slice(0, 4) : [],
+      interregnum: hasDyn ? Math.max(0, num12(dyn.interregnum, 0)) : 0,
+      houseYears: hasDyn ? Math.max(0, (day - num12(dyn.foundedDay, day)) / YEAR6) : 99,
+      coups: hasDyn && dyn.stats ? Math.max(0, num12(dyn.stats.coups, 0)) : 0,
+      gov: pol ? str(pol.gov, "chiefdom") : "chiefdom",
+      stability: pol ? clamp14(num12(pol.stability, 60), 0, 100) : 60,
+      factions,
+      traits: traits2,
+      // Отчёт рода за прошлые сутки: оттуда узнаём, потянула ли казна двор.
+      courtUnpaid: !!(s.sys && s.sys.dynastyReport && s.sys.dynastyReport.flags && s.sys.dynastyReport.flags.courtUnpaid),
+      scars: readFreshScars(s, day)
+    };
+  }
+  function readFreshScars(sim2, day) {
+    const mem = sim2 && sim2.linkMemory;
+    if (!mem || !Array.isArray(mem.scars)) return [];
+    const out = [];
+    for (const sc of mem.scars) {
+      if (!sc || !SCAR_TO_LEG[sc.kind]) continue;
+      if (day - num12(sc.day, -999) > 1) continue;
+      out.push({ kind: sc.kind, day: num12(sc.day, day), w: Math.max(0, num12(sc.w, 0)) });
+    }
+    return out;
+  }
+  function fedShare(st) {
+    return clamp14(st.foodDays / FED_DAYS, 0, 1);
+  }
+  function legitimacyEstates(st) {
+    const out = zeroEstates2();
+    const rows = [];
+    const swing = (st.legitimacy - LEG_PIVOT) / LEG_PIVOT;
+    const fed = fedShare(st);
+    for (const [fid, k] of Object.entries(LEG_ESTATE)) {
+      if (!k) continue;
+      const w = fid === "commons" ? k * fed : k;
+      const d = swing * w;
+      if (Math.abs(d) < 1e-3) continue;
+      out[fid] += d;
+      rows.push({ fid, v: d, ru: legReasonFor(fid, st.legitimacy, d) });
+    }
+    let cl = 0;
+    if (st.legitimacy >= LEG_HOLY) {
+      cl += CLERGY_BLESS * ((st.legitimacy - LEG_HOLY) / (100 - LEG_HOLY));
+    } else if (st.legitimacy <= LEG_USURP) {
+      cl -= CLERGY_CURSE * ((LEG_USURP - st.legitimacy) / LEG_USURP);
+    }
+    if (st.houseYears < HOUSE_YOUNG_YEARS && st.coups > 0) {
+      cl -= CLERGY_YOUNG;
+      rows.push({
+        fid: "clergy",
+        v: -CLERGY_YOUNG,
+        ru: `Род ${st.fam} на троне всего ${st.houseYears.toFixed(1)} г.: жрецы не спешат венчать узурпатора (пройдёт само через ${(HOUSE_YOUNG_YEARS - st.houseYears).toFixed(1)} г.)`
+      });
+    }
+    if (Math.abs(cl) >= 1e-3) {
+      out.clergy += cl;
+      rows.push({
+        fid: "clergy",
+        v: cl,
+        ru: cl > 0 ? `Законность ${Math.round(st.legitimacy)}: жрецы освящают власть рода ${st.fam}` : `Законность ${Math.round(st.legitimacy)}: жрецы не признают власть законной`
+      });
+    }
+    return { estates: out, rows };
+  }
+  function legReasonFor(fid, leg, d) {
+    const ru = SOCIAL_FACTIONS[fid] ? SOCIAL_FACTIONS[fid].ru : fid;
+    if (fid === "nobles") {
+      return d > 0 ? `Законность ${Math.round(leg)}: знать держится за право рода — её земли стоят на нём же` : `Законность ${Math.round(leg)}: знать не уверена, чьи у неё деревни`;
+    }
+    return d > 0 ? `Законность ${Math.round(leg)}: ${ru} за трон` : `Законность ${Math.round(leg)}: ${ru} отворачиваются от трона`;
+  }
+  function traitEstates(st) {
+    const out = zeroEstates2();
+    const rows = [];
+    for (const t of st.traits) {
+      const tab = TRAIT_ESTATE[t];
+      if (!tab) continue;
+      const ru = traitRu(t);
+      for (const [fid, v] of Object.entries(tab)) {
+        if (out[fid] === void 0) continue;
+        out[fid] += v;
+        rows.push({ fid, v, ru: `${ru} на троне: ${SOCIAL_FACTIONS[fid].ru} ${v > 0 ? "за" : "против"}` });
+      }
+    }
+    return { estates: out, rows };
+  }
+  function courtEstates(st) {
+    const out = zeroEstates2();
+    const rows = [];
+    const lux = COURT_LUX[st.court] || 0;
+    const want = 1 - fedShare(st);
+    if (lux > 0) {
+      const d = -COURT_LUX_COMMONS * lux * (COURT_LUX_BASE + (1 - COURT_LUX_BASE) * want);
+      out.commons += d;
+      rows.push({
+        fid: "commons",
+        v: d,
+        ru: want > 0.5 ? "Пышный двор при пустых амбарах: простолюдины считают чужое серебро" : "Пышный двор: простолюдины видят роскошь"
+      });
+      out.merchants += COURT_LUX_MERCH * lux;
+      rows.push({ fid: "merchants", v: COURT_LUX_MERCH * lux, ru: "Двор закупает у купцов: пышность им прибыльна" });
+    }
+    if (st.court === 0) {
+      out.clergy -= COURT_THIN_CLERGY;
+      rows.push({ fid: "clergy", v: -COURT_THIN_CLERGY, ru: "Скупой двор не жертвует храмам" });
+    }
+    if (st.courtUnpaid) {
+      out.clergy -= COURT_UNPAID_CLERGY;
+      out.merchants -= COURT_UNPAID_MERCH;
+      rows.push({ fid: "clergy", v: -COURT_UNPAID_CLERGY, ru: "Двору нечем платить: молебны не оплачены" });
+      rows.push({ fid: "merchants", v: -COURT_UNPAID_MERCH, ru: "Двору нечем платить: поставщики двора в убытке" });
+    }
+    return { estates: out, rows };
+  }
+  function plotDelta(st) {
+    const rows = [];
+    let grow = 0;
+    if (st.legitimacy < PLOT_LEG) {
+      const v = PLOT_GROW_LEG * ((PLOT_LEG - st.legitimacy) / PLOT_LEG);
+      grow += v;
+      rows.push({ v, ru: `Законность ${Math.round(st.legitimacy)} ниже ${PLOT_LEG}: при дворе считают дни рода ${st.fam}` });
+    }
+    if (st.factions.nobles < PLOT_ANGRY_NOBLES) {
+      const v = PLOT_GROW_NOBLES * ((PLOT_ANGRY_NOBLES - st.factions.nobles) / PLOT_ANGRY_NOBLES);
+      grow += v;
+      rows.push({ v, ru: `Знать обижена (${Math.round(st.factions.nobles)}): у заговора есть деньги` });
+    }
+    if (st.factions.military < PLOT_ANGRY_MIL) {
+      const v = PLOT_GROW_MIL * ((PLOT_ANGRY_MIL - st.factions.military) / PLOT_ANGRY_MIL);
+      grow += v;
+      rows.push({ v, ru: `Войско недовольно (${Math.round(st.factions.military)}): у заговора есть мечи` });
+    }
+    if (st.claimants.length) {
+      const v = PLOT_GROW_CLAIM * st.claimants.length;
+      grow += v;
+      rows.push({ v, ru: `Открытых претендентов: ${st.claimants.length} — заговору есть кого сажать на трон` });
+    }
+    if (st.interregnum > 0) {
+      grow += PLOT_GROW_INTER;
+      rows.push({ v: PLOT_GROW_INTER, ru: "Трон пуст: лучшего часа для заговора не будет" });
+    }
+    if (st.traits.includes("cruel")) {
+      grow *= CRUEL_PLOT_DAMP;
+      rows.push({ v: 0, ru: "Правитель жесток: доносчики работают, заговор зреет вдвое медленнее" });
+    }
+    if (st.traits.includes("weak")) {
+      grow *= WEAK_PLOT_PUSH;
+      rows.push({ v: 0, ru: "Правитель слабоволен: пробуют то, чего не пробовали бы" });
+    }
+    let calm = 0;
+    const legCalm = clamp14((st.legitimacy - PLOT_LEG) / (PLOT_CALM_LEG - PLOT_LEG), 0, 1);
+    const estCalm = clamp14((Math.min(st.factions.nobles, st.factions.military) - PLOT_ANGRY_NOBLES) / (PLOT_CALM_ESTATES - PLOT_ANGRY_NOBLES), 0, 1);
+    if (st.interregnum <= 0) {
+      calm = PLOT_CALM * Math.min(legCalm, estCalm);
+      if (calm > 0.01) {
+        rows.push({ v: -calm, ru: `Законность ${Math.round(st.legitimacy)} и довольные сословия: заговор рассыпается` });
+      }
+      if (st.traits.includes("beloved") || st.traits.includes("just")) {
+        calm += KIND_PLOT_CALM;
+        rows.push({ v: -KIND_PLOT_CALM, ru: "Правителя любят: заговорщикам не на кого опереться" });
+      }
+    }
+    const d = clamp14(grow - calm, -PLOT_STEP_CALM, PLOT_STEP_MAX);
+    return { d, grow, calm, rows };
+  }
+  function stageOf4(plot, prevStage) {
+    const p = prevStage | 0;
+    if (p >= 3) return plot < STAGE_COUP_CLEAR ? 2 : 3;
+    if (p === 2) return plot >= STAGE_COUP ? 3 : plot < STAGE_PRETENDER_CLEAR ? 1 : 2;
+    if (p === 1) return plot >= STAGE_PRETENDER ? 2 : plot < STAGE_MURMUR_CLEAR ? 0 : 1;
+    return plot >= STAGE_MURMUR ? 1 : 0;
+  }
+  function coupGate(sim2, st) {
+    if (st.legitimacy >= COUP_BLOCK_LEG) {
+      return { ok: false, reason: `Законность рода ${st.fam} ${Math.round(st.legitimacy)} — заговорщиков выдадут прежде, чем они соберутся` };
+    }
+    if (sim2 && sim2.dynasty && typeof canOverthrow === "function") {
+      try {
+        const chk = canOverthrow(sim2.dynasty, {
+          day: st.day,
+          gov: st.gov,
+          pop: st.pop,
+          stability: st.stability,
+          nobles: st.factions.nobles,
+          military: st.factions.military
+        }, {});
+        if (chk && chk.ok === false) return { ok: false, reason: chk.reason || "Заговору не на кого опереться" };
+      } catch (e) {
+      }
+    }
+    return { ok: true, reason: "" };
+  }
+  function wayOut(st, gate) {
+    const parts = [];
+    if (!gate.ok) parts.push(`${gate.reason} — попытка сорвётся сама, если так и останется`);
+    if (st.legitimacy < COUP_BLOCK_LEG) {
+      parts.push(`поднять законность до ${COUP_BLOCK_LEG} (подношение двору, пышный двор, победа в войне)`);
+    }
+    if (st.factions.nobles < PLOT_ANGRY_NOBLES) parts.push(`задобрить знать (одобрение ${Math.round(st.factions.nobles)}, нужно ${PLOT_ANGRY_NOBLES})`);
+    if (st.factions.military < PLOT_ANGRY_MIL) parts.push(`задобрить войско (одобрение ${Math.round(st.factions.military)}, нужно ${PLOT_ANGRY_MIL})`);
+    if (st.interregnum > 0) parts.push("посадить кого-нибудь на трон: пустой трон кормит заговор сильнее всего");
+    if (!parts.length) parts.push("держать законность и сословия там, где они есть, — заговор тает сам");
+    return parts.join("; ");
+  }
+  function dynastyLinks(sim2) {
+    const st = dynastyLinkState(sim2);
+    const prev = sim2 && sim2.linkDynasty ? sim2.linkDynasty : createDynastyLink();
+    const L = {
+      ...createDynastyLink(),
+      ...prev,
+      seen: Array.isArray(prev.seen) ? prev.seen.slice() : [],
+      lastSaid: { ...prev.lastSaid || {} }
+    };
+    const out = {
+      mods: {
+        stability: 0,
+        // дневная тяга
+        stabilityShock: 0,
+        // разовый удар (сорвавшийся заговор), применяется тем же слагаемым
+        happy: 0,
+        estates: zeroEstates2(),
+        // дневная тяга; ограничена ESTATE_STEP_CAP
+        // Разовые сдвиги сословий держатся ОТДЕЛЬНО от дневных. Иначе удар в −3
+        // за сорвавшийся заговор попал бы под дневной потолок ±0.35 и превратился
+        // бы в ничто — тихая ошибка: событие есть, последствия нет.
+        estatesShock: zeroEstates2(),
+        cityUnrestAll: 0
+        // сигнал link_territory: добавка к смуте каждого города
+      },
+      reasons: { estates: [], plot: [], stability: [], other: [] },
+      events: [],
+      flags: {
+        memory: L,
+        plot: 0,
+        stage: 0,
+        stageRu: STAGE_RU[0],
+        coupDays: 0,
+        coupIn: null,
+        coupNow: null,
+        coupBlocked: "",
+        coupFailed: "",
+        wayOut: "",
+        legitimacy: st.legitimacy,
+        fam: st.fam,
+        heirLock: false,
+        heirLockReason: "",
+        dynEvents: []
+      }
+    };
+    const sameDay = L.day === st.day;
+    if (!st.hasDyn) {
+      if (!sameDay) L.day = st.day;
+      return out;
+    }
+    const legPart = legitimacyEstates(st);
+    const traitPart = traitEstates(st);
+    const courtPart = courtEstates(st);
+    for (const fid of Object.keys(out.mods.estates)) {
+      out.mods.estates[fid] = legPart.estates[fid] + traitPart.estates[fid] + courtPart.estates[fid];
+    }
+    out.reasons.estates.push(...legPart.rows, ...traitPart.rows, ...courtPart.rows);
+    if (st.interregnum > 0) {
+      for (const [fid, v] of Object.entries(INTER_ESTATE)) out.mods.estates[fid] += v;
+      out.mods.cityUnrestAll += INTER_UNREST;
+      out.reasons.other.push({
+        ru: `Междуцарствие: трон пуст ещё ${Math.ceil(st.interregnum)} дн. Города смотрят в сторону: смута +${INTER_UNREST} в сутки каждому`,
+        v: INTER_UNREST
+      });
+    }
+    const step = plotDelta(st);
+    if (!sameDay) {
+      L.day = st.day;
+      L.coupCd = Math.max(0, L.coupCd - 1);
+      L.plot = L.coupCd > 0 ? Math.max(0, L.plot - PLOT_CALM) : clamp14(L.plot + step.d, 0, PLOT_MAX);
+    }
+    const stage = stageOf4(L.plot, L.stage);
+    const prevStage = L.stage;
+    if (!sameDay) L.stage = stage;
+    out.reasons.plot.push(...step.rows.map((r) => ({ ru: r.ru, v: round29(r.v) })));
+    out.flags.plot = round1(L.plot);
+    out.flags.stage = stage;
+    out.flags.stageRu = STAGE_RU[stage];
+    const gate = coupGate(sim2, st);
+    out.flags.coupBlocked = gate.ok ? "" : gate.reason;
+    const escape = wayOut(st, gate);
+    out.flags.wayOut = escape;
+    if (stage > 0) {
+      out.mods.stability -= STAGE_STAB[stage];
+      out.mods.happy += STAGE_HAPPY[stage];
+      out.reasons.stability.push({
+        ru: `Заговор: ${STAGE_RU[stage]} (${Math.round(L.plot)}/100)`,
+        v: -STAGE_STAB[stage]
+      });
+      out.reasons.other.push({ ru: `Как погасить заговор: ${escape}`, v: 0 });
+    }
+    if (stage >= 3) {
+      out.mods.cityUnrestAll += PLOT_UNREST;
+    }
+    if (!sameDay) {
+      if (stage >= 3 && L.coupCd <= 0) L.coupDays++;
+      else L.coupDays = 0;
+    }
+    out.flags.coupDays = L.coupDays;
+    if (stage >= 3 && L.coupCd <= 0) out.flags.coupIn = Math.max(0, COUP_DAYS - L.coupDays);
+    if (!sameDay && L.coupDays >= COUP_DAYS) {
+      const cl = st.claimants[0] || null;
+      if (gate.ok) {
+        out.flags.coupNow = { claimant: cl ? 0 : null, name: cl ? cl.name : null, fam: cl ? cl.fam : null };
+        out.events.push({
+          text: cl ? `⚔ ЗАГОВОР УДАРИЛ. ${cl.name} из рода ${cl.fam} идёт на дворец: род ${st.fam} не удержал власть.` : `⚔ ЗАГОВОР УДАРИЛ. Дворец взят: род ${st.fam} низложен.`,
+          type: "bad",
+          cause: "coup"
+        });
+      } else {
+        out.flags.coupFailed = gate.reason;
+        out.mods.stabilityShock -= COUP_FAIL_STAB;
+        for (const [fid, v] of Object.entries(COUP_FAIL_ESTATE)) out.mods.estatesShock[fid] += v;
+        out.flags.dynEvents.push({ kind: "revolt", scale: 1, key: `coup_fail@${st.day}` });
+        out.events.push({
+          text: `Заговор сорван: ${gate.reason}. Дворец в крови, стабильность −${COUP_FAIL_STAB}, но род ${st.fam} на троне.`,
+          type: "warn",
+          cause: "coup"
+        });
+      }
+      L.plot = 0;
+      L.stage = 0;
+      L.coupDays = 0;
+      L.coupCd = COUP_CD;
+    } else if (!sameDay) {
+      sayLadder(L, st, stage, prevStage, out, escape);
+    }
+    const veto = heirVeto(st);
+    out.flags.heirLock = !veto.free;
+    out.flags.heirLockReason = veto.reason;
+    if (!veto.free) out.reasons.other.push({ ru: veto.reason, v: 0 });
+    if (!sameDay) {
+      L.seen = L.seen.filter((s) => st.day - s.day <= SEEN_KEEP);
+      for (const sc of st.scars) {
+        const key = `${sc.kind}@${sc.day}`;
+        if (L.seen.some((s) => s.key === key)) continue;
+        if (out.flags.dynEvents.length >= DYN_EVENTS_CAP) break;
+        L.seen.push({ key, day: st.day });
+        const base = KIND[sc.kind] ? KIND[sc.kind].weight : 0.5;
+        const scale = clamp14(sc.w / (base || 1), 0.5, 2);
+        out.flags.dynEvents.push({ kind: SCAR_TO_LEG[sc.kind], scale: round29(scale), key });
+      }
+      if (L.seen.length > 60) L.seen.splice(0, L.seen.length - 60);
+    }
+    if (out.mods.stability < STAB_FLOOR4) {
+      out.reasons.stability.push({ ru: `Потолок: связь не отнимает больше ${Math.abs(STAB_FLOOR4)} стабильности в сутки`, v: 0 });
+      out.mods.stability = STAB_FLOOR4;
+    }
+    for (const fid of Object.keys(out.mods.estates)) {
+      out.mods.estates[fid] = clamp14(round29(out.mods.estates[fid]), -ESTATE_STEP_CAP2, ESTATE_STEP_CAP2);
+    }
+    out.mods.stability = round29(out.mods.stability);
+    out.mods.stabilityShock = round29(out.mods.stabilityShock);
+    for (const fid of Object.keys(out.mods.estatesShock)) {
+      out.mods.estatesShock[fid] = round29(out.mods.estatesShock[fid]);
+    }
+    out.flags.memory = L;
+    return out;
+  }
+  function sayLadder(L, st, stage, prevStage, out, escape) {
+    const urgent = out.flags.coupIn != null && out.flags.coupIn <= SAY_URGENT;
+    const key = `stage${stage}`;
+    const changed = stage !== prevStage;
+    const said = L.lastSaid[key] || -9999;
+    if (!changed && !urgent && st.day - said < SAY_CD) return;
+    if (stage === 0) {
+      if (changed && prevStage > 0) {
+        L.lastSaid[key] = st.day;
+        out.events.push({ text: `Заговор рассыпался: при дворе снова тихо. Род ${st.fam} удержался.`, type: "good", cause: "plot" });
+      }
+      return;
+    }
+    L.lastSaid[key] = st.day;
+    if (stage === 1) {
+      out.events.push({
+        text: `Во дворце ропщут о роде ${st.fam} (законность ${Math.round(st.legitimacy)}). Пока это только слова. Как погасить: ${escape}.`,
+        type: "warn",
+        cause: "plot"
+      });
+    } else if (stage === 2) {
+      const cl = st.claimants[0];
+      out.events.push({
+        text: cl ? `Открытый претендент: ${cl.name} из рода ${cl.fam} говорит о своих правах вслух. Как погасить: ${escape}.` : `О правах на трон говорят вслух. Как погасить: ${escape}.`,
+        type: "warn",
+        cause: "plot"
+      });
+    } else {
+      const inDays = out.flags.coupIn;
+      const when = inDays != null ? `До попытки переворота ${inDays} ${plural6(inDays, "день", "дня", "дней")}.` : "Попытка может случиться со дня на день.";
+      out.events.push({
+        text: out.flags.coupBlocked ? `⚠ ЗАГОВОР СОЗРЕЛ. ${when} Пока она обречена: ${out.flags.coupBlocked}. Не растеряйте это.` : `⚠ ЗАГОВОР СОЗРЕЛ. ${when} Отменить: ${escape}.`,
+        type: "bad",
+        cause: "plot"
+      });
+    }
+  }
+  function heirVeto(st) {
+    const nob = st && st.factions ? st.factions.nobles : 50;
+    if (nob < NOBLE_VETO) return { free: true, reason: "" };
+    return {
+      free: false,
+      reason: `Знать сильна (одобрение ${Math.round(nob)} ≥ ${NOBLE_VETO}): наследника мимо старшинства не назначить. Выход: дождаться, пока одобрение знати опустится ниже ${NOBLE_VETO}, или опустить его самому — скупым двором или законами в пользу простолюдин.`
+    };
+  }
+  function canNameHeirNow(sim2) {
+    return heirVeto(dynastyLinkState(sim2));
+  }
+  function dynastyLinkBreakdown(sim2) {
+    const st = dynastyLinkState(sim2);
+    const L = sim2 && sim2.linkDynasty ? sim2.linkDynasty : createDynastyLink();
+    if (!st.hasDyn) return { rows: [], text: "Рода на троне нет.", plot: 0, stage: 0, stageRu: STAGE_RU[0] };
+    const stage = stageOf4(num12(L.plot, 0), num12(L.stage, 0));
+    const gate = coupGate(sim2, st);
+    const step = plotDelta(st);
+    const legPart = legitimacyEstates(st);
+    const traitPart = traitEstates(st);
+    const courtPart = courtEstates(st);
+    const rows = [];
+    for (const fid of Object.keys(SOCIAL_FACTIONS)) {
+      const v = legPart.estates[fid] + traitPart.estates[fid] + courtPart.estates[fid];
+      if (Math.abs(v) < 5e-3) continue;
+      rows.push({ fid, ru: SOCIAL_FACTIONS[fid].ru, v: round29(clamp14(v, -ESTATE_STEP_CAP2, ESTATE_STEP_CAP2)) });
+    }
+    rows.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    const parts = [`Законность ${Math.round(st.legitimacy)}`];
+    if (stage > 0) parts.push(`заговор: ${STAGE_RU[stage]} (${Math.round(num12(L.plot, 0))}/100)`);
+    else parts.push("при дворе тихо");
+    if (!gate.ok) parts.push(gate.reason);
+    return {
+      rows,
+      plot: round1(num12(L.plot, 0)),
+      stage,
+      stageRu: STAGE_RU[stage],
+      plotRows: step.rows.map((r) => ({ ru: r.ru, v: round29(r.v) })),
+      coupBlocked: gate.ok ? "" : gate.reason,
+      wayOut: wayOut(st, gate),
+      text: parts.join(". ") + "."
+    };
+  }
+  function traitRu(id) {
+    const t = RULER_TRAITS.find((x) => x.id === id);
+    return t ? t.ru : id;
+  }
+  function safeRuler(dyn) {
+    if (!dyn || !Array.isArray(dyn.members)) return null;
+    return dyn.members.find((m) => m && m.id === dyn.rulerId) || null;
+  }
+  function zeroEstates2() {
+    const o = {};
+    for (const fid of Object.keys(SOCIAL_FACTIONS)) o[fid] = 0;
+    return o;
+  }
+  function aliveCount4(sim2) {
+    const list = sim2 && sim2.villagers;
+    if (!Array.isArray(list)) return 0;
+    let n = 0;
+    for (const v of list) if (!v || v.hp === void 0 || v.hp > 0) n++;
+    return n;
+  }
+  function plural6(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+  function clamp14(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function clampInt2(v, lo, hi) {
+    const n = Math.round(num12(v, lo));
+    return n < lo ? lo : n > hi ? hi : n;
+  }
+  function num12(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function str(v, def) {
+    return typeof v === "string" && v ? v : def;
+  }
+  function round1(v) {
+    return Math.round(v * 10) / 10;
+  }
+  function round29(v) {
+    return Math.round(v * 100) / 100;
+  }
+
   // app/src/core/systems/build2.js
   var TECH_BY_ID4 = Object.fromEntries(TECHS.map((t) => [t.id, t]));
   var QUEUE_MAX = 20;
+  var SCAN_R = 5;
+  var FAR_PENALTY_AT = 20;
   var WEAR_DAYS_TO_HALF = 300;
   var WEAR_WINTER = 1.6;
   var WEAR_IDLE = 0.4;
   var REPAIR_THRESHOLD = 70;
   var REPAIR_CRITICAL = 30;
+  var UPGRADE_OVERHEAD = 1.15;
+  var UPGRADE = {
+    hut: "stone_house",
+    stone_house: "apartment",
+    apartment: "skyscraper",
+    quarry: "mine",
+    workshop: "foundry",
+    smithy: "armory",
+    market: "bank",
+    academy: "university",
+    clinic: "hospital",
+    palisade: "stone_walls",
+    lab: "datacenter"
+  };
   function createBuild() {
     return {
       v: 1,
@@ -14255,8 +16113,8 @@
   function restoreBuild(data) {
     const s = createBuild();
     if (!data || typeof data !== "object") return s;
-    s.day = num12(data.day, -1);
-    s.nextKey = Math.max(1, num12(data.nextKey, 1));
+    s.day = num13(data.day, -1);
+    s.nextKey = Math.max(1, num13(data.nextKey, 1));
     if (data.reserved && typeof data.reserved === "object") {
       for (const [r, v] of Object.entries(data.reserved)) {
         if (Number.isFinite(v) && v > 0) s.reserved[r] = v;
@@ -14266,13 +16124,13 @@
       for (const q of data.queue) {
         if (!q || !BUILDINGS[q.id]) continue;
         s.queue.push({
-          key: num12(q.key, s.nextKey++),
+          key: num13(q.key, s.nextKey++),
           id: q.id,
-          x: num12(q.x, 0) | 0,
-          y: num12(q.y, 0) | 0,
-          size: Math.max(1, num12(q.size, BUILDINGS[q.id].size || 1)),
-          prio: num12(q.prio, 0),
-          planned: num12(q.planned, 0)
+          x: num13(q.x, 0) | 0,
+          y: num13(q.y, 0) | 0,
+          size: Math.max(1, num13(q.size, BUILDINGS[q.id].size || 1)),
+          prio: num13(q.prio, 0),
+          planned: num13(q.planned, 0)
         });
       }
       if (s.queue.length > QUEUE_MAX) s.queue.length = QUEUE_MAX;
@@ -14289,6 +16147,224 @@
       queue: state.queue.map((q) => ({ ...q }))
     };
   }
+  function canPlan(state, sim2, id, x, y) {
+    const def = BUILDINGS[id];
+    if (!def) return { ok: false, reason: "Неизвестное здание" };
+    if (state.queue.length >= QUEUE_MAX) {
+      return { ok: false, reason: `В очереди уже ${QUEUE_MAX} — больше не помещается` };
+    }
+    if (state.queue.some((q) => overlaps(q, x, y, def.size || 1))) {
+      return { ok: false, reason: "Здесь уже размечен чертёж" };
+    }
+    const chk = sim2.canPlace(id, x, y);
+    if (chk.ok) return { ok: true };
+    if (/^Не хватает:/.test(chk.reason)) return { ok: true, waiting: chk.reason };
+    return chk;
+  }
+  function plan(state, sim2, id, x, y) {
+    const chk = canPlan(state, sim2, id, x, y);
+    if (!chk.ok) return { ok: false, reason: chk.reason };
+    const def = BUILDINGS[id];
+    state.queue.push({
+      key: state.nextKey++,
+      id,
+      x: x | 0,
+      y: y | 0,
+      size: def.size || 1,
+      prio: 0,
+      planned: sim2.day | 0
+    });
+    return { ok: true, waiting: chk.waiting || null };
+  }
+  function planArea(state, sim2, id, x0, y0, x1, y1) {
+    const def = BUILDINGS[id];
+    if (!def) return { ok: false, reason: "Неизвестное здание", placed: 0 };
+    const size = def.size || 1;
+    const ax = Math.min(x0, x1), bx = Math.max(x0, x1);
+    const ay = Math.min(y0, y1), by = Math.max(y0, y1);
+    let placed = 0;
+    const skipped = [];
+    for (let y = ay; y <= by; y += size) {
+      for (let x = ax; x <= bx; x += size) {
+        if (state.queue.length >= QUEUE_MAX) {
+          return { ok: placed > 0, placed, reason: "Очередь заполнилась", skipped };
+        }
+        const r = plan(state, sim2, id, x, y);
+        if (r.ok) placed++;
+        else if (!skipped.includes(r.reason)) skipped.push(r.reason);
+      }
+    }
+    return { ok: placed > 0, placed, skipped, reason: placed ? null : skipped[0] || "Некуда ставить" };
+  }
+  function cancelPlan(state, key) {
+    const i = state.queue.findIndex((q2) => q2.key === key);
+    if (i < 0) return { ok: false, reason: "Чертёж не найден" };
+    const [q] = state.queue.splice(i, 1);
+    return { ok: true, id: q.id };
+  }
+  function movePlan(state, key, dir) {
+    const i = state.queue.findIndex((q) => q.key === key);
+    if (i < 0) return false;
+    const j = i + (dir < 0 ? -1 : 1);
+    if (j < 0 || j >= state.queue.length) return false;
+    [state.queue[i], state.queue[j]] = [state.queue[j], state.queue[i]];
+    return true;
+  }
+  function scoreSpot(sim2, id, x, y) {
+    const def = BUILDINGS[id];
+    if (!def) return { score: 0, reasons: [], ok: false };
+    const chk = sim2.canPlace(id, x, y);
+    const reasons = [];
+    let score = 50;
+    const wants = resourceTileFor(def);
+    if (wants !== null) {
+      const n = countTiles(sim2, x, y, SCAN_R, wants);
+      const full = tilesForFull(wants);
+      const k = Math.min(1.4, n / full);
+      score += (k - 0.7) * 40;
+      reasons.push({
+        ru: `Вокруг ${n} ${tileWord(wants, n)} в радиусе ${SCAN_R}`,
+        v: round12((k - 0.7) * 40),
+        good: n >= full
+      });
+    }
+    const camp = sim2.buildings.find((b) => b.id === "campfire" && !b.destroyed);
+    if (camp) {
+      const d = Math.hypot(x - camp.x, y - camp.y);
+      const pen = Math.min(1, d / FAR_PENALTY_AT) * 25;
+      score -= pen;
+      if (d > 6) {
+        reasons.push({
+          ru: `До кострища ${Math.round(d)} ${plural7(Math.round(d), "клетка", "клетки", "клеток")} — рабочие ходят дольше`,
+          v: -round12(pen),
+          good: false
+        });
+      }
+    }
+    for (const b of sim2.buildings) {
+      if (!b.done || b.destroyed) continue;
+      const bd = BUILDINGS[b.id];
+      if (!bd || !bd.aura) continue;
+      const d = Math.hypot(x - b.x, y - b.y);
+      if (d > bd.aura.r) continue;
+      score += 8;
+      reasons.push({ ru: `В зоне действия «${bd.name}»`, v: 8, good: true });
+    }
+    if (def.aura) {
+      let covered = 0;
+      for (const b of sim2.buildings) {
+        if (!b.done || b.destroyed || b === null) continue;
+        if (Math.hypot(x - b.x, y - b.y) <= def.aura.r) covered++;
+      }
+      if (covered > 0) {
+        const v = Math.min(15, covered * 3);
+        score += v;
+        reasons.push({ ru: `Накроет своей аурой построек: ${covered}`, v, good: true });
+      }
+    }
+    let touching = 0;
+    const size = def.size || 1;
+    for (let dy = -1; dy <= size; dy++) {
+      for (let dx = -1; dx <= size; dx++) {
+        if (dx >= 0 && dx < size && dy >= 0 && dy < size) continue;
+        if (sim2.occupiedAt(x + dx, y + dy)) touching++;
+      }
+    }
+    if (touching >= 4) {
+      const v = Math.min(12, (touching - 3) * 3);
+      score -= v;
+      reasons.push({ ru: `Тесно: вплотную ${touching} соседей`, v: -v, good: false });
+    }
+    const lm = landmarkNear(sim2, x, y);
+    if (lm) {
+      score += 10;
+      reasons.push({ ru: `Рядом ${lm.ru || "ориентир"}${lm.name ? ` — ${lm.name}` : ""}`, v: 10, good: true });
+    }
+    reasons.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    return {
+      ok: chk.ok,
+      reason: chk.ok ? null : chk.reason,
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      reasons
+    };
+  }
+  function bestSpots(sim2, id, count2 = 5) {
+    const def = BUILDINGS[id];
+    if (!def) return [];
+    const camp = sim2.buildings.find((b) => b.id === "campfire" && !b.destroyed);
+    const cx = camp ? camp.x : Math.round(sim2.world.startX);
+    const cy = camp ? camp.y : Math.round(sim2.world.startY);
+    const R = 24;
+    const out = [];
+    for (let y = cy - R; y <= cy + R; y += 2) {
+      for (let x = cx - R; x <= cx + R; x += 2) {
+        if (x < 0 || y < 0 || x >= sim2.world.w || y >= sim2.world.h) continue;
+        const s = scoreSpot(sim2, id, x, y);
+        if (!s.ok) continue;
+        out.push({ x, y, score: s.score, reasons: s.reasons.slice(0, 3) });
+      }
+    }
+    out.sort((a, b) => b.score - a.score);
+    const picked = [];
+    for (const p of out) {
+      if (picked.length >= count2) break;
+      if (picked.some((q) => Math.hypot(q.x - p.x, q.y - p.y) < 4)) continue;
+      picked.push(p);
+    }
+    return picked;
+  }
+  function upgradeCost(id) {
+    const to = UPGRADE[id];
+    if (!to || !BUILDINGS[to]) return null;
+    const from = BUILDINGS[id], target = BUILDINGS[to];
+    const cost = {};
+    for (const [r, v] of Object.entries(target.cost || {})) {
+      const had = (from.cost || {})[r] || 0;
+      const diff = Math.max(0, v - had);
+      const c = Math.min(v, Math.ceil(diff * UPGRADE_OVERHEAD));
+      if (c > 0) cost[r] = c;
+    }
+    return cost;
+  }
+  function canUpgrade(sim2, b) {
+    if (!b || !b.done || b.destroyed) return { ok: false, reason: "Здание не достроено" };
+    const to = UPGRADE[b.id];
+    if (!to) return { ok: false, reason: "Это здание не улучшается" };
+    const def = BUILDINGS[to];
+    if (!def) return { ok: false, reason: "Улучшение недоступно" };
+    if (def.req && !sim2.techs.has(def.req)) {
+      const t = TECH_BY_ID4[def.req];
+      return { ok: false, reason: `Нужна технология: ${t ? t.name : def.req}` };
+    }
+    const newSize = def.size || 1, oldSize = b.size || 1;
+    if (newSize > oldSize) {
+      for (let dy = 0; dy < newSize; dy++) {
+        for (let dx = 0; dx < newSize; dx++) {
+          if (dx < oldSize && dy < oldSize) continue;
+          const t = tileAt(sim2.world, b.x + dx, b.y + dy);
+          if (t === TILE.WATER || t === TILE.DEEP) return { ok: false, reason: "Расширяться некуда: вода" };
+          if (sim2.occupiedAt(b.x + dx, b.y + dy)) return { ok: false, reason: "Расширяться некуда: рядом здание" };
+        }
+      }
+    }
+    const cost = upgradeCost(b.id);
+    const lack = sim2.lackCost(cost);
+    if (lack && !sim2.godmode) return { ok: false, reason: `Не хватает: ${lack}`, cost, to };
+    return { ok: true, cost, to, name: def.name };
+  }
+  function upgrade(sim2, b) {
+    const chk = canUpgrade(sim2, b);
+    if (!chk.ok) return chk;
+    const to = chk.to, def = BUILDINGS[to];
+    sim2.payCost(chk.cost);
+    const oldName = BUILDINGS[b.id].name;
+    b.id = to;
+    b.size = def.size || 1;
+    b.eraBuilt = sim2.eraIndex;
+    b.hp = Math.max(b.hp || 100, Math.round((def.wall || 100) * 0.9));
+    sim2.addLog(`${oldName} перестроен(а) в «${def.name}».`, "good");
+    return { ok: true, to, name: def.name };
+  }
   function wearPerDay(sim2, b) {
     const def = BUILDINGS[b.id];
     if (!def) return 0;
@@ -14301,6 +16377,81 @@
     const wood = def.cost && def.cost.wood || 0;
     if (stone > wood) w *= 0.6;
     return w;
+  }
+  function repairList(sim2) {
+    const out = [];
+    for (const b of sim2.buildings) {
+      if (!b.done || b.destroyed) continue;
+      const def = BUILDINGS[b.id];
+      if (!def) continue;
+      const max = def.wall || 100;
+      const pct = Math.round((b.hp ?? max) / max * 100);
+      if (pct >= REPAIR_THRESHOLD) continue;
+      out.push({
+        x: b.x,
+        y: b.y,
+        id: b.id,
+        name: def.name,
+        pct,
+        critical: pct < REPAIR_CRITICAL,
+        cost: repairCost(b)
+      });
+    }
+    out.sort((a, b) => a.pct - b.pct);
+    return out;
+  }
+  function repairCost(b) {
+    const def = BUILDINGS[b.id];
+    if (!def) return {};
+    const max = def.wall || 100;
+    const lost = Math.max(0, 1 - (b.hp ?? max) / max);
+    const cost = {};
+    for (const [r, v] of Object.entries(def.cost || {})) {
+      const c = Math.ceil(v * lost * 0.5);
+      if (c > 0) cost[r] = c;
+    }
+    return cost;
+  }
+  function repairAll(sim2) {
+    const list = repairList(sim2);
+    const fixed = [];
+    let spent = 0;
+    for (const r of list) {
+      const b = sim2.buildings.find((x) => x.x === r.x && x.y === r.y && x.id === r.id);
+      if (!b) continue;
+      const res = repairQuiet(sim2, b);
+      if (!res.ok) continue;
+      fixed.push(r.name);
+      spent++;
+    }
+    if (spent) {
+      sim2.addLog(`🔨 Отремонтировано построек: ${spent}${fixed.length <= 4 ? ` (${fixed.join(", ")})` : ""}.`, "good");
+    }
+    return { ok: spent > 0, count: spent, left: repairList(sim2).length };
+  }
+  function repairQuiet(sim2, b) {
+    const def = BUILDINGS[b.id];
+    if (!def) return { ok: false };
+    const max = def.wall || 100;
+    if ((b.hp ?? max) >= max) return { ok: false };
+    const cost = repairCost(b);
+    if (sim2.lackCost(cost) && !sim2.godmode) return { ok: false };
+    sim2.payCost(cost);
+    b.hp = max;
+    return { ok: true };
+  }
+  function repair(sim2, b) {
+    const def = BUILDINGS[b.id];
+    if (!def) return { ok: false, reason: "Неизвестное здание" };
+    const max = def.wall || 100;
+    if ((b.hp ?? max) >= max) return { ok: false, reason: "Здание целое" };
+    const cost = repairCost(b);
+    const lack = sim2.lackCost(cost);
+    if (lack && !sim2.godmode) return { ok: false, reason: `Не хватает: ${lack}` };
+    sim2.payCost(cost);
+    b.hp = max;
+    sim2.addLog(`«${def.name}» отремонтирован(а).`, "good");
+    return { ok: true };
   }
   function wearWorkMult(sim2, b) {
     const def = BUILDINGS[b.id];
@@ -14369,6 +16520,74 @@
     }
     return out;
   }
+  function queueReport(state, sim2) {
+    if (!state) return { rows: [], waiting: 0 };
+    const rows = state.queue.map((q, i) => {
+      const def = BUILDINGS[q.id];
+      const chk = sim2.canPlace(q.id, q.x, q.y);
+      const lack = sim2.lackCost(def.cost);
+      return {
+        key: q.key,
+        id: q.id,
+        name: def.name,
+        x: q.x,
+        y: q.y,
+        pos: i,
+        ready: chk.ok,
+        why: chk.ok ? "ждёт очереди" : chk.reason,
+        lack: lack || null,
+        cost: def.cost,
+        days: sim2.day - q.planned
+      };
+    });
+    return { rows, waiting: rows.filter((r) => !r.ready).length };
+  }
+  function overlaps(q, x, y, size) {
+    return !(x + size <= q.x || q.x + q.size <= x || y + size <= q.y || q.y + q.size <= y);
+  }
+  function resourceTileFor(def) {
+    if (def.needTile === TILE.FOREST) return TILE.FOREST;
+    if (def.needTile === TILE.HILL) return TILE.HILL;
+    if (def.needTile === TILE.MOUNTAIN) return TILE.MOUNTAIN;
+    if (def.needTile === TILE.GRASS) return TILE.GRASS;
+    if (def.out && def.out.wood) return TILE.FOREST;
+    if (def.out && def.out.stone) return TILE.HILL;
+    if (def.out && def.out.food && !def.winter) return TILE.GRASS;
+    return null;
+  }
+  function tilesForFull(tile) {
+    const area = Math.PI * SCAN_R * SCAN_R;
+    return Math.max(6, Math.round(area * 0.25));
+  }
+  function countTiles(sim2, x, y, r, tile) {
+    let n = 0;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > r * r) continue;
+        const tx = x + dx, ty = y + dy;
+        if (tx < 0 || ty < 0 || tx >= sim2.world.w || ty >= sim2.world.h) continue;
+        if (tileAt(sim2.world, tx, ty) === tile) n++;
+      }
+    }
+    return n;
+  }
+  function tileWord(tile, n) {
+    const w = {
+      [TILE.FOREST]: ["клетка леса", "клетки леса", "клеток леса"],
+      [TILE.HILL]: ["холм", "холма", "холмов"],
+      [TILE.MOUNTAIN]: ["гора", "горы", "гор"],
+      [TILE.GRASS]: ["клетка луга", "клетки луга", "клеток луга"]
+    }[tile] || ["клетка", "клетки", "клеток"];
+    return plural7(n, w[0], w[1], w[2]);
+  }
+  function landmarkNear(sim2, x, y) {
+    const list = sim2.landmarks || sim2.world && sim2.world.landmarks;
+    if (!Array.isArray(list)) return null;
+    for (const l of list) {
+      if (Math.hypot(x - l.x, y - l.y) <= (l.rad || 3)) return l;
+    }
+    return null;
+  }
   function countWorkersAt(sim2, b) {
     let n = 0;
     for (const v of sim2.villagers || []) {
@@ -14376,17 +16595,27 @@
     }
     return n;
   }
-  function num12(v, def) {
+  function plural7(n, one, few, many) {
+    const a = Math.abs(n) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+  function num13(v, def) {
     return Number.isFinite(v) ? v : def;
+  }
+  function round12(v) {
+    return Math.round(v * 10) / 10;
   }
 
   // app/src/core/systems/herds.js
-  var YEAR5 = DAYS_PER_SEASON * 4;
+  var YEAR7 = DAYS_PER_SEASON * 4;
   var WINTER = 3;
   var SEASON_FEED = [0.85, 1, 1.15, 0.5];
   function seasonFeed(sp, seasonIdx) {
-    const base = SEASON_FEED[clampInt(seasonIdx, 0, 3)];
-    if (clampInt(seasonIdx, 0, 3) !== WINTER) return base;
+    const base = SEASON_FEED[clampInt3(seasonIdx, 0, 3)];
+    if (clampInt3(seasonIdx, 0, 3) !== WINTER) return base;
     return 1 - (1 - base) * sp.winterBite;
   }
   var SPECIES = {
@@ -14508,6 +16737,7 @@
   var SPLIT_MAX_DIST = 4.5;
   var SPAWN_MIN_R = 9;
   var SPAWN_MAX_R = 34;
+  var SPREAD_BASE = 0.55;
   var SAY_GAP = 30;
   var HUNT_LOG_DAYS = 30;
   var LEADER_NAMES = [
@@ -14581,8 +16811,8 @@
   function restoreHerds(data) {
     const s = createHerds();
     if (!data || typeof data !== "object") return s;
-    s.day = num13(data.day, -1);
-    s.nextId = Math.max(1, Math.floor(num13(data.nextId, 1)));
+    s.day = num14(data.day, -1);
+    s.nextId = Math.max(1, Math.floor(num14(data.nextId, 1)));
     if (data.seen && typeof data.seen === "object") {
       for (const k of KINDS) if (data.seen[k]) s.seen[k] = true;
     }
@@ -14595,30 +16825,30 @@
     if (Array.isArray(data.hunts)) {
       for (const r of data.hunts) {
         if (!r || !SPECIES[r.kind]) continue;
-        s.hunts.push({ day: num13(r.day, 0), kind: r.kind, heads: Math.max(0, num13(r.heads, 0)) });
+        s.hunts.push({ day: num14(r.day, 0), kind: r.kind, heads: Math.max(0, num14(r.heads, 0)) });
       }
     }
     if (Array.isArray(data.herds)) {
       for (const h of data.herds) {
         if (!h || !SPECIES[h.kind]) continue;
-        const n = Math.max(0, num13(h.n, 0));
+        const n = Math.max(0, num14(h.n, 0));
         if (n < EXTINCT_AT) continue;
-        const id = Math.floor(num13(h.id, s.nextId));
+        const id = Math.floor(num14(h.id, s.nextId));
         const g2 = makeHerd(
           id,
           h.kind,
-          num13(h.cx, 0),
-          num13(h.cy, 0),
+          num14(h.cx, 0),
+          num14(h.cy, 0),
           n,
           typeof h.leader === "string" ? h.leader : LEADER_NAMES[0],
-          num13(h.since, 0)
+          num14(h.since, 0)
         );
-        g2.tx = num13(h.tx, g2.cx);
-        g2.ty = num13(h.ty, g2.cy);
-        g2.fear = clamp13(num13(h.fear, 0), 0, FEAR_MAX);
-        g2.lastHunt = num13(h.lastHunt, -9999);
+        g2.tx = num14(h.tx, g2.cx);
+        g2.ty = num14(h.ty, g2.cy);
+        g2.fear = clamp15(num14(h.fear, 0), 0, FEAR_MAX);
+        g2.lastHunt = num14(h.lastHunt, -9999);
         g2.doomed = !!h.doomed;
-        g2.wander = Math.max(0, num13(h.wander, 0));
+        g2.wander = Math.max(0, num14(h.wander, 0));
         s.herds.push(g2);
         s.seen[g2.kind] = true;
         if (id >= s.nextId) s.nextId = id + 1;
@@ -14749,7 +16979,7 @@
       if (placed) S.seen[kind] = true;
     }
     S.day = ctx.day;
-    return { state: S, events, reasons: [], flags: summaryFlags(S, ctx) };
+    return { state: S, events, reasons: [], flags: summaryFlags2(S, ctx) };
   }
   function pickTarget(h, sp, ctx, rng) {
     const roam = sp.radius * 0.9;
@@ -14801,7 +17031,7 @@
     const S = cloneState(state);
     const events = [], reasons = [];
     if (S.day === ctx.day) {
-      return { state: S, events, reasons, flags: summaryFlags(S, ctx), skipped: true };
+      return { state: S, events, reasons, flags: summaryFlags2(S, ctx), skipped: true };
     }
     S.day = ctx.day;
     const winter = ctx.seasonIdx === WINTER;
@@ -14921,10 +17151,10 @@
     if (winter) {
       reasons.push({ ru: "Зима: участки кормят вдвое хуже, стада слабеют и спускаются в низины", v: SEASON_FEED[WINTER] });
     }
-    const flags = summaryFlags(S, ctx);
+    const flags = summaryFlags2(S, ctx);
     flags.extinctNow = extinctNow;
-    flags.born = round29(Object.values(born).reduce((a, b) => a + b, 0));
-    flags.lost = round29(Object.values(lost).reduce((a, b) => a + b, 0));
+    flags.born = round210(Object.values(born).reduce((a, b) => a + b, 0));
+    flags.lost = round210(Object.values(lost).reduce((a, b) => a + b, 0));
     return { state: S, events, reasons, flags };
   }
   function nearestHerd(state, x, y, opts = {}) {
@@ -14944,6 +17174,19 @@
     }
     if (!best) return null;
     return { herd: best, id: best.id, kind: best.kind, dist: bd, x: best.cx, y: best.cy };
+  }
+  function herdPoints(h, max = 24) {
+    const k = Math.min(max, Math.max(1, Math.round(h.n)));
+    const spread = SPREAD_BASE * Math.sqrt(k);
+    const GA = 2.399963229728653;
+    const phase = h.id * 2654435761 % 1e3 / 1e3 * Math.PI * 2;
+    const pts = [];
+    for (let i = 0; i < k; i++) {
+      const a = i * GA + phase;
+      const r = spread * Math.sqrt((i + 0.5) / k);
+      pts.push({ x: h.cx + Math.cos(a) * r, y: h.cy + Math.sin(a) * r });
+    }
+    return pts;
   }
   function driveBonus(n) {
     return 1 + DRIVE_MAX * (n / (n + DRIVE_HALF));
@@ -14968,8 +17211,8 @@
       };
     }
     const sp = SPECIES[h.kind];
-    const hunters = Math.max(1, Math.floor(num13(opts.hunters, 1)));
-    const skill = Math.max(0.1, num13(opts.skill, 1));
+    const hunters = Math.max(1, Math.floor(num14(opts.hunters, 1)));
+    const skill = Math.max(0.1, num14(opts.skill, 1));
     const wary = 1 - FEAR_YIELD * h.fear;
     let want = HUNT_BASE * driveBonus(h.n) * partyBonus(hunters) * skill * wary;
     const cap = Math.min(h.n, Math.max(HUNT_MIN_HEADS, h.n * HUNT_MAX_SHARE));
@@ -15039,13 +17282,13 @@
       leaderLost,
       events,
       reasons,
-      flags: { kind: h.kind, left: round29(h.n), fear: round29(h.fear), dist: round29(homeDist(h, ctx)) }
+      flags: { kind: h.kind, left: round210(h.n), fear: round210(h.fear), dist: round210(homeDist(h, ctx)) }
     };
   }
-  function summaryFlags(S, ctx) {
+  function summaryFlags2(S, ctx) {
     const heads = {}, count2 = {};
     for (const h of S.herds) {
-      heads[h.kind] = round29((heads[h.kind] || 0) + h.n);
+      heads[h.kind] = round210((heads[h.kind] || 0) + h.n);
       count2[h.kind] = (count2[h.kind] || 0) + 1;
     }
     let nearest = Infinity;
@@ -15053,11 +17296,79 @@
     return {
       heads,
       count: count2,
-      total: round29(Object.values(heads).reduce((a, b) => a + b, 0)),
-      nearest: Number.isFinite(nearest) ? round29(nearest) : null,
+      total: round210(Object.values(heads).reduce((a, b) => a + b, 0)),
+      nearest: Number.isFinite(nearest) ? round210(nearest) : null,
       gone: Object.keys(S.gone),
       extinctNow: []
     };
+  }
+  function herdsSummary(state, ctx) {
+    const S = state || createHerds();
+    const rows = [];
+    for (const kind of KINDS) {
+      const sp = SPECIES[kind];
+      const list = S.herds.filter((h) => h.kind === kind);
+      if (!list.length) {
+        if (S.gone[kind] != null) {
+          rows.push({
+            kind,
+            ru: sp.ru,
+            icon: sp.icon,
+            herds: 0,
+            heads: 0,
+            cap: 0,
+            trend: "gone",
+            fear: 0,
+            dist: null,
+            text: `${sp.ru}: выбит подчистую, больше не встречается`
+          });
+        }
+        continue;
+      }
+      let heads = 0, cap = 0, fear = 0, dist = Infinity, doomed = 0;
+      for (const h of list) {
+        heads += h.n;
+        cap += capacityAt(ctx, kind, h.cx, h.cy);
+        fear = Math.max(fear, h.fear);
+        dist = Math.min(dist, homeDist(h, ctx));
+        if (h.doomed) doomed++;
+      }
+      let dn = 0;
+      for (const h of list) dn += dailyChange(h.n, capacityAt(ctx, kind, h.cx, h.cy), sp);
+      const trend = dn > 0.01 ? "up" : dn < -0.01 ? "down" : "flat";
+      rows.push({
+        kind,
+        ru: sp.ru,
+        icon: sp.icon,
+        herds: list.length,
+        heads: Math.round(heads),
+        cap: Math.round(cap),
+        trend,
+        doomed,
+        perYear: round210(dn * YEAR7),
+        fear: round210(fear),
+        dist: round210(dist),
+        text: `${sp.icon} ${sp.ru}: ${Math.round(heads)} гол. в ${list.length} ст., земля прокормит ${Math.round(cap)}` + (trend === "down" ? ", поголовье падает" : trend === "up" ? ", прирастает" : ", держится") + (fear > 0.5 ? `, стада пуганы и держатся в ${Math.round(dist)} клетках` : "")
+      });
+    }
+    rows.sort((a, b) => b.heads - a.heads);
+    const live = rows.filter((r) => r.heads > 0);
+    return {
+      rows,
+      text: live.length ? live.map((r) => `${r.ru} ${r.heads}`).join(", ") : "Дичи в округе нет: охотиться не на кого",
+      total: rows.reduce((a, r) => a + r.heads, 0),
+      gone: Object.keys(S.gone).map((k) => SPECIES[k] ? SPECIES[k].ru : k)
+    };
+  }
+  function sustainableFood(state, ctx) {
+    const S = state || createHerds();
+    let food = 0;
+    for (const h of S.herds) {
+      const sp = SPECIES[h.kind];
+      const dn = dailyChange(h.n, capacityAt(ctx, h.kind, h.cx, h.cy), sp);
+      if (dn > 0) food += dn * sp.meat;
+    }
+    return round210(food * YEAR7);
   }
   function homeDist(h, ctx) {
     return Math.hypot(h.cx - ctx.homeX, h.cy - ctx.homeY);
@@ -15066,8 +17377,8 @@
     const s = state && typeof state === "object" ? state : createHerds();
     return {
       v: 1,
-      day: num13(s.day, -1),
-      nextId: Math.max(1, Math.floor(num13(s.nextId, 1))),
+      day: num14(s.day, -1),
+      nextId: Math.max(1, Math.floor(num14(s.nextId, 1))),
       herds: Array.isArray(s.herds) ? s.herds.map((h) => ({ ...h })) : [],
       seen: { ...s.seen || {} },
       gone: { ...s.gone || {} },
@@ -15075,17 +17386,17 @@
       lastSaid: { ...s.lastSaid || {} }
     };
   }
-  function clamp13(v, lo, hi) {
+  function clamp15(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
-  function clampInt(v, lo, hi) {
+  function clampInt3(v, lo, hi) {
     const i = Math.floor(Number.isFinite(v) ? v : lo);
     return i < lo ? lo : i > hi ? hi : i;
   }
-  function num13(v, def) {
+  function num14(v, def) {
     return Number.isFinite(v) ? v : def;
   }
-  function round29(v) {
+  function round210(v) {
     return Math.round(v * 100) / 100;
   }
 
@@ -15114,11 +17425,17 @@
     sim2.linkIndustry = createIndustryMemory();
     sim2.linkTerritory = createTerritoryMemory();
     sim2.linkMemory = createMemory();
+    sim2.linkDynasty = createDynastyLink();
     sim2.linkIntel = createIntel();
     sim2.linkMasters = createMasters();
     sim2.linkGhost = createGhost();
     sim2.linkGhost.seed = sim2.seed | 0;
     sim2.build = createBuild();
+    sim2.dynasty = createDynasty(createRng((sim2.seed ^ 1146703360) >>> 0), { day: sim2.day });
+    if (sim2.politics && sim2.politics.state) {
+      const r0 = politicsRuler(sim2.dynasty);
+      if (r0) sim2.politics.state.ruler = r0;
+    }
     sim2.herds = createHerds();
     {
       const ctx = herdsContext(sim2, (world, x, y) => tileAt(world, x, y));
@@ -15135,6 +17452,7 @@
     industryNewDay(sim2);
     onNewDay(sim2);
     politicsNewDay(sim2);
+    applyDynasty(sim2);
     empireNewDay(sim2);
     applyEconomyLinks(sim2);
     const survOut = applySurvivalLinks(sim2);
@@ -15148,6 +17466,7 @@
     const warOut = applyWarLinks(sim2);
     applyHerds(sim2);
     applyMemoryLinks(sim2, harvestScars(sim2, { war: warOut, surv: survOut }));
+    applyDynastyLinks(sim2);
   }
   function systemsFactions(sim2) {
     if (!sim2.sys || !sim2.sys.civ) return false;
@@ -15177,6 +17496,10 @@
       }
     }
     return true;
+  }
+  function civPanel(sim2) {
+    if (!sim2.sys || !sim2.sys.civ) return null;
+    return civReport(sim2.sys.civ, sim2.factions);
   }
   function tickWinterFor(sim2) {
     const s = sim2.sys;
@@ -15251,12 +17574,14 @@
       ind: industrySerialize(sim2),
       war: serialize2(sim2),
       pol: politicsSerialize(sim2),
+      dyn: serializeDynasty(sim2.dynasty),
       emp: empireSerialize(sim2),
       link: sim2.linkSurvival || null,
       linkInd: sim2.linkIndustry || null,
       terr: sim2.linkTerritory || null,
       linkWar: sim2.linkWar || null,
       mem: sim2.linkMemory || null,
+      dynLink: serializeDynastyLink(sim2.linkDynasty),
       intel: sim2.linkIntel || null,
       masters: sim2.linkMasters || null,
       ghost: sim2.linkGhost || null,
@@ -15273,17 +17598,33 @@
     if (data.ind) industryRestore(sim2, data.ind);
     if (data.war) restore(sim2, data.war);
     if (data.pol) politicsRestore(sim2, data.pol);
+    sim2.dynasty = restoreDynasty(data.dyn);
     if (data.emp) empireRestore(sim2, data.emp);
     sim2.linkSurvival = restoreSurvivalMemory(data.link);
     sim2.linkIndustry = restoreIndustryMemory(data.linkInd);
     sim2.linkTerritory = restoreTerritoryMemory(data.terr);
     sim2.linkWar = restoreWarMemory(data.linkWar);
     sim2.linkMemory = restoreMemory(data.mem);
+    sim2.linkDynasty = restoreDynastyLink(data.dynLink);
     sim2.linkIntel = restoreIntel(data.intel);
     sim2.linkMasters = restoreMasters(data.masters);
     sim2.linkGhost = restoreGhost(data.ghost);
     sim2.herds = restoreHerds(data.herds);
     sim2.build = restoreBuild(data.build);
+  }
+  function winterPanel(sim2) {
+    if (!sim2.sys) return null;
+    return {
+      status: winterStatus(sim2.sys.winter, winterCtx(sim2)),
+      forecast: winterForecast(winterCtx(sim2)),
+      breakdown: demandBreakdown(winterCtx(sim2)),
+      history: winterHistory(sim2.sys.winter),
+      report: sim2.sys.winterReport
+    };
+  }
+  function territoryPanel(sim2) {
+    if (!sim2.sys) return null;
+    return sim2.sys.borderStats;
   }
   function applyEconomyLinks(sim2) {
     if (!sim2.politics || !sim2.industry) return null;
@@ -15370,6 +17711,42 @@
     for (const e of L.events) sim2.addLog(e.text, e.type);
     return L;
   }
+  function buildQueue(sim2) {
+    return queueReport(sim2.build, sim2);
+  }
+  function buildPlan(sim2, id, x, y) {
+    return plan(sim2.build, sim2, id, x, y);
+  }
+  function buildPlanArea(sim2, id, x0, y0, x1, y1) {
+    return planArea(sim2.build, sim2, id, x0, y0, x1, y1);
+  }
+  function buildCancel(sim2, key) {
+    return cancelPlan(sim2.build, key);
+  }
+  function buildMove(sim2, key, dir) {
+    return movePlan(sim2.build, key, dir);
+  }
+  function buildScore(sim2, id, x, y) {
+    return scoreSpot(sim2, id, x, y);
+  }
+  function buildBest(sim2, id, n) {
+    return bestSpots(sim2, id, n);
+  }
+  function buildUpgrade(sim2, b) {
+    return upgrade(sim2, b);
+  }
+  function buildCanUpgrade(sim2, b) {
+    return canUpgrade(sim2, b);
+  }
+  function buildRepairList(sim2) {
+    return repairList(sim2);
+  }
+  function buildRepair(sim2, b) {
+    return repair(sim2, b);
+  }
+  function buildRepairAll(sim2) {
+    return repairAll(sim2);
+  }
   function applyGhost(sim2) {
     if (!sim2.linkGhost) {
       sim2.linkGhost = createGhost();
@@ -15385,6 +17762,56 @@
   }
   function ghostSeal(sim2) {
     return sealRun(sim2);
+  }
+  function applyDynastyLinks(sim2) {
+    if (!sim2.linkDynasty) sim2.linkDynasty = createDynastyLink();
+    const out = dynastyLinks(sim2);
+    sim2.linkDynasty = out.flags.memory;
+    sim2.sys.dynastyLink = out;
+    const pst = sim2.politics && sim2.politics.state;
+    if (pst) {
+      const dS = out.mods.stability + out.mods.stabilityShock;
+      pst.stability = Math.max(0, Math.min(100, pst.stability + dS));
+      for (const fid of Object.keys(out.mods.estates)) {
+        const d = out.mods.estates[fid] + out.mods.estatesShock[fid];
+        if (!d || pst.factions[fid] == null) continue;
+        pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+      }
+    }
+    if (out.mods.cityUnrestAll && sim2.empire) {
+      for (const c of sim2.empire.state.cities) {
+        c.unrest = Math.max(0, Math.min(12, (c.unrest || 0) + out.mods.cityUnrestAll));
+      }
+    }
+    if (out.flags.dynEvents.length) {
+      sim2.sys.dynEvents = (sim2.sys.dynEvents || []).concat(out.flags.dynEvents).slice(-20);
+    }
+    if (out.flags.coupNow && sim2.dynasty && typeof dynastyOverthrow === "function") {
+      dynastyOverthrow(sim2, out.flags.coupNow.claimant);
+    }
+    for (const e of out.events) {
+      sim2.addLog(e.text, e.type === "bad" ? "bad" : e.type === "good" ? "good" : "info");
+      if (e.cause === "coup") {
+        if (out.flags.coupNow) {
+          sim2.addChronicle(e.text);
+          sim2.sys._coupFailHouse = null;
+        } else {
+          const house = `${sim2.dynasty ? sim2.dynasty.fam : "?"}|${out.flags.coupFailed || ""}`;
+          if (sim2.sys._coupFailHouse !== house) {
+            sim2.sys._coupFailHouse = house;
+            sim2.addChronicle(e.text);
+          }
+        }
+      }
+    }
+    if (out.flags.stage >= 3) sim2.sfx?.("alarm");
+    return out;
+  }
+  function dynastyLinkPanel(sim2) {
+    return dynastyLinkBreakdown(sim2);
+  }
+  function dynastyHeirAllowed(sim2) {
+    return canNameHeirNow(sim2);
   }
   function applyMasterLinks(sim2) {
     if (!sim2.linkMasters) sim2.linkMasters = createMasters();
@@ -15406,6 +17833,123 @@
   function mastersPanel(sim2) {
     return mastersReport(sim2);
   }
+  function dynastyCtx(sim2) {
+    const st = sim2.politics && sim2.politics.state;
+    const pop = sim2.villagers ? sim2.villagers.length : 0;
+    return {
+      day: sim2.day,
+      gov: st ? st.gov : "chiefdom",
+      era: sim2.eraIndex,
+      pop,
+      gold: sim2.res ? sim2.res.gold : 0,
+      foodDays: sim2.res ? sim2.res.food / Math.max(1, pop * 0.7) : 99,
+      wars: Array.isArray(sim2.wars) ? sim2.wars.length : 0,
+      stability: st ? st.stability : 50,
+      happy: sim2._happy != null ? sim2._happy : 50,
+      // sim.plagueMult В ЯДРЕ НЕТ — ни метода, ни поля. Сторожевое условие тут
+      // стояло с самого начала и молча даёт 1, то есть «мор не влияет». Ровно та
+      // же строка с той же оговоркой лежит в population.js: два агента
+      // независимо предположили одно и то же несуществующее поле. Оставляю как
+      // есть (1 — верное нейтральное значение, ничего не искажает), но пишу это
+      // словами, чтобы связь «мор → законность» не считали работающей.
+      mortalityMult: sim2.plagueMult ? sim2.plagueMult() : 1,
+      nobles: st ? st.factions.nobles : 50,
+      military: st ? st.factions.military : 50,
+      // СОБЫТИЯ, А НЕ СОСТОЯНИЯ. Список разовых ударов за эти сутки; род сам
+      // держит сезонное окно, чтобы месяц голода не считался тридцать раз.
+      events: sim2.sys && sim2.sys.dynEvents ? sim2.sys.dynEvents : []
+    };
+  }
+  function applyDynasty(sim2) {
+    if (!sim2.dynasty) sim2.dynasty = createDynasty(createRng((sim2.seed ^ 1146703360) >>> 0), { day: sim2.day });
+    const rep = dynastyNewDay(sim2.dynasty, dynastyCtx(sim2), sim2.rng);
+    sim2.dynasty = rep.state;
+    const st = sim2.politics && sim2.politics.state;
+    if (st) {
+      st.stability = Math.max(0, Math.min(100, st.stability + rep.mods.stability));
+      for (const [fid, d] of Object.entries(rep.mods.estates)) {
+        if (st.factions[fid] != null) st.factions[fid] = Math.max(0, Math.min(100, st.factions[fid] + d));
+      }
+      const r = politicsRuler(sim2.dynasty);
+      if (r) st.ruler = r;
+    }
+    if (rep.mods.goldPerDay && sim2.res) sim2.res.gold = Math.max(0, sim2.res.gold + rep.mods.goldPerDay);
+    for (const e of rep.events) {
+      sim2.addLog(e.text, e.type === "bad" ? "bad" : e.type === "good" ? "good" : "info");
+      if (e.cause === "succession" || e.cause === "interregnum" || e.cause === "coup" || e.cause === "house_change") {
+        sim2.addChronicle(e.text);
+      }
+    }
+    sim2.sys.dynastyReport = rep;
+    sim2.sys.dynEvents = [];
+  }
+  function dynastyPanel(sim2) {
+    return dynastyCard(sim2.dynasty, dynastyCtx(sim2));
+  }
+  function dynastyRows2(sim2) {
+    return dynastyRows(sim2.dynasty, dynastyCtx(sim2));
+  }
+  function dynastyPatronize(sim2) {
+    const r = patronizeCourt(sim2.dynasty, dynastyCtx(sim2));
+    if (r.ok) {
+      sim2.dynasty = r.state;
+      sim2.res.gold = Math.max(0, sim2.res.gold + r.mods.gold);
+      const st = sim2.politics && sim2.politics.state;
+      if (st) for (const [fid, d] of Object.entries(r.mods.estates)) {
+        if (st.factions[fid] != null) st.factions[fid] = Math.max(0, Math.min(100, st.factions[fid] + d));
+      }
+      for (const e of r.events) sim2.addLog(e.text, e.type);
+    } else if (typeof sim2.toast === "function") sim2.toast(r.reason);
+    return r;
+  }
+  function dynastyClearHeir(sim2) {
+    const r = clearHeir(sim2.dynasty);
+    if (r.ok) {
+      sim2.dynasty = r.state;
+      for (const e of r.events) sim2.addLog(e.text, e.type);
+    } else if (typeof sim2.toast === "function") sim2.toast(r.reason);
+    return r;
+  }
+  function dynastyNameHeir(sim2, id) {
+    const r = nameHeir(sim2.dynasty, id, dynastyCtx(sim2));
+    if (r.ok) {
+      sim2.dynasty = r.state;
+      for (const e of r.events) sim2.addLog(e.text, e.type);
+    } else if (typeof sim2.toast === "function") sim2.toast(r.reason);
+    return r;
+  }
+  function dynastyMarry(sim2, fid, house) {
+    const r = marryHeir(sim2.dynasty, dynastyCtx(sim2), { fid, house, rel: relValue2(sim2, fid) }, sim2.rng);
+    if (r.ok) {
+      sim2.dynasty = r.state;
+      for (const e of r.events) sim2.addLog(e.text, e.type);
+      const cur = sim2.relations && sim2.relations[fid];
+      if (typeof cur === "number") sim2.relations[fid] = cur + r.mods.relations[fid];
+      else if (cur && typeof cur.v === "number") cur.v += r.mods.relations[fid];
+    } else if (typeof sim2.toast === "function") sim2.toast(r.reason);
+    return r;
+  }
+  function dynastyOverthrow(sim2, claimant) {
+    const r = overthrow(sim2.dynasty, dynastyCtx(sim2), { claimant }, sim2.rng);
+    if (r.ok) {
+      sim2.dynasty = r.state;
+      const st = sim2.politics && sim2.politics.state;
+      if (st) st.stability = Math.max(0, st.stability + r.mods.stability);
+      for (const e of r.events) {
+        sim2.addLog(e.text, e.type);
+        sim2.addChronicle(e.text);
+      }
+    } else if (typeof sim2.toast === "function") sim2.toast(r.reason);
+    return r;
+  }
+  function dynastySetCourt(sim2, level) {
+    const r = setCourt(sim2.dynasty, level);
+    if (r.ok) {
+      sim2.dynasty = r.state;
+      for (const e of r.events) sim2.addLog(e.text, e.type);
+    } else if (typeof sim2.toast === "function") sim2.toast(r.reason);
+    return r;
+  }
   function applyHerds(sim2) {
     if (!sim2.herds) return;
     const ctx = herdsContext(sim2, (world, x, y) => tileAt(world, x, y));
@@ -15417,6 +17961,12 @@
     }
     sim2.sys.herdsReport = rep;
   }
+  function herdsPanel(sim2) {
+    return herdsSummary(sim2.herds, herdsContext(sim2, (world, x, y) => tileAt(world, x, y)));
+  }
+  function herdsSustainable(sim2) {
+    return sustainableFood(sim2.herds, herdsContext(sim2, (world, x, y) => tileAt(world, x, y)));
+  }
   function herdsNearest(sim2, x, y) {
     return nearestHerd(sim2.herds, x, y, { minHeads: 1, maxDist: 26 });
   }
@@ -15425,6 +17975,9 @@
     const rep = huntHerd(sim2.herds, id, ctx, opts, sim2.rng);
     sim2.herds = rep.state;
     return rep;
+  }
+  function herdPoints2(sim2) {
+    return herdPoints(sim2.herds);
   }
   function applyIntelLinks(sim2) {
     if (!sim2.linkIntel) sim2.linkIntel = createIntel();
@@ -15436,6 +17989,9 @@
   }
   function intelOf(sim2, fid) {
     return knownOf(sim2, fid);
+  }
+  function intelRows(sim2) {
+    return intelReport(sim2);
   }
   function intelTrustWord(trust) {
     return trustWord(trust);
@@ -17704,12 +20260,12 @@ ${s}`, "console");
     WETLAND: 9,
     ALPINE: 10
   };
-  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
   function temperature(lat, rel, n) {
-    return clamp14(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
+    return clamp16(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
   }
   function moisture(distSea, n) {
-    return clamp14(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
+    return clamp16(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
   }
 
   // app/src/render/landmarks.js
@@ -17792,7 +20348,7 @@ ${s}`, "console");
     dirt: "#7a6242"
     // вытоптанная земля вокруг
   };
-  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
   var c255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
   function mul(hex, k) {
     const c = hex2rgb(hex);
@@ -18220,7 +20776,7 @@ ${s}`, "console");
       const sp = Math.max(1e-4, hi - lo);
       for (let i = 0; i < N; i++) hgt[i] = (world.elev[i] - lo) / sp;
     } else if (height && height.length === N) {
-      for (let i = 0; i < N; i++) hgt[i] = clamp15((height[i] + 0.6) / 1.95, 0, 1);
+      for (let i = 0; i < N; i++) hgt[i] = clamp17((height[i] + 0.6) / 1.95, 0, 1);
     } else {
       for (let i = 0; i < N; i++) hgt[i] = H_BY_TILE[tiles[i]] ?? 0.2;
     }
@@ -18247,7 +20803,7 @@ ${s}`, "console");
           const i = y * W + x;
           const n1 = h3(x * 5, y * 5, 401) * 2 - 1;
           const n2 = h3(x * 3, y * 7, 909) * 2 - 1;
-          const rel = clamp15(hgt[i] - 0.2, 0, 1);
+          const rel = clamp17(hgt[i] - 0.2, 0, 1);
           const t = temperature(lat, rel, n1);
           const m = moisture(dsea[i], n2);
           biome[i] = classify(tiles[i], t, m, rel, river ? river[i] : 0, dsea[i]);
@@ -18278,8 +20834,8 @@ ${s}`, "console");
   }
   function count(f, name, x, y, r) {
     const W1 = f.W + 1;
-    const x0 = clamp15(x - r, 0, f.W), x1 = clamp15(x + r + 1, 0, f.W);
-    const y0 = clamp15(y - r, 0, f.H), y1 = clamp15(y + r + 1, 0, f.H);
+    const x0 = clamp17(x - r, 0, f.W), x1 = clamp17(x + r + 1, 0, f.W);
+    const y0 = clamp17(y - r, 0, f.H), y1 = clamp17(y + r + 1, 0, f.H);
     const T2 = f.sums[name];
     return T2[y1 * W1 + x1] - T2[y0 * W1 + x1] - T2[y1 * W1 + x0] + T2[y0 * W1 + x0];
   }
@@ -18359,7 +20915,7 @@ ${s}`, "console");
       if (f.slope[i] > 0.03) return 0;
       let around = 0, n = 0;
       for (let dy = -4; dy <= 4; dy += 2) for (let dx = -4; dx <= 4; dx += 2) {
-        const xx = clamp15(x + dx, 0, f.W - 1), yy = clamp15(y + dy, 0, f.H - 1);
+        const xx = clamp17(x + dx, 0, f.W - 1), yy = clamp17(y + dy, 0, f.H - 1);
         around += f.hgt[yy * f.W + xx];
         n++;
       }
@@ -25197,7 +27753,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -26034,7 +28590,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp16(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp18(sim2.eraIndex | 0, 0, 9)];
       const weightOf2 = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -26071,7 +28627,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp16(x >> 2, 0, this.pw - 1), gy = clamp16(y >> 2, 0, this.ph - 1);
+      const gx = clamp18(x >> 2, 0, this.pw - 1), gy = clamp18(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -26090,7 +28646,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp16(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp18(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -26321,7 +28877,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp16(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp18(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -26476,7 +29032,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp19 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -26813,7 +29369,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth4[i] > top) top = smooth4[i];
       for (let i = 0; i < N; i++) smooth4[i] /= top;
-      const R = clamp17(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp19(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth4), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -26830,10 +29386,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp17(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp17(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp19(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp19(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp17(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp19(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -26845,8 +29401,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp17(
-        nLand ? lapsArr[clamp17(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp19(
+        nLand ? lapsArr[clamp19(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -26857,8 +29413,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp17(i0, 0, w - 1);
-        this.txB[sx] = clamp17(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp19(i0, 0, w - 1);
+        this.txB[sx] = clamp19(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -26866,8 +29422,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp17(i0 - 1, 0, w - 1), b = row + clamp17(i0, 0, w - 1);
-          const c = row + clamp17(i0 + 1, 0, w - 1), d = row + clamp17(i0 + 2, 0, w - 1);
+          const a = row + clamp19(i0 - 1, 0, w - 1), b = row + clamp19(i0, 0, w - 1);
+          const c = row + clamp19(i0 + 1, 0, w - 1), d = row + clamp19(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth4[a] * tx.wt[o] + smooth4[b] * tx.wt[o + 1] + smooth4[c] * tx.wt[o + 2] + smooth4[d] * tx.wt[o + 3];
         }
       }
@@ -26908,12 +29464,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp17(j0 - 1, 0, h - 1) * SW, rb = clamp17(j0, 0, h - 1) * SW;
-        const rc = clamp17(j0 + 1, 0, h - 1) * SW, rd = clamp17(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp19(j0 - 1, 0, h - 1) * SW, rb = clamp19(j0, 0, h - 1) * SW;
+        const rc = clamp19(j0 + 1, 0, h - 1) * SW, rd = clamp19(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp17(jy, 0, h - 1) * w, jB = clamp17(jy + 1, 0, h - 1) * w;
+        const jA = clamp19(jy, 0, h - 1) * w, jB = clamp19(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -26963,9 +29519,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp17(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp17(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp19(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp19(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp17(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp19(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -27078,7 +29634,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp17(j0, 0, h - 1) * w, jB = clamp17(j0 + 1, 0, h - 1) * w;
+      const jA = clamp19(j0, 0, h - 1) * w, jB = clamp19(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -27121,7 +29677,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp17(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp19(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -27143,7 +29699,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp17(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp19(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -27219,28 +29775,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp17(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp17(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp17(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp17(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp19(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp19(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp19(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp19(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp17((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp17(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp19((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp19(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp17(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp19(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp17(k, 0, 1);
+        ctx.globalAlpha = clamp19(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -27362,7 +29918,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp20 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -27538,8 +30094,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp18(L.shadowLen, 0.45, 2.2);
-      const u = clamp18((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp20(L.shadowLen, 0.45, 2.2);
+      const u = clamp20((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -27599,7 +30155,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp18(0.78 / hf, 0.32, 0.6);
+      const band = clamp20(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul2 = this._checkMul(ctx);
@@ -27705,8 +30261,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp18(Math.round(dw), 12, 256);
-      const h = clamp18(Math.round(dh), 12, 384);
+      const w = clamp20(Math.round(dw), 12, 256);
+      const h = clamp20(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -27716,8 +30272,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp18(Math.round(dw), 12, 256);
-      const h = clamp18(Math.round(dh), 12, 384);
+      const w = clamp20(Math.round(dw), 12, 256);
+      const h = clamp20(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -27878,7 +30434,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp19 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp21 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -28394,7 +30950,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp19(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp21(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -28496,7 +31052,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp19(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp21(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -28869,7 +31425,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp19(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp21(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -28953,7 +31509,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp19(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp21(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -32837,7 +35393,7 @@ ${s}`, "console");
   var TRAIL_HERDS = 48;
   var FEAR_ALERT = 0.18;
   var FEAR_HUDDLE = 0.45;
-  var SPREAD_BASE = 0.55;
+  var SPREAD_BASE2 = 0.55;
   var YOUNG_SHARE = 0.22;
   var YOUNG_R = 0.38;
   var LEADER_AHEAD = 1.15;
@@ -32857,8 +35413,8 @@ ${s}`, "console");
   var GRAZE_TILT = 0.17;
   var ALERT_TILT = 0.06;
   var ALERT_LIFT = 0.035;
-  var clamp20 = (v, a, b) => v < a ? a : v > b ? b : v;
-  var num14 = (v, d) => Number.isFinite(v) ? v : d;
+  var clamp22 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var num15 = (v, d) => Number.isFinite(v) ? v : d;
   function hash3(a, b, c) {
     let h = a * 374761393 + b * 668265263 + c * 2246822519 | 0;
     h = (h ^ h >>> 13) * 1274126177 | 0;
@@ -32892,9 +35448,9 @@ ${s}`, "console");
   }
   function normalizeState(h, viewById) {
     if (!h || typeof h !== "object") return null;
-    const x = num14(h.cx, NaN), y = num14(h.cy, NaN);
+    const x = num15(h.cx, NaN), y = num15(h.cy, NaN);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const n = num14(h.n, 0);
+    const n = num15(h.n, 0);
     if (!(n > 0)) return null;
     const kind = typeof h.kind === "string" ? h.kind : "deer";
     const f = formOf(kind);
@@ -32905,10 +35461,10 @@ ${s}`, "console");
       form: f,
       x,
       y,
-      tx: num14(h.tx, x),
-      ty: num14(h.ty, y),
+      tx: num15(h.tx, x),
+      ty: num15(h.ty, y),
       n,
-      fear: clamp20(num14(h.fear, 0), 0, 1),
+      fear: clamp22(num15(h.fear, 0), 0, 1),
       r: v && Number.isFinite(v.r) && v.r > 0 ? v.r : f.radius,
       // Обречённость: слово модели весомее нашей таблицы. Флага нет — считаем
       // сами по запасному порогу.
@@ -32916,9 +35472,9 @@ ${s}`, "console");
     };
   }
   function normalizeView(r) {
-    const x = num14(r.x, NaN), y = num14(r.y, NaN);
+    const x = num15(r.x, NaN), y = num15(r.y, NaN);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const n = num14(r.head, 0);
+    const n = num15(r.head, 0);
     if (!(n > 0)) return null;
     const kind = typeof r.species === "string" ? r.species : "deer";
     const f = formOf(kind);
@@ -32931,7 +35487,7 @@ ${s}`, "console");
       tx: x,
       ty: y,
       n,
-      fear: clamp20(num14(r.fear, 0), 0, 1),
+      fear: clamp22(num15(r.fear, 0), 0, 1),
       r: Number.isFinite(r.r) && r.r > 0 ? r.r : f.radius,
       doomed: n < f.viable
     };
@@ -33001,7 +35557,7 @@ ${s}`, "console");
         this.clear();
         this.seed = seed;
       }
-      const day = Math.floor(num14(sim2.day, 0));
+      const day = Math.floor(num15(sim2.day, 0));
       if (day === this.day) return;
       if (day < this.day) this.trails.clear();
       this.day = day;
@@ -33036,12 +35592,12 @@ ${s}`, "console");
       if (!sim2 || !sim2.world) return;
       const zoom = z / TILE_PX7;
       if (zoom < ZONE_MIN_ZOOM) return;
-      const season = clamp20(Math.floor(num14(sim2.seasonIdx, 0)), 0, 3);
+      const season = clamp22(Math.floor(num15(sim2.seasonIdx, 0)), 0, 3);
       const herds = readHerds(sim2);
       this._drawZones(sim2, ctx, ox, oy, z, cw, ch, season, herds);
       const cap = HERD_LIMITS.trails[this.q.id] != null ? HERD_LIMITS.trails[this.q.id] : HERD_LIMITS.trails.high;
       if (!cap || zoom < TRAIL_MIN_ZOOM) return;
-      const now2 = this.day + clamp20(num14(sim2.dayTime, 0), 0, 1);
+      const now2 = this.day + clamp22(num15(sim2.dayTime, 0), 0, 1);
       const size = Math.max(2, z * 0.16);
       let drawn = 0;
       for (const t of this.trails.values()) {
@@ -33106,7 +35662,7 @@ ${s}`, "console");
       for (const it of order) {
         const h = it.h;
         const sx = ox + h.x * z, sy = oy + h.y * z;
-        const rad = Math.max(z, SPREAD_BASE * Math.sqrt(Math.max(1, h.n)) * 1.6 * z);
+        const rad = Math.max(z, SPREAD_BASE2 * Math.sqrt(Math.max(1, h.n)) * 1.6 * z);
         if (sx + rad < -40 || sy + rad < -40 || sx - rad > cw + 40 || sy - rad > ch + 40) continue;
         const atlas = near ? this.atlasFor(h.kind) : null;
         if (!atlas) {
@@ -33189,10 +35745,10 @@ ${s}`, "console");
     drawBlob(sim2, ctx, ox, oy, z, cw, ch, h) {
       const sx = ox + h.x * z, sy = oy + h.y * z;
       const alert = h.fear >= FEAR_ALERT;
-      let rw = SPREAD_BASE * Math.sqrt(Math.max(1, h.n)) * 1.5 * z;
+      let rw = SPREAD_BASE2 * Math.sqrt(Math.max(1, h.n)) * 1.5 * z;
       if (alert) rw *= 1 - 0.3 * h.fear;
       if (h.doomed) rw *= DOOM_SPREAD;
-      rw = clamp20(rw, 5, 90);
+      rw = clamp22(rw, 5, 90);
       if (sx + rw < 0 || sy + rw < 0 || sx - rw > cw || sy - rw > ch) return;
       const cv = this.blobSprite(h.kind, alert);
       ctx.globalAlpha = h.doomed ? 0.34 : 0.72;
@@ -33204,7 +35760,7 @@ ${s}`, "console");
     flushLabels(ctx, z) {
       const list = this._labels;
       if (!list || !list.length) return;
-      const px = clamp20(Math.round(z * 0.42), 9, 17);
+      const px = clamp22(Math.round(z * 0.42), 9, 17);
       ctx.save();
       ctx.font = `600 ${px}px system-ui, sans-serif`;
       ctx.textAlign = "center";
@@ -33244,7 +35800,7 @@ ${s}`, "console");
         return lay;
       }
       const huddle = 1 - FEAR_HUDDLE * fearStep;
-      const spread = SPREAD_BASE * Math.sqrt(heads) * huddle * (h.doomed ? DOOM_SPREAD : 1);
+      const spread = SPREAD_BASE2 * Math.sqrt(heads) * huddle * (h.doomed ? DOOM_SPREAD : 1);
       const young = h.doomed ? 0 : Math.min(heads - 1, Math.round(heads * YOUNG_SHARE));
       const hasLeader = !h.doomed && heads > 1;
       const adults = heads - young - (hasLeader ? 1 : 0);
@@ -35811,6 +38367,648 @@ ${s}`, "console");
     }).join(" ") || "—";
   }
 
+  // app/src/ui/panel_dynasty.js
+  var TRAIT_BY_ID5 = Object.fromEntries(RULER_TRAITS.map((t) => [t.id, t]));
+  var CONFIRM_DAYS2 = 2;
+  var CONFIRM = /* @__PURE__ */ new WeakMap();
+  var RISK_ALARM = 0.2;
+  var NOT_WIRED = "Применитель не подключён: добавьте вызов в integrate.js (см. шапку panel_dynasty.js)";
+  function dynState(sim2) {
+    if (!sim2) return null;
+    const st = sim2.dynasty || sim2.sys && sim2.sys.dynasty || null;
+    if (!st || typeof st !== "object") return null;
+    const ok = Array.isArray(st.members) && Array.isArray(st.graves) && Array.isArray(st.claimants) && Array.isArray(st.ties);
+    return ok ? st : null;
+  }
+  function dynReport(sim2) {
+    return sim2 && sim2.sys && sim2.sys.dynastyReport || null;
+  }
+  function dynCtx(sim2) {
+    if (typeof void 0 === "function") {
+      try {
+        return (void 0)(sim2);
+      } catch {
+      }
+    }
+    const st = sim2.politics && sim2.politics.state;
+    const pop = Array.isArray(sim2.villagers) ? sim2.villagers.length : 0;
+    return {
+      day: sim2.day || 0,
+      gov: st ? st.gov : "chiefdom",
+      era: sim2.eraIndex || 0,
+      pop,
+      gold: sim2.res ? sim2.res.gold : 0,
+      foodDays: sim2.res ? sim2.res.food / Math.max(1, pop * 0.7) : 99,
+      wars: Array.isArray(sim2.wars) ? sim2.wars.length : 0,
+      stability: st ? st.stability : 50,
+      happy: sim2._happy != null ? sim2._happy : 50,
+      mortalityMult: typeof sim2.plagueMult === "function" ? sim2.plagueMult() : 1,
+      nobles: st ? st.factions.nobles : 50,
+      military: st ? st.factions.military : 50,
+      events: []
+    };
+  }
+  function yearRisk(years) {
+    const d = years < 50 ? 1e-4 : Math.min(0.02, 4e-4 * Math.pow(2, (years - 50) / 8));
+    return 1 - Math.pow(1 - d, YEAR5);
+  }
+  function courtGold(st, c) {
+    const lvl = COURT[_clampInt(st.court, 0, COURT.length - 1)];
+    return lvl.gold * (1 + (c.pop || 0) * COURT_PER_POP);
+  }
+  function renderDynastyPanel(sim2) {
+    const st = dynState(sim2);
+    if (!st) {
+      return `<div class="card"><div class="ttl"><span>Род</span></div>
+      <div class="desc">Род ещё не подключён к ядру: модель dynasty.js написана, но день рода никто не ведёт.
+      Пока её не позовут, власть остаётся прежней — сменой случайного человека на случайного.</div></div>`;
+    }
+    const c = dynCtx(sim2);
+    const heir = heirOf(st, c);
+    const card = dynastyCard(st, c);
+    return _alarm(sim2, st, c, heir, card) + _head4(sim2, st, c, card) + _legitimacy(sim2, st, c, heir) + _tree(sim2, st, c, heir) + _claimants(sim2, st, c) + _traits(sim2, st, c) + _actions(sim2, st, c, heir) + _graves(st, c) + _stats(st, c);
+  }
+  function _alarm(sim2, st, c, heir, card) {
+    const law = SUCCESSION_LAW[c.gov] || SUCCESSION_LAW.chiefdom;
+    const rl = ruler(st);
+    const years = rl ? ageYearsOf(rl) : 0;
+    const risk = rl ? yearRisk(years) : 1;
+    const bench = bloodMembers(st).filter((m) => m.id !== st.rulerId);
+    const adults = bench.filter((m) => ageYearsOf(m) >= ADULT_YEARS);
+    const rows = [];
+    let crit = false;
+    if (st.interregnum > 0) {
+      crit = true;
+      rows.push(`Трон пуст ещё ${Math.ceil(st.interregnum)} ${_pl(Math.ceil(st.interregnum), "день", "дня", "дней")}: стабильность
+      −${INTERREGNUM_STAB} и законность −${LEG_INTERREGNUM} каждые сутки, пока никто не сел на трон.`);
+    }
+    if (!rl && st.interregnum <= 0) {
+      crit = true;
+      rows.push("Правителя нет, а междуцарствие не объявлено: власть повисла. Ближайший день рода это разрешит.");
+    }
+    if (!heir && law.law !== "election") {
+      crit = true;
+      rows.push(`НАСЛЕДНИКА НЕТ. Умрёт правитель — род пресечётся, и начнётся междуцарствие на ${INTERREGNUM_DAYS} дней.
+      Законность уже тает на ${LEG_NO_HEIR} в сутки.`);
+      rows.push(bench.length ? "В роду есть кровные, но по закону строя никто не наследует: назначьте наследника вручную — это ниже, в древе." : "Кровных в роду не осталось: женить некого и родить некому. Спасает только чужой род — то есть переворот.");
+    }
+    if (heir && !crit && adults.length === 0) {
+      rows.push(`Наследник один и не дорос (${ageYearsOf(heir.member)} лет): при регентстве стабильность
+      −${REGENCY_STAB} в сутки, пока ему не исполнится ${ADULT_YEARS}.`);
+    }
+    if (rl && risk >= RISK_ALARM && adults.length <= 1) {
+      rows.push(`Правителю ${years} ${_pl(years, "год", "года", "лет")}: не пережить год он может с вероятностью
+      ${Math.round(risk * 100)}%, а взрослых сменщиков в роду ${adults.length}. Женить наследника — сейчас, а не потом.`);
+    }
+    if (st.legitimacy < CLAIM_BELOW && !st.claimants.length) {
+      rows.push(`Законность ${Math.round(st.legitimacy)} — ниже ${CLAIM_BELOW}: со дня на день объявится претендент из чужого рода.`);
+    }
+    if (!rows.length) return "";
+    const col = crit ? "var(--bad)" : "var(--warn)";
+    return `<div class="card" style="border-color:${col}">
+    <div class="ttl"><span style="color:${col}">${crit ? "⚠ РОД НА ГРАНИ ПРЕСЕЧЕНИЯ" : "⚠ Власть держится на одном человеке"}</span>
+      <span class="cost" style="color:${col}">${_esc2(card ? card.risk : "")}</span></div>
+    ${rows.map((r) => `<div class="reason">${r}</div>`).join("")}</div>`;
+  }
+  function _head4(sim2, st, c, card) {
+    const rl = ruler(st);
+    const law = SUCCESSION_LAW[c.gov] || SUCCESSION_LAW.chiefdom;
+    const suc = SUCCESSION[c.gov] || SUCCESSION.chiefdom;
+    const leg = Math.round(st.legitimacy);
+    const col = _legColor(leg);
+    const reign = rl ? Math.max(0, Math.floor((c.day - (rl.since || 0)) / YEAR5)) : 0;
+    const age = rl ? ageYearsOf(rl) : 0;
+    const risk = rl ? Math.round(yearRisk(age) * 100) : 100;
+    return `<div class="card"><div class="ttl"><span>Род ${_esc2(st.fam)}</span>
+      <span class="cost" style="color:${col}">законность ${leg}</span></div>
+    <div class="desc">Основал ${_esc2(st.founder)} на ${Math.round(st.foundedDay)}-й день.
+      У власти ${st.generations} ${_pl(st.generations, "поколение", "поколения", "поколений")},
+      в роду ${st.members.length} ${_pl(st.members.length, "человек", "человека", "человек")}.</div>
+    <div class="relbar"><div style="width:${leg}%;background:${col}"></div></div>
+    ${st.interregnum > 0 ? `<div class="kv"><span>Трон</span><span style="color:var(--bad)">пуст ещё ${Math.ceil(st.interregnum)} дн.</span></div>` : rl ? `<div class="kv"><span>${rl.sex === "ж" ? "Правительница" : "Правитель"}</span>
+             <span>${_esc2(rl.name)}, ${age} ${_pl(age, "год", "года", "лет")}</span></div>
+           <div class="kv"><span>На троне</span><span>${reign} ${_pl(reign, "год", "года", "лет")}</span></div>
+           <div class="kv"><span>Риск не пережить год</span>
+             <span style="color:${risk >= 20 ? "var(--bad)" : risk >= 5 ? "var(--warn)" : "var(--good)"}">${risk}%</span></div>` : `<div class="kv"><span>Правитель</span><span style="color:var(--bad)">никого</span></div>`}
+    <div class="kv"><span>Закон наследования</span><span>${_esc2(law.ru)}</span></div>
+    <div class="kv"><span>Если правитель умрёт сегодня</span>
+      <span style="color:${card && card.heir ? "var(--good)" : "var(--bad)"}">${_esc2(card ? card.risk : "—")}</span></div>
+    <div class="desc">Смена власти при этом строе стоит ${suc.stab} стабильности${suc.turmoil ? ` и ${suc.turmoil} дн. смуты` : " и обходится без смуты"};
+      законность просядет на ${(suc.stab * LEG_PER_STAB).toFixed(1)} — ${_esc2(suc.ru)}.</div></div>`;
+  }
+  function _legitimacy(sim2, st, c, heir) {
+    const leg = Math.round(st.legitimacy);
+    const col = _legColor(leg);
+    const base = Math.round(baseLegitimacy(st, c.day));
+    const rep = dynReport(sim2);
+    const delta = rep && rep.flags && rep.flags.legDelta != null ? rep.flags.legDelta : null;
+    const parts = rep && rep.flags && Array.isArray(rep.flags.legParts) ? rep.flags.legParts : [];
+    const said = rep && Array.isArray(rep.reasons) ? rep.reasons.slice(0, 6) : [];
+    let html = `<h4 class="group">Законность</h4>
+    <div class="card"><div class="ttl"><span>${leg} из 100 — ${_esc2(legitimacyWord(st.legitimacy))}</span>
+      ${delta != null ? `<span class="cost" style="color:${delta > 0 ? "var(--good)" : delta < 0 ? "var(--bad)" : "var(--dim)"}">${_sign4(delta, 2)} за сутки</span>` : ""}</div>
+    <div class="relbar"><div style="width:${leg}%;background:${col}"></div></div>
+    <div class="desc">Законность — это не уважение, а право сидеть на троне. От неё зависит,
+      придут ли претенденты (ниже ${CLAIM_BELOW}), разойдутся ли они сами (выше ${CLAIM_CLEAR})
+      и можно ли вообще свергнуть род заговором (выше 75 — нельзя, заговорщиков выдадут).</div>
+    <div class="kv"><span>Свой уровень рода</span><span>${base}</span></div>
+    <div class="desc">К своему уровню законность тянется сама, по ${LEG_DRIFT} в сутки — это и есть выход из любой ямы:
+      после провала род отлежится, если не наделает новых. Выше ${LEG_BASE_CAP} сама не растёт — только делами.
+      Уровень поднимают поколения на троне (+6 за каждое) и годы (+0.15 в год).</div>`;
+    if (parts.length) {
+      html += `<div class="kv"><span>Сегодня сложилось из</span><span></span></div>`;
+      for (const p of parts) html += `<div class="desc" style="color:var(--dim)">· ${_esc2(p)}</div>`;
+    }
+    html += `</div>`;
+    if (said.length) {
+      html += `<div class="card"><div class="ttl"><span>Что сказал последний день</span></div>
+      ${said.map((r) => `<div class="desc">${_esc2(r)}</div>`).join("")}</div>`;
+    }
+    const lvl = COURT[_clampInt(st.court, 0, COURT.length - 1)];
+    html += `<div class="card"><div class="ttl"><span style="color:var(--good)">Поднимает</span></div>
+    <div class="kv"><span>Триумф, взятый город</span><span style="color:var(--good)">${_sign4(LEG_EVENT.triumph)} / ${_sign4(LEG_EVENT.city_won)}</span></div>
+    <div class="kv"><span>Победа в поле</span><span style="color:var(--good)">${_sign4(LEG_EVENT.victory)}</span></div>
+    <div class="kv"><span>Подношение двору</span><span style="color:var(--good)">${_sign4(PATRON_LEG)}, раз в ${PATRON_CD} дн.</span></div>
+    <div class="kv"><span>Содержание двора «${_esc2(lvl.ru)}»</span><span style="color:${lvl.leg > 0 ? "var(--good)" : "var(--bad)"}">${_sign4(lvl.leg, 2)} в сутки</span></div>
+    <div class="kv"><span>Брак с родом соседа</span><span style="color:var(--good)">${_sign4(MARRY_LEG)}</span></div>
+    <div class="desc">Одна и та же беда или победа считается ОДИН раз за ${SEEN_WINDOW} дней: месяц голода — это один голод,
+      иначе законность стояла бы на нуле, пока тянется несчастье.</div></div>`;
+    html += `<div class="card"><div class="ttl"><span style="color:var(--bad)">Роняет</span></div>
+    <div class="kv"><span>Потеряна провинция</span><span style="color:var(--bad)">${_sign4(LEG_EVENT.city_lost)}</span></div>
+    <div class="kv"><span>Восстание · поражение</span><span style="color:var(--bad)">${_sign4(LEG_EVENT.revolt)} · ${_sign4(LEG_EVENT.defeat)}</span></div>
+    <div class="kv"><span>Голод · мор</span><span style="color:var(--bad)">${_sign4(LEG_EVENT.famine)} · ${_sign4(LEG_EVENT.plague)}</span></div>
+    <div class="kv"><span>Наследника нет</span><span style="color:${!heir ? "var(--bad)" : "var(--dim)"}">−${LEG_NO_HEIR} в сутки</span></div>
+    <div class="kv"><span>Преемник назначен вопреки обычаю</span><span style="color:${heir && heir.odd ? "var(--bad)" : "var(--dim)"}">−${LEG_ODD_HEIR} в сутки</span></div>
+    <div class="kv"><span>Междуцарствие</span><span style="color:${st.interregnum > 0 ? "var(--bad)" : "var(--dim)"}">−${LEG_INTERREGNUM} в сутки</span></div>
+    <div class="kv"><span>Двору не заплатили</span><span style="color:var(--bad)">−${COURT_UNPAID_LEG} в сутки</span></div>
+    <div class="kv"><span>Смена правителя</span><span style="color:var(--bad)">−${((SUCCESSION[c.gov] || SUCCESSION.chiefdom).stab * LEG_PER_STAB).toFixed(1)}</span></div>
+    <div class="desc">У каждой из этих строк есть выход, и он назван там же, где беда: наследника — назначить или родить,
+      сомнительное назначение — отменить, двор — понизить. Спирали без выхода здесь нет.</div></div>`;
+    html += `<div class="card"><div class="ttl"><span>Что законность даёт державе</span></div>
+    <div class="kv"><span>Стабильность</span><span style="color:${leg >= 50 ? "var(--good)" : "var(--bad)"}">${_sign4((leg - 50) / 50 * 0.3, 2)} в сутки</span></div>
+    <div class="kv"><span>Знать</span><span>${_sign4((leg - 50) / 50 * 0.04, 2)} в сутки</span></div>
+    <div class="kv"><span>Войско</span><span>${_sign4((leg - 50) / 50 * 0.02, 2)} в сутки</span></div>
+    <div class="kv"><span>Претенденты стоят</span><span style="color:${st.claimants.length ? "var(--bad)" : "var(--dim)"}">−${(st.claimants.length * CLAIM_STAB).toFixed(2)} стабильности в сутки</span></div></div>`;
+    return html;
+  }
+  function _tree(sim2, st, c, heir) {
+    const rl = ruler(st);
+    const spouse = rl && rl.spouse != null ? memberOf(st, rl.spouse) : null;
+    let html = `<h4 class="group">Древо рода</h4>`;
+    if (rl) {
+      const age = ageYearsOf(rl);
+      html += `<div class="card"><div class="ttl"><span>♛ ${_esc2(rl.name)} ${_esc2(st.fam)}</span>
+        <span class="cost">${age} ${_pl(age, "год", "года", "лет")}</span></div>
+      <div class="desc">${rl.sex === "ж" ? "Правительница" : "Правитель"} · сила в глазах дружины ${powerOf2(rl)}
+        · ${rl.traits.length ? rl.traits.map((t) => _esc2(_traitRu(t))).join(", ") : "без ярких черт"}</div>
+      ${spouse ? `<div class="kv"><span>⚭ Супруг${spouse.sex === "ж" ? "а" : ""}</span>
+             <span>${_esc2(spouse.name)} ${_esc2(spouse.fam)}, ${ageYearsOf(spouse)} ${_pl(ageYearsOf(spouse), "год", "года", "лет")}${spouse.origin === "foreign" ? " (чужой род)" : ""}</span></div>` : `<div class="kv"><span>⚭ Супруг</span><span style="color:var(--warn)">нет — детей не будет</span></div>`}</div>`;
+    } else {
+      html += `<div class="card"><div class="ttl"><span style="color:var(--bad)">Трон пуст</span></div>
+      <div class="desc">Междуцарствие. Пока никто не сел на трон, род не правит, а держава расплачивается стабильностью.</div></div>`;
+    }
+    if (heir) {
+      const y = ageYearsOf(heir.member);
+      const col = heir.odd ? "var(--warn)" : "var(--accent)";
+      html += `<div class="card" style="border-color:${col}"><div class="ttl">
+        <span style="color:${col}">★ НАСЛЕДНИК: ${_esc2(heir.name)}</span>
+        <span class="cost">${y} ${_pl(y, "год", "года", "лет")}</span></div>
+      <div class="desc">${_esc2(heir.why)}${heir.minor ? " · не дорос: сядет под регентство" : ""}</div>
+      ${heir.odd ? `<div class="reason">Обычай обойдён: законность −${LEG_ODD_HEIR} в сутки, пока назначение стоит. Выход — отменить его.</div>` : ""}</div>`;
+    } else {
+      html += `<div class="card" style="border-color:var(--bad)"><div class="ttl"><span style="color:var(--bad)">★ Наследника нет</span></div>
+      <div class="desc">${(SUCCESSION_LAW[c.gov] || {}).law === "election" ? "При республике наследников не бывает: власть решают выборы, и род удержит её только высокой законностью (от 60)." : "Никто не подходит под закон строя. Назначьте наследника вручную — кнопка стоит у каждого кровного ниже."}</div></div>`;
+    }
+    const blood = st.members.filter((m) => m.blood && m.id !== st.rulerId);
+    const kids = rl ? blood.filter((m) => m.father === rl.id || m.mother === rl.id) : [];
+    const kin = blood.filter((m) => !kids.includes(m));
+    html += _kinGroup(
+      sim2,
+      st,
+      c,
+      heir,
+      kids,
+      "Дети правителя",
+      "Дети — единственный способ продлить род без переворота. Без супруга их не будет."
+    );
+    html += _kinGroup(
+      sim2,
+      st,
+      c,
+      heir,
+      kin,
+      "Прочая кровь рода",
+      "Братья, племянники, внуки. При вождестве трон берёт сильнейший из них, при монархии — старший, если детей нет."
+    );
+    const married = st.members.filter((m) => !m.blood);
+    if (married.length) {
+      html += `<div class="card"><div class="ttl"><span>Вошли в род через брак</span><span class="cost">${married.length}</span></div>
+      <div class="desc">Наследовать не могут: иначе трон уходил бы к вдове чужого рода, и женитьба означала бы подарить державу.</div>
+      ${married.map((m) => {
+        const y = ageYearsOf(m);
+        const sp = m.spouse != null ? memberOf(st, m.spouse) : null;
+        return `<div class="kv"><span>${_esc2(m.name)} ${_esc2(m.fam)}${m.origin === "foreign" ? " · чужой род" : ""}</span>
+          <span>${y} ${_pl(y, "год", "года", "лет")}${sp ? ` · ⚭ ${_esc2(sp.name)}` : ""}</span></div>`;
+      }).join("")}</div>`;
+    }
+    if (st.members.length >= MAX_MEMBERS) {
+      html += `<div class="card"><div class="desc">Род упёрся в потолок ${MAX_MEMBERS} человек: самые дальние от трона
+      перестают считаться роднёй. Правитель, наследник и супруг не выбывают никогда.</div></div>`;
+    }
+    return html;
+  }
+  function _kinGroup(sim2, st, c, heir, list, title, note) {
+    if (!list.length) {
+      return `<div class="card"><div class="ttl"><span>${title}</span><span class="cost" style="color:var(--warn)">никого</span></div>
+      <div class="desc">${note}</div></div>`;
+    }
+    const sorted = list.slice().sort((a, b) => (b.id === (heir && heir.id) ? 1 : 0) - (a.id === (heir && heir.id) ? 1 : 0) || b.age - a.age);
+    let html = `<div class="card"><div class="ttl"><span>${title}</span><span class="cost">${list.length}</span></div>
+    <div class="desc">${note}</div></div>`;
+    for (const m of sorted) html += _kinCard(sim2, st, c, heir, m);
+    return html;
+  }
+  function _kinCard(sim2, st, c, heir, m) {
+    const y = ageYearsOf(m);
+    const isHeir = !!heir && heir.id === m.id;
+    const named = st.namedHeirId === m.id;
+    const sp = m.spouse != null ? memberOf(st, m.spouse) : null;
+    const chk = canNameHeir(st, m.id, c);
+    const spec = `heir:${m.id}`;
+    const odd = chk.ok && chk.odd;
+    let html = `<div class="card"${isHeir ? ' style="border-color:var(--accent)"' : ""}>
+    <div class="ttl"><span${isHeir ? ' style="color:var(--accent)"' : ""}>${isHeir ? "★ " : ""}${_esc2(m.name)}${m.sex === "ж" ? " (дочь рода)" : ""}</span>
+      <span class="cost">${y} ${_pl(y, "год", "года", "лет")}</span></div>
+    <div class="kv"><span>Сила в глазах дружины</span><span>${powerOf2(m)}</span></div>
+    ${m.traits.length ? `<div class="kv"><span>Черты</span><span>${m.traits.map((t) => _esc2(_traitRu(t))).join(", ")}</span></div>` : ""}
+    ${sp ? `<div class="kv"><span>⚭ В браке</span><span>${_esc2(sp.name)} ${_esc2(sp.fam)}</span></div>` : y >= MARRY_MIN ? `<div class="kv"><span>⚭ Не женат</span><span style="color:var(--dim)">можно женить на роде соседа</span></div>` : ""}
+    ${named ? `<div class="desc" style="color:var(--accent)">Назначен волей правителя.</div>` : ""}`;
+    if (named) {
+      html += _btn(
+        "heir:clear",
+        "Отменить назначение — трон снова по обычаю, шёпот знати стихнет",
+        _actReady("dynastyClearHeir") ? { ok: true } : { ok: false, reason: NOT_WIRED },
+        sim2,
+        false
+      );
+    } else if (chk.ok) {
+      html += _btn(
+        spec,
+        odd ? `Назначить наследником — законность ${NAME_HEIR_LEG}, знать ${NAME_HEIR_NOBLES}, и −${LEG_ODD_HEIR}/сут, пока стоит` : "Назначить наследником — при этом строе назначение и есть закон, цены нет",
+        _actReady("dynastyNameHeir") ? { ok: true } : { ok: false, reason: NOT_WIRED },
+        sim2,
+        false
+      );
+    } else {
+      html += _btn(spec, "Назначить наследником", chk, sim2, false);
+    }
+    return html + `</div>`;
+  }
+  function _claimants(sim2, st, c) {
+    let html = `<h4 class="group">Претенденты</h4>`;
+    if (!st.claimants.length) {
+      return html + `<div class="card"><div class="desc">Чужих рук на троне нет. Претендент объявляется, пока законность ниже
+      ${CLAIM_BELOW} (шанс ${(CLAIM_CHANCE * 100).toFixed(1)}% в сутки), и расходится сам, когда она поднимется выше
+      ${CLAIM_CLEAR}. Больше ${MAX_CLAIMANTS} их не бывает — иначе это была бы спираль без выхода:
+      претенденты роняли бы законность, а та плодила бы новых.</div></div>`;
+    }
+    html += `<div class="card"><div class="desc">Каждый претендент стоит ${CLAIM_STAB} стабильности в сутки.
+    Законности они НЕ роняют — только стабильность: иначе яма стала бы бездонной. Уйдут сами,
+    когда законность перевалит за ${CLAIM_CLEAR}.</div></div>`;
+    st.claimants.forEach((cl, i) => {
+      const y = Math.floor(cl.age / YEAR5);
+      const s = cl.strength;
+      const word = s >= 70 ? "смертельно опасен" : s >= 50 ? "опасен" : s >= 30 ? "заметен" : "слаб";
+      const col = s >= 70 ? "var(--bad)" : s >= 50 ? "var(--warn)" : "var(--dim)";
+      const f = cl.fid && typeof sim2.faction === "function" ? sim2.faction(cl.fid) : null;
+      html += `<div class="card"><div class="ttl"><span>${_esc2(cl.name)} из рода ${_esc2(cl.fam)}</span>
+        <span class="cost" style="color:${col}">${word} · ${s}</span></div>
+      <div class="relbar"><div style="width:${s}%;background:${col}"></div></div>
+      <div class="kv"><span>Возраст</span><span>${y} ${_pl(y, "год", "года", "лет")}</span></div>
+      <div class="kv"><span>Объявился</span><span>день ${Math.round(cl.since)}</span></div>
+      ${f ? `<div class="kv"><span>За спиной</span><span style="color:${f.color || "var(--accent)"}">${_esc2(f.name)}</span></div>` : cl.fid ? `<div class="kv"><span>За спиной</span><span>род соседа</span></div>` : ""}
+      ${_coupBtn(sim2, st, c, i, cl)}</div>`;
+    });
+    return html;
+  }
+  function _traits(sim2, st, c) {
+    const rl = ruler(st);
+    let html = `<h4 class="group">Черты правителя</h4>`;
+    if (!rl) return html + `<div class="card"><div class="desc">Трон пуст — черт нет и множителей тоже.</div></div>`;
+    if (!rl.traits.length) {
+      return html + `<div class="card"><div class="desc">${_esc2(rl.name)} ничем не выделяется: держава живёт на своих числах,
+      без надбавок и без потерь. Это лучше, чем слабоволие, и хуже, чем полководец.</div></div>`;
+    }
+    html += `<div class="card"><div class="desc">Черты наследуются с вероятностью ${Math.round(TRAIT_INHERIT * 100)}%:
+    у сына полководца больше шансов стать полководцем. Поэтому выбор наследника — это выбор множителей на десятилетия,
+    а не только имени.</div></div>`;
+    for (const id of rl.traits) {
+      const def = TRAIT_BY_ID5[id];
+      if (!def) continue;
+      const eff = [];
+      for (const [kind, v] of Object.entries(def.mult || {})) {
+        const pct = Math.round((v - 1) * 100);
+        if (pct) eff.push(`${_kindRu(kind)} ${_sign4(pct)}%`);
+      }
+      if (def.happy) eff.push(`счастье ${_sign4(def.happy)}`);
+      if (def.stabPerDay) eff.push(`стабильность ${_sign4(def.stabPerDay, 1)} в сутки`);
+      const w = TRAIT_POWER[id] || 0;
+      html += `<div class="card"><div class="ttl"><span>${_esc2(def.ru)}</span>
+        <span class="cost" style="color:${w > 0 ? "var(--good)" : w < 0 ? "var(--bad)" : "var(--dim)"}">вес в роду ${_sign4(w)}</span></div>
+      <div class="desc">${eff.length ? eff.join(" · ") : "прямых множителей нет"}</div>
+      <div class="desc" style="color:var(--dim)">Вес в роду — это сила в глазах дружины: по ней вождество выбирает
+        сильнейшего наследника, по ней же претендент считает свои шансы.</div></div>`;
+    }
+    return html;
+  }
+  function _actions(sim2, st, c, heir) {
+    let html = `<h4 class="group">Решения</h4>`;
+    html += _courtSection(sim2, st, c);
+    html += _marrySection(sim2, st, c, heir);
+    html += _coupSection(sim2, st, c);
+    return html;
+  }
+  function _courtSection(sim2, st, c) {
+    const lvl = COURT[_clampInt(st.court, 0, COURT.length - 1)];
+    const gold = courtGold(st, c);
+    const chk = canPatronize(st, c);
+    const cost = patronCost(c);
+    const cash = Math.round(c.gold);
+    let html = `<div class="card"><div class="ttl"><span>Двор: ${_esc2(lvl.ru)}</span>
+      <span class="cost">${gold.toFixed(1)} 🪙 в сутки</span></div>
+    <div class="desc">Двор — это то, что видят знать и послы. Содержание переключается в любой день в любую сторону:
+      это и есть выход из петли «двор дорог» — не влезайте в долги, понижайте ступень.</div>
+    <div class="kv"><span>Законность</span><span style="color:${lvl.leg > 0 ? "var(--good)" : "var(--bad)"}">${_sign4(lvl.leg, 2)} в сутки</span></div>
+    <div class="kv"><span>Знать · простолюдины</span><span>${_sign4(lvl.nobles, 2)} · ${_sign4(lvl.commons, 2)}</span></div>
+    ${lvl.happy ? `<div class="kv"><span>Счастье</span><span style="color:var(--bad)">${_sign4(lvl.happy)}</span></div>` : ""}
+    ${gold > cash ? `<div class="reason">Казны (${cash} 🪙) не хватает на двор: законность −${COURT_UNPAID_LEG} в сутки и обида знати. Понизьте содержание.</div>` : ""}</div>`;
+    for (const lv of COURT) {
+      if (lv.id === st.court) continue;
+      const g2 = lv.gold * (1 + (c.pop || 0) * COURT_PER_POP);
+      const can = canSetCourt(st, lv.id);
+      const label = `${lv.ru} — ${g2.toFixed(1)} 🪙/сут, законность ${_sign4(lv.leg, 2)}/сут, знать ${_sign4(lv.nobles, 2)}, простолюдины ${_sign4(lv.commons, 2)}`;
+      html += `<div class="card"><div class="ttl"><span>${_esc2(lv.ru)}</span><span class="cost">${g2.toFixed(1)} 🪙 в сутки</span></div>
+      ${_btn(`court:${lv.id}`, label, can.ok && _actReady("dynastySetCourt") ? { ok: true } : can.ok ? { ok: false, reason: NOT_WIRED } : can, sim2, false)}</div>`;
+    }
+    const patronLabel = `Поддержать двор — ${cost} 🪙 → законность +${PATRON_LEG}, знать +4, простолюдины −3`;
+    html += `<div class="card"><div class="ttl"><span>Поддержать двор</span><span class="cost">${cost} 🪙</span></div>
+    <div class="desc">Пиры, дары, послы. Цена растёт с державой: ${PATRON_COST} + ${PATRON_PER_POP} 🪙 за жителя (сейчас ${c.pop}).
+      Повторить можно через ${PATRON_CD} дней — иначе законность покупалась бы кнопкой, а не делами.</div>
+    ${_btn("patron", patronLabel, chk.ok && _actReady("dynastyPatronize") ? { ok: true } : chk.ok ? { ok: false, reason: NOT_WIRED } : chk, sim2, false)}</div>`;
+    return html;
+  }
+  function _marrySection(sim2, st, c, heir) {
+    const who = heir ? heir.member : bloodMembers(st).filter((x) => x.id !== st.rulerId && x.spouse == null).sort((a, b) => b.age - a.age)[0] || null;
+    let html = `<div class="card"><div class="ttl"><span>Женить наследника</span>
+      <span class="cost">отношения +${MARRY_REL}</span></div>
+    <div class="desc">Брак с родом соседа — это союз и права на трон В ОБЕ СТОРОНЫ. Мы получаем право на их трон,
+      они — на наш: именно из этих браков потом приходят претенденты, когда законность падает ниже ${CLAIM_BELOW}.
+      Сила чужого права — ${FOREIGN_CLAIM}.</div>
+    <div class="kv"><span>Кого женим</span><span>${who ? `${_esc2(who.name)}, ${ageYearsOf(who)} ${_pl(ageYearsOf(who), "год", "года", "лет")}` : "—"}</span></div></div>`;
+    if (st.ties.length) {
+      html += `<div class="card done-card"><div class="ttl"><span>Уже породнились</span><span class="cost">${st.ties.length}</span></div>
+      ${st.ties.map((t) => {
+        const f = typeof sim2.faction === "function" ? sim2.faction(t.fid) : null;
+        return `<div class="kv"><span>род ${_esc2(t.house)}${f ? ` (${_esc2(f.name)})` : ""}</span>
+          <span>с дня ${Math.round(t.since)} · право на наш трон ${Math.round(t.claim)}</span></div>`;
+      }).join("")}</div>`;
+    }
+    const list = Array.isArray(sim2.factions) ? sim2.factions : [];
+    if (!list.length) {
+      return html + `<div class="card"><div class="desc">Соседей ещё не встретили: роднить не с кем.</div></div>`;
+    }
+    for (const f of list) {
+      const rel = _rel(sim2, f.id);
+      const chk = canMarryHeir(st, c, { fid: f.id, rel });
+      const ready = _actReady("dynastyMarry");
+      const label = `Женить на роде ${f.name} — отношения ${_sign4(MARRY_REL)}, законность ${_sign4(MARRY_LEG)}; цена: их право на наш трон ${FOREIGN_CLAIM}`;
+      html += `<div class="card${chk.ok ? "" : " disabled"}">
+      <div class="ttl"><span><span style="color:${f.color || "var(--accent)"}">⬤</span> ${_esc2(f.name)}</span>
+        <span class="cost" style="color:${rel >= 0 ? "var(--good)" : "var(--bad)"}">отношения ${Math.round(rel)}</span></div>
+      ${f.leader ? `<div class="desc">${_esc2(f.leader)}</div>` : ""}
+      ${_btn(`marry:${f.id}`, label, chk.ok && ready ? { ok: true } : chk.ok ? { ok: false, reason: NOT_WIRED } : chk, sim2, true)}</div>`;
+    }
+    return html;
+  }
+  function _coupSection(sim2, st, c) {
+    const chk = canOverthrow(st, c, {});
+    return `<div class="card"><div class="ttl"><span>Свергнуть правителя</span>
+      <span class="cost" style="color:var(--bad)">−${COUP_STAB} стабильности</span></div>
+    <div class="desc">Заговор ставит НОВЫЙ род: прежний уходит целиком, вместе с наследниками, браками и чужими правами.
+      Законность нового дома — ${COUP_LEG}, её придётся заслуживать заново, и первые годы он будет уязвим для таких же заговорщиков.</div>
+    <div class="kv"><span>Нужна знать</span><span style="color:${c.nobles >= COUP_NEED_NOBLES ? "var(--good)" : "var(--bad)"}">${COUP_NEED_NOBLES} (есть ${Math.round(c.nobles)})</span></div>
+    <div class="kv"><span>Нужно войско</span><span style="color:${c.military >= COUP_NEED_MILITARY ? "var(--good)" : "var(--bad)"}">${COUP_NEED_MILITARY} (есть ${Math.round(c.military)})</span></div>
+    <div class="kv"><span>Нужна стабильность</span><span style="color:${c.stability >= COUP_STAB ? "var(--good)" : "var(--bad)"}">${COUP_STAB} (есть ${Math.round(c.stability)})</span></div>
+    <div class="kv"><span>Законность рода</span><span style="color:${st.legitimacy < 75 ? "var(--good)" : "var(--bad)"}">ниже 75 (сейчас ${Math.round(st.legitimacy)})</span></div>
+    ${_btn(
+      "coup",
+      `Переворот — −${COUP_STAB} стабильности, знать −5, простолюдины −5, войско +3; новый род с законностью ${COUP_LEG}`,
+      chk.ok && _actReady("dynastyOverthrow") ? { ok: true } : chk.ok ? { ok: false, reason: NOT_WIRED } : chk,
+      sim2,
+      true
+    )}</div>`;
+  }
+  function _coupBtn(sim2, st, c, i, cl) {
+    const chk = canOverthrow(st, c, { claimant: i });
+    const label = `Возвести ${cl.name} — −${COUP_STAB} стабильности; род ${cl.fam} садится на трон с законностью ${COUP_LEG}`;
+    return _btn(
+      `coup:${i}`,
+      label,
+      chk.ok && _actReady("dynastyOverthrow") ? { ok: true } : chk.ok ? { ok: false, reason: NOT_WIRED } : chk,
+      sim2,
+      true
+    );
+  }
+  function _graves(st, c) {
+    if (!st.graves.length) return "";
+    return `<h4 class="group">Погост</h4>
+    <div class="card" style="opacity:0.55"><div class="ttl"><span style="color:var(--dim)">Кого помнит род</span>
+        <span class="cost" style="color:var(--dim)">последние ${st.graves.length}</span></div>
+      ${st.graves.slice().reverse().map((g2) => `<div class="kv">
+        <span style="color:var(--dim)">✝ ${_esc2(g2.name)}</span>
+        <span style="color:var(--dim)">${g2.years} ${_pl(g2.years, "год", "года", "лет")} · день ${Math.round(g2.day)}${c.day - g2.day < YEAR5 ? " · в этом году" : ""}</span></div>`).join("")}</div>`;
+  }
+  function _stats(st, c) {
+    const s = st.stats || {};
+    const years = Math.floor(Math.max(0, c.day - st.foundedDay) / YEAR5);
+    return `<h4 class="group">Счёт рода</h4>
+    <div class="card">
+      <div class="kv"><span>Дом стоит</span><span>${years} ${_pl(years, "год", "года", "лет")}</span></div>
+      <div class="kv"><span>Правителей сменилось</span><span>${s.rulers || 0}</span></div>
+      <div class="kv"><span>Родилось · умерло</span><span>${s.births || 0} · ${s.deaths || 0}</span></div>
+      <div class="kv"><span>Переворотов</span><span style="color:${s.coups ? "var(--bad)" : "var(--dim)"}">${s.coups || 0}</span></div>
+      <div class="kv"><span>Междуцарствий</span><span style="color:${s.interregnums ? "var(--bad)" : "var(--dim)"}">${s.interregnums || 0}</span></div>
+      <div class="kv"><span>Домов на троне</span><span>${s.houses || 1}</span></div></div>`;
+  }
+  function handleDynastyAction(sim2, spec) {
+    const st = dynState(sim2);
+    if (!st) return { ok: false, reason: "Род не подключён к ядру" };
+    const parts = String(spec || "").split(":");
+    const kind = parts[0];
+    const c = dynCtx(sim2);
+    if (kind === "patron") {
+      const chk = canPatronize(st, c);
+      if (!chk.ok) return { ok: false, reason: chk.reason };
+      return _run(sim2, "dynastyPatronize", [], `Двору поднесены дары: законность +${PATRON_LEG}`, "coin");
+    }
+    if (kind === "court") {
+      const lvl = Number(parts[1]);
+      const chk = canSetCourt(st, lvl);
+      if (!chk.ok) return { ok: false, reason: chk.reason };
+      return _run(sim2, "dynastySetCourt", [lvl], `Двор: ${COURT[lvl].ru}`, "click");
+    }
+    if (kind === "heir") {
+      if (parts[1] === "clear") {
+        if (st.namedHeirId == null) return { ok: false, reason: "Наследник и не назначался" };
+        return _run(sim2, "dynastyClearHeir", [], "Назначение отменено: трон снова по обычаю", "click");
+      }
+      const id = Number(parts[1]);
+      const chk = canNameHeir(st, id, c);
+      if (!chk.ok) return { ok: false, reason: chk.reason };
+      return _run(sim2, "dynastyNameHeir", [id], `Наследником объявлен ${chk.member.name}`, "click");
+    }
+    if (kind === "marry") {
+      const fid = parts.slice(1).join(":");
+      const chk = canMarryHeir(st, c, { fid, rel: _rel(sim2, fid) });
+      if (!chk.ok) return { ok: false, reason: chk.reason };
+      const f = typeof sim2.faction === "function" ? sim2.faction(fid) : null;
+      const need = _confirm(sim2, spec, `Брак навсегда отдаёт роду ${f ? f.name : "соседа"} право на наш трон (${FOREIGN_CLAIM}). Нажмите ещё раз.`);
+      if (need) return need;
+      return _run(
+        sim2,
+        "dynastyMarry",
+        [fid, f ? f.name : void 0],
+        `${chk.member.name} женится: отношения +${MARRY_REL}`,
+        "era"
+      );
+    }
+    if (kind === "coup") {
+      const idx = parts[1] != null && parts[1] !== "" ? Number(parts[1]) : null;
+      const chk = canOverthrow(st, c, idx != null ? { claimant: idx } : {});
+      if (!chk.ok) return { ok: false, reason: chk.reason };
+      const need = _confirm(sim2, spec, `Переворот сметёт род ${st.fam} целиком — с наследниками и союзами. Нажмите ещё раз.`);
+      if (need) return need;
+      return _run(sim2, "dynastyOverthrow", [idx], `Род ${st.fam} низложен`, "alarm");
+    }
+    return { ok: false, reason: "Неизвестная операция" };
+  }
+  function _actReady(name) {
+    return typeof integrate_exports[name] === "function";
+  }
+  function _run(sim2, name, args, text, sound) {
+    const fn = integrate_exports[name];
+    if (typeof fn !== "function") return { ok: false, reason: NOT_WIRED };
+    const r = fn(sim2, ...args) || {};
+    if (r.ok === false) return { ok: false, reason: r.reason || "Отказано" };
+    return { ok: true, text, sound };
+  }
+  function _confirm(sim2, spec, text) {
+    const cur = CONFIRM.get(sim2);
+    const day = sim2.day || 0;
+    if (cur && cur.spec === spec && Math.abs(day - cur.day) <= CONFIRM_DAYS2) {
+      CONFIRM.delete(sim2);
+      return null;
+    }
+    CONFIRM.set(sim2, { spec, day });
+    return { ok: true, text, sound: "click", confirm: true };
+  }
+  function _awaiting(sim2, spec) {
+    const cur = CONFIRM.get(sim2);
+    return !!cur && cur.spec === spec && Math.abs((sim2.day || 0) - cur.day) <= CONFIRM_DAYS2;
+  }
+  function bindDynastyPanel(a, b, opts = {}) {
+    const root = _isRoot(a) ? a : _isRoot(b) ? b : null;
+    const sim2 = _isSim(a) ? a : _isSim(b) ? b : null;
+    if (!root || !sim2) return 0;
+    const o = _opts(opts);
+    let bound = 0;
+    for (const el of Array.from(root.querySelectorAll("[data-dyn]"))) {
+      const spec = el.dataset && el.dataset.dyn || (typeof el.getAttribute === "function" ? el.getAttribute("data-dyn") : "");
+      el.onclick = () => {
+        const r = handleDynastyAction(sim2, spec);
+        if (!r.ok) {
+          o.toast(r.reason, "warn");
+          o.play("deny");
+        } else {
+          if (r.text) o.toast(r.text, r.confirm ? "warn" : "good");
+          o.play(r.sound || "click");
+        }
+        o.refresh();
+        return r;
+      };
+      bound++;
+    }
+    return bound;
+  }
+  function _isRoot(x) {
+    return !!x && typeof x.querySelectorAll === "function";
+  }
+  function _isSim(x) {
+    return !!x && !_isRoot(x) && (x.dynasty !== void 0 || x.res !== void 0 || x.day !== void 0);
+  }
+  function _opts(o) {
+    o = o || {};
+    return {
+      toast: typeof o.toast === "function" ? (t, k) => o.toast(t, k) : () => {
+      },
+      play: o.audio && typeof o.audio.play === "function" ? (n) => o.audio.play(n) : () => {
+      },
+      refresh: typeof o.refresh === "function" ? () => o.refresh() : typeof o.renderPanel === "function" ? () => o.renderPanel() : () => {
+      }
+    };
+  }
+  function _btn(spec, label, chk, sim2, danger) {
+    if (!chk.ok) {
+      return `<button class="btn" style="width:100%;margin-top:8px" disabled>${_esc2(label)}</button>
+      <div class="reason">${_esc2(chk.reason || "Недоступно")}</div>`;
+    }
+    const wait = _awaiting(sim2, spec);
+    const cls = wait ? "btn danger" : danger ? "btn danger" : "btn";
+    return `<button class="${cls}" style="width:100%;margin-top:8px" data-dyn="${_esc2(spec)}">${wait ? "Подтвердить: назад пути нет" : _esc2(label)}</button>`;
+  }
+  function _legColor(v) {
+    return v >= 60 ? "var(--good)" : v >= CLAIM_BELOW ? "var(--warn)" : "var(--bad)";
+  }
+  function _traitRu(id) {
+    const t = TRAIT_BY_ID5[id];
+    return t ? t.ru : id;
+  }
+  function _kindRu(kind) {
+    return {
+      army: "армия",
+      build: "стройка",
+      knowledge: "знание",
+      gold: "золото",
+      gather: "добыча",
+      industry: "промышленность",
+      unrest: "беспорядки"
+    }[kind] || kind;
+  }
+  function _rel(sim2, fid) {
+    const r = sim2 && sim2.relations ? sim2.relations[fid] : 0;
+    if (typeof r === "number") return r;
+    if (r && typeof r.v === "number") return r.v;
+    return 0;
+  }
+  function _sign4(v, digits = 0) {
+    const n = Number(v) || 0;
+    const a = Math.abs(n).toFixed(digits);
+    return `${n > 0 ? "+" : n < 0 ? "−" : ""}${a}`;
+  }
+  function _pl(n, one, few, many) {
+    const a = Math.abs(Math.round(n)) % 100, b = a % 10;
+    if (a > 10 && a < 20) return many;
+    if (b > 1 && b < 5) return few;
+    if (b === 1) return one;
+    return many;
+  }
+  function _clampInt(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, Math.round(Number(v) || 0)));
+  }
+  function _esc2(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
   // app/src/ui/hud.js
   var RATE_TAU = 2.5;
   var RATE_WARMUP = 0.3;
@@ -35827,6 +39025,9 @@ ${s}`, "console");
     { id: "war", ru: "Война", ic: "🛡" },
     { id: "politics", ru: "Держава", ic: "⚖" },
     { id: "empire", ru: "Города", ic: "🏛" },
+    // Род стоит сразу за «Державой» и «Городами»: это тот же куст власти,
+    // и игрок ищет его там.
+    { id: "dynasty", ru: "Род", ic: "♛" },
     { id: "labor", ru: "Труд", ic: "👷" },
     { id: "goals", ru: "Цели", ic: "🎯" },
     // Летопись — не архив, а действующая механика: что народ помнит, тем и
@@ -36467,6 +39668,11 @@ ${out}`;
         audio: this.audio,
         refresh: () => this.renderPanel()
       });
+      bindDynastyPanel(root, this.sim, {
+        toast: (t, k) => this.toast(t, k),
+        audio: this.audio,
+        refresh: () => this.renderPanel()
+      });
       const panelCtx = {
         toast: (t, k) => this.toast(t, k),
         audio: this.audio,
@@ -36808,6 +40014,9 @@ ${out}`;
     }
     panel_empire() {
       return PANELS.empire.render(this.sim);
+    }
+    panel_dynasty() {
+      return renderDynastyPanel(this.sim);
     }
     panel_memory() {
       const s = this.sim;

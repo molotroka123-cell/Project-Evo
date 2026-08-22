@@ -28,8 +28,10 @@ import * as MEM from './link_memory.js';
 import * as INT from './link_intel.js';
 import * as MAS from './link_masters.js';
 import * as GH from './link_ghost.js';
+import * as LDYN from './link_dynasty.js';
 import * as B2 from './build2.js';
 import * as HERD from './herds.js';
+import * as DYN from './dynasty.js';
 import { tileAt } from '../world.js';
 import { createRng } from '../rng.js';
 
@@ -73,6 +75,9 @@ export function installSystems(sim) {
   sim.linkTerritory = TER.createTerritoryMemory();
   // Летопись как причина: что пережито, то меняет поведение державы.
   sim.linkMemory = MEM.createMemory();
+  // Память связи «род → сословия»: насколько созрел заговор, какие удары по
+  // законности уже отданы роду, когда последний раз о них говорили.
+  sim.linkDynasty = LDYN.createDynastyLink();
   // Разведка: что мы знаем о соседях и когда об этом слышали в последний раз.
   sim.linkIntel = INT.createIntel();
   // Ремесло живёт в людях: у каждого промысла свой мастер и свой ученик.
@@ -84,6 +89,31 @@ export function installSystems(sim) {
   sim.build = B2.createBuild();
   // Стада: дичь возобновляема, но исчерпаема. Ставится ПОСЛЕ мира и ДО первого
   // дня — иначе первый же охотник не найдёт ни одного стада.
+  // Род, а не сменный человек: у власти стоит семья с именами и наследниками.
+  //
+  // СВОЙ ПОТОК СЛУЧАЙНОСТИ, а не sim.rng, как просит блок подключения
+  // dynasty.js. Оговорюсь честно: это ПРЕДОСТОРОЖНОСТЬ, а не пойманная
+  // поломка. Я проверил обе версии — круг сохранения (simtest, «сейв v3
+  // круговой») проходит и с sim.rng тоже.
+  //
+  // Но ровно этот приём — брать числа из главного потока при постройке мира —
+  // уже ломал игру на стадах: часть состояния державы выводится прямо в
+  // installSystems и в сейв не пишется, после загрузки она расходилась, и
+  // круг падал на двух позициях sys.emp.sites.fog. Здесь пронесло случайно:
+  // createDynasty берёт столько чисел, что до чувствительного места сдвиг не
+  // дошёл. Стоит роду обзавестись лишним броском — и дойдёт.
+  //
+  // Отдельный поток снимает вопрос целиком и не стоит ничего. Смена трона по
+  // ходу партии берёт sim.rng и дальше: там все игроки идут одним и тем же
+  // днём, и сдвига не возникает.
+  sim.dynasty = DYN.createDynasty(createRng((sim.seed ^ 0x44594e00) >>> 0), { day: sim.day });
+  // Правитель politics.js СТАНОВИТСЯ главой рода. Это не второй правитель:
+  // politics.state.ruler остаётся единственным местом, откуда ядро берёт черты
+  // и множители, — просто теперь его туда кладёт род, а не createRuler().
+  if (sim.politics && sim.politics.state) {
+    const r0 = DYN.politicsRuler(sim.dynasty);
+    if (r0) sim.politics.state.ruler = r0;
+  }
   sim.herds = HERD.createHerds();
   {
     const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
@@ -120,6 +150,10 @@ export function systemsNewDay(sim) {
   IND.industryNewDay(sim);
   WAR.onNewDay(sim);
   POL.politicsNewDay(sim);
+  // Порядок обязателен: politics считает смерть правителя первой, род читает
+  // уже сложившийся день. Раньше politicsNewDay род выбрал бы наследника до
+  // того, как правитель умер, и трон сменился бы на сутки раньше журнала.
+  applyDynasty(sim);
   EMP.empireNewDay(sim);
   // Связи идут последними: они читают уже сложившийся день. Хозяйство раньше
   // выживания намеренно — налоги и долг это причина, а голод и стужа читают
@@ -149,6 +183,11 @@ export function systemsNewDay(sim) {
   // должна записать в те же сутки.
   applyHerds(sim);
   applyMemoryLinks(sim, harvestScars(sim, { war: warOut, surv: survOut }));
+  // Род идёт ПОСЛЕ памяти намеренно: связь берёт удары по законности из уже
+  // записанных за эти сутки шрамов, а не разбирает летопись во второй раз.
+  // Отсюда суточная задержка: собранное сегодня applyDynasty съест завтра.
+  // Она честнее альтернативы — считать беду дважды в один день из двух мест.
+  applyDynastyLinks(sim);
 }
 
 // ---------- Соседи ----------
@@ -308,12 +347,14 @@ export function systemsSerialize(sim) {
     ind: IND.industrySerialize(sim),
     war: WAR.serialize(sim),
     pol: POL.politicsSerialize(sim),
+    dyn: DYN.serializeDynasty(sim.dynasty),
     emp: EMP.empireSerialize(sim),
     link: sim.linkSurvival || null,
     linkInd: sim.linkIndustry || null,
     terr: sim.linkTerritory || null,
     linkWar: sim.linkWar || null,
     mem: sim.linkMemory || null,
+    dynLink: LDYN.serializeDynastyLink(sim.linkDynasty),
     intel: sim.linkIntel || null,
     masters: sim.linkMasters || null,
     ghost: sim.linkGhost || null,
@@ -331,12 +372,16 @@ export function systemsRestore(sim, data) {
   if (data.ind) IND.industryRestore(sim, data.ind);
   if (data.war) WAR.restore(sim, data.war);
   if (data.pol) POL.politicsRestore(sim, data.pol);
+  // Старый сейв без поля dyn грузится: restoreDynasty(undefined) вернёт
+  // пустой род, ближайший applyDynasty поднимет новый дом.
+  sim.dynasty = DYN.restoreDynasty(data.dyn);
   if (data.emp) EMP.empireRestore(sim, data.emp);
   sim.linkSurvival = LS.restoreSurvivalMemory(data.link);
   sim.linkIndustry = LIND.restoreIndustryMemory(data.linkInd);
   sim.linkTerritory = TER.restoreTerritoryMemory(data.terr);
   sim.linkWar = LWR.restoreWarMemory(data.linkWar);
   sim.linkMemory = MEM.restoreMemory(data.mem);
+  sim.linkDynasty = LDYN.restoreDynastyLink(data.dynLink);
   sim.linkIntel = INT.restoreIntel(data.intel);
   sim.linkMasters = MAS.restoreMasters(data.masters);
   sim.linkGhost = GH.restoreGhost(data.ghost);
@@ -526,6 +571,92 @@ function applyGhost(sim) {
 export function ghostPanel(sim, key) { return GH.ghostReport(sim, key); }
 export function ghostSeal(sim) { return GH.sealRun(sim); }
 
+// ---------- Род и сословия ----------
+// Связь ничего не пишет в sim: она возвращает отчёт, а применение — здесь.
+function applyDynastyLinks(sim) {
+  if (!sim.linkDynasty) sim.linkDynasty = LDYN.createDynastyLink();
+  const out = LDYN.dynastyLinks(sim);
+  sim.linkDynasty = out.flags.memory;
+  sim.sys.dynastyLink = out;
+
+  const pst = sim.politics && sim.politics.state;
+  if (pst) {
+    // Тяга и разовый удар складываются одним слагаемым — ровно как в
+    // applyTerritoryLinks и applySurvivalLinks. Двух разных путей к
+    // стабильности быть не должно.
+    const dS = out.mods.stability + out.mods.stabilityShock;
+    pst.stability = Math.max(0, Math.min(100, pst.stability + dS));
+    for (const fid of Object.keys(out.mods.estates)) {
+      const d = out.mods.estates[fid] + out.mods.estatesShock[fid];
+      if (!d || pst.factions[fid] == null) continue;
+      pst.factions[fid] = Math.max(0, Math.min(100, pst.factions[fid] + d));
+    }
+  }
+
+  // Сепаратизм НЕ считается здесь второй раз: связь подаёт одно число, а
+  // потолок смуты остаётся тем же, что в applyTerritoryLinks (12 = UNREST_REVOLT
+  // + 2 из empire.js). Иначе у смуты появилось бы два разных потолка.
+  if (out.mods.cityUnrestAll && sim.empire) {
+    for (const c of sim.empire.state.cities) {
+      c.unrest = Math.max(0, Math.min(12, (c.unrest || 0) + out.mods.cityUnrestAll));
+    }
+  }
+
+  // Разовые удары по законности уходят роду СПИСКОМ, а не состоянием: их
+  // съест applyDynasty на следующих сутках и обнулит sim.sys.dynEvents.
+  // Ограничение сверху обязательно: если applyDynasty ещё не подключён,
+  // список иначе рос бы всю партию и попадал в каждый сейв.
+  if (out.flags.dynEvents.length) {
+    sim.sys.dynEvents = (sim.sys.dynEvents || []).concat(out.flags.dynEvents).slice(-20);
+  }
+
+  // Заговор ударил. Переворот делает МОДЕЛЬ РОДА — связь только называет час.
+  // Строка работает лишь после подключения dynasty.js (блок 5 в её файле);
+  // до этого проверка typeof молча пропустит её, и партия не сломается.
+  if (out.flags.coupNow && sim.dynasty && typeof dynastyOverthrow === 'function') {
+    dynastyOverthrow(sim, out.flags.coupNow.claimant);
+  }
+
+  for (const e of out.events) {
+    sim.addLog(e.text, e.type === 'bad' ? 'bad' : (e.type === 'good' ? 'good' : 'info'));
+    // В ЛЕТОПИСЬ — НЕ КАЖДУЮ ПОПЫТКУ. Удавшийся переворот заносится всегда:
+    // это смена власти. Сорвавшаяся попытка — только первая у этого дома.
+    //
+    // Иначе выходит вот что, и это не догадка, а прогон на 12 000 дней (сид 11,
+    // эпоха 3): знать сидит на одобрении 0, замок «нужно 40, есть 0» не
+    // открывается никогда, а заговор дозревает заново каждые ~206 суток. В
+    // летопись ложились тридцать семь СОВЕРШЕННО ОДИНАКОВЫХ строк «Заговор
+    // сорван: Знать не пойдёт: нужно одобрение 40, есть 0». Летопись — это
+    // память о том, что было важно, а не журнал; тридцать седьмой повтор
+    // одного и того же вытесняет из неё войну и голод.
+    //
+    // Сама повторяемость попыток — замысел связи, и я его не трогаю: выход у
+    // игрока есть и назван словами каждый день (поднять знать до 40), а цена
+    // −8 стабильности за попытку и есть давление, ради которого всё писалось.
+    // Правится только запись в вечную память, и только здесь, в применителе.
+    if (e.cause === 'coup') {
+      if (out.flags.coupNow) {
+        sim.addChronicle(e.text);
+        sim.sys._coupFailHouse = null;
+      } else {
+        const house = `${sim.dynasty ? sim.dynasty.fam : '?'}|${out.flags.coupFailed || ''}`;
+        if (sim.sys._coupFailHouse !== house) {
+          sim.sys._coupFailHouse = house;
+          sim.addChronicle(e.text);
+        }
+      }
+    }
+  }
+  if (out.flags.stage >= 3) sim.sfx?.('alarm');
+  return out;
+}
+
+// Панель «Род и держава»: кто за трон, кто против и как гасить заговор.
+export function dynastyLinkPanel(sim) { return LDYN.dynastyLinkBreakdown(sim); }
+// Гасит кнопку «назначить наследника», когда знать связала роду руки.
+export function dynastyHeirAllowed(sim) { return LDYN.canNameHeirNow(sim); }
+
+
 // Ремесло живёт в людях: мастер, ученик и то, что уходит вместе с мастером.
 function applyMasterLinks(sim) {
   if (!sim.linkMasters) sim.linkMasters = MAS.createMasters();
@@ -553,6 +684,123 @@ function applyMasterLinks(sim) {
 
 // Строки для панели «Народ»: у кого что в руках и чем рискуем.
 export function mastersPanel(sim) { return MAS.mastersReport(sim); }
+
+// ---------- Династия ----------
+// Род ничего не пишет в sim: он возвращает новое состояние и отчёт, а всё
+// применение — здесь. Единственное место, где sim и род встречаются.
+function dynastyCtx(sim) {
+  const st = sim.politics && sim.politics.state;
+  const pop = sim.villagers ? sim.villagers.length : 0;
+  return {
+    day: sim.day, gov: st ? st.gov : 'chiefdom', era: sim.eraIndex, pop,
+    gold: sim.res ? sim.res.gold : 0,
+    foodDays: sim.res ? sim.res.food / Math.max(1, pop * 0.7) : 99,
+    wars: Array.isArray(sim.wars) ? sim.wars.length : 0,
+    stability: st ? st.stability : 50,
+    happy: sim._happy != null ? sim._happy : 50,
+    // sim.plagueMult В ЯДРЕ НЕТ — ни метода, ни поля. Сторожевое условие тут
+    // стояло с самого начала и молча даёт 1, то есть «мор не влияет». Ровно та
+    // же строка с той же оговоркой лежит в population.js: два агента
+    // независимо предположили одно и то же несуществующее поле. Оставляю как
+    // есть (1 — верное нейтральное значение, ничего не искажает), но пишу это
+    // словами, чтобы связь «мор → законность» не считали работающей.
+    mortalityMult: sim.plagueMult ? sim.plagueMult() : 1,
+    nobles: st ? st.factions.nobles : 50,
+    military: st ? st.factions.military : 50,
+    // СОБЫТИЯ, А НЕ СОСТОЯНИЯ. Список разовых ударов за эти сутки; род сам
+    // держит сезонное окно, чтобы месяц голода не считался тридцать раз.
+    events: sim.sys && sim.sys.dynEvents ? sim.sys.dynEvents : [],
+  };
+}
+
+function applyDynasty(sim) {
+  if (!sim.dynasty) sim.dynasty = DYN.createDynasty(createRng((sim.seed ^ 0x44594e00) >>> 0), { day: sim.day });
+  const rep = DYN.dynastyNewDay(sim.dynasty, dynastyCtx(sim), sim.rng);
+  sim.dynasty = rep.state;
+  const st = sim.politics && sim.politics.state;
+  if (st) {
+    st.stability = Math.max(0, Math.min(100, st.stability + rep.mods.stability));
+    for (const [fid, d] of Object.entries(rep.mods.estates)) {
+      if (st.factions[fid] != null) st.factions[fid] = Math.max(0, Math.min(100, st.factions[fid] + d));
+    }
+    // Правитель ядра — это глава рода. Пока идёт междуцарствие, ruler = null,
+    // и politics.js сам поставит временного: пустой трон ядру не нужен.
+    const r = DYN.politicsRuler(sim.dynasty);
+    if (r) st.ruler = r;
+  }
+  if (rep.mods.goldPerDay && sim.res) sim.res.gold = Math.max(0, sim.res.gold + rep.mods.goldPerDay);
+  for (const e of rep.events) {
+    sim.addLog(e.text, e.type === 'bad' ? 'bad' : (e.type === 'good' ? 'good' : 'info'));
+    if (e.cause === 'succession' || e.cause === 'interregnum' || e.cause === 'coup' || e.cause === 'house_change') {
+      sim.addChronicle(e.text);
+    }
+  }
+  sim.sys.dynastyReport = rep;
+  sim.sys.dynEvents = [];      // список разовых ударов израсходован
+}
+
+export function dynastyPanel(sim) { return DYN.dynastyCard(sim.dynasty, dynastyCtx(sim)); }
+export function dynastyRows(sim) { return DYN.dynastyRows(sim.dynasty, dynastyCtx(sim)); }
+// Действия игрока. Каждое возвращает { ok, reason } — кнопка показывает причину
+// отказа словами, а не гаснет молча.
+export function dynastyPatronize(sim) {
+  const r = DYN.patronizeCourt(sim.dynasty, dynastyCtx(sim));
+  if (r.ok) {
+    sim.dynasty = r.state;
+    sim.res.gold = Math.max(0, sim.res.gold + r.mods.gold);
+    const st = sim.politics && sim.politics.state;
+    if (st) for (const [fid, d] of Object.entries(r.mods.estates)) {
+      if (st.factions[fid] != null) st.factions[fid] = Math.max(0, Math.min(100, st.factions[fid] + d));
+    }
+    for (const e of r.events) sim.addLog(e.text, e.type);
+  } else if (typeof sim.toast === 'function') sim.toast(r.reason);
+  return r;
+}
+// Отмена назначения. Без неё назначение вопреки обычаю становится ловушкой:
+// −0.10 законности в сутки навсегда, и выхода из петли нет. У каждой петли в
+// этом проекте обязан быть выход.
+export function dynastyClearHeir(sim) {
+  const r = DYN.clearHeir(sim.dynasty);
+  if (r.ok) { sim.dynasty = r.state; for (const e of r.events) sim.addLog(e.text, e.type); }
+  else if (typeof sim.toast === 'function') sim.toast(r.reason);
+  return r;
+}
+export function dynastyNameHeir(sim, id) {
+  const r = DYN.nameHeir(sim.dynasty, id, dynastyCtx(sim));
+  if (r.ok) { sim.dynasty = r.state; for (const e of r.events) sim.addLog(e.text, e.type); }
+  else if (typeof sim.toast === 'function') sim.toast(r.reason);
+  return r;
+}
+export function dynastyMarry(sim, fid, house) {
+  const r = DYN.marryHeir(sim.dynasty, dynastyCtx(sim), { fid, house, rel: relValue(sim, fid) }, sim.rng);
+  if (r.ok) {
+    sim.dynasty = r.state;
+    for (const e of r.events) sim.addLog(e.text, e.type);
+    // Отношения ядро держит то числом, то объектом с полем v — трогаем ту же
+    // форму, в какой они лежат, иначе прибавка потеряется молча.
+    const cur = sim.relations && sim.relations[fid];
+    if (typeof cur === 'number') sim.relations[fid] = cur + r.mods.relations[fid];
+    else if (cur && typeof cur.v === 'number') cur.v += r.mods.relations[fid];
+  } else if (typeof sim.toast === 'function') sim.toast(r.reason);
+  return r;
+}
+export function dynastyOverthrow(sim, claimant) {
+  const r = DYN.overthrow(sim.dynasty, dynastyCtx(sim), { claimant }, sim.rng);
+  if (r.ok) {
+    sim.dynasty = r.state;
+    const st = sim.politics && sim.politics.state;
+    if (st) st.stability = Math.max(0, st.stability + r.mods.stability);
+    for (const e of r.events) { sim.addLog(e.text, e.type); sim.addChronicle(e.text); }
+  } else if (typeof sim.toast === 'function') sim.toast(r.reason);
+  return r;
+}
+export function dynastySetCourt(sim, level) {
+  const r = DYN.setCourt(sim.dynasty, level);
+  if (r.ok) { sim.dynasty = r.state; for (const e of r.events) sim.addLog(e.text, e.type); }
+  else if (typeof sim.toast === 'function') sim.toast(r.reason);
+  return r;
+}
+
 
 // ---------- Стада ----------
 function applyHerds(sim) {
