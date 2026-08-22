@@ -14,10 +14,12 @@ import { Vegetation } from './vegetation.js';
 import { ReliefLayer } from './relief.js';
 import { ShadowLayer } from './shadows.js';
 import { FxLayer } from './fx.js';
+import { MinimapLayer } from './minimap.js';
 import { SelectLayer } from './select.js';
 import { IconLayer } from './icons.js';
 import { CityLights } from './city_lights.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
+import { PostFX } from './postfx.js';
 
 const TILE_PX = 32; // мировая единица «тайл→экран» при zoom=1 — НЕ зависит от пресета графики
 
@@ -56,6 +58,8 @@ export class Renderer {
     this.relief = new ReliefLayer(this.quality);
     this.shadows = new ShadowLayer(this.quality);
     this.fx = new FxLayer(this.quality);
+    this.minimap = new MinimapLayer(this.quality);
+    this.postfx = new PostFX(this.quality);
     this.select = new SelectLayer(this.quality);       // наведение и выделение
     this.icons = new IconLayer(this.quality);          // значки состояния
     this.cityLights = new CityLights(this.quality);    // окна и фонари ночью
@@ -82,6 +86,8 @@ export class Renderer {
     this.relief.setQuality(this.quality);
     this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
+    this.minimap.setQuality(this.quality);
+    this.postfx.setQuality(this.quality);
     this.select.setQuality(this.quality);
     this.icons.setQuality(this.quality);
     this.cityLights.setQuality(this.quality);
@@ -126,6 +132,7 @@ export class Renderer {
 
     const z = TILE_PX * this.cam.zoom;
     const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
+    this.postfx.begin(sim, cw, ch, L, { dpr, ox, oy, z, zoom: this.cam.zoom, time: this.time });
 
     // --- местность (чанками, рельефное освещение, береговая линия) ---
     this.terrain.draw(ctx, sim, ox, oy, z, cw, ch);
@@ -223,15 +230,9 @@ export class Renderer {
     this.atmo.drawOverlay(sim, ctx, ox, oy, z, cw, ch);
 
     // --- свет по времени суток + погодный тон ---
-    if (L.tint[3] > 0.008) {
-      ctx.fillStyle = `rgba(${L.tint[0]},${L.tint[1]},${L.tint[2]},${L.tint[3]})`;
-      ctx.fillRect(0, 0, cw, ch);
-    }
-    const wt = WEATHER_TINT[sim.weather];
-    if (wt && wt.tint[3] > 0.008) {
-      ctx.fillStyle = `rgba(${wt.tint[0]},${wt.tint[1]},${wt.tint[2]},${wt.tint[3]})`;
-      ctx.fillRect(0, 0, cw, ch);
-    }
+    // Тонировка по времени суток и погоде переехала в postfx.begin/draw:
+    // там она сливается с виньеткой, зерном и свечением в ОДИН проход по
+    // экрану вместо четырёх заливок во весь кадр.
 
     // --- рассветные/закатные лучи ---
     if (this.quality.godRays) this.drawGodRays(ctx, cw, ch, L);
@@ -250,12 +251,13 @@ export class Renderer {
 
     // --- пост-обработка: виньетка, зерно ---
     this.icons.draw(sim, ctx, ox, oy, z, cw, ch, this.time, dtReal);
-    if (this.quality.vignette) this.drawVignette(ctx, cw, ch);
-    if (this.quality.grain > 0) this.drawGrain(ctx, cw, ch);
+    this.postfx.draw(ctx);
 
     // --- миникарта (без пост-эффектов) ---
     this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
-    this.drawMinimap(sim, ctx, cw, ch);
+    this.minimapRect = this.minimap.draw(sim, ctx, cw, ch, {
+      cam: this.cam, tilePx: TILE_PX, time: this.time, quality: this.quality,
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -274,6 +276,8 @@ export class Renderer {
     this.relief.setQuality(this.quality);
     this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
+    this.minimap.setQuality(this.quality);
+    this.postfx.setQuality(this.quality);
     this.select.setQuality(this.quality);
     this.icons.setQuality(this.quality);
     this.cityLights.setQuality(this.quality);
@@ -862,53 +866,9 @@ export class Renderer {
     ctx.restore();
   }
 
-  // Виньетка печётся в offscreen один раз на размер окна: полноэкранная заливка
-  // градиентом каждый кадр стоила ~4.6 мс — больше, чем вся местность.
-  drawVignette(ctx, cw, ch) {
-    if (!this._vig || this._vigW !== cw || this._vigH !== ch) {
-      const cv = document.createElement('canvas');
-      cv.width = Math.max(1, Math.round(cw)); cv.height = Math.max(1, Math.round(ch));
-      const c = cv.getContext('2d');
-      const g = c.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.35, cw / 2, ch / 2, Math.hypot(cw, ch) * 0.62);
-      g.addColorStop(0, 'rgba(0,0,0,0)');
-      g.addColorStop(1, 'rgba(0,0,0,0.38)');
-      c.fillStyle = g;
-      c.fillRect(0, 0, cw, ch);
-      this._vig = cv; this._vigW = cw; this._vigH = ch;
-    }
-    ctx.drawImage(this._vig, 0, 0, cw, ch);
-  }
-
-  // Зерно: 4 заранее сгенерированных кадра шума, паттерны создаются один раз.
-  // Пересборка ImageData и createPattern каждый кадр стоила заметных миллисекунд.
-  drawGrain(ctx, cw, ch) {
-    if (!this._grainFrames) {
-      this._grainFrames = [];
-      for (let f = 0; f < 4; f++) {
-        const cv = document.createElement('canvas');
-        cv.width = 96; cv.height = 96;
-        const gc = cv.getContext('2d');
-        const img = gc.createImageData(96, 96);
-        for (let i = 0; i < img.data.length; i += 4) {
-          const v = (Math.random() * 255) | 0;
-          img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
-        }
-        gc.putImageData(img, 0, 0);
-        this._grainFrames.push(cv);
-      }
-      this._grainPatterns = null;
-    }
-    if (!this._grainPatterns) {
-      this._grainPatterns = this._grainFrames.map(cv => ctx.createPattern(cv, 'repeat'));
-    }
-    this.grainAge = (this.grainAge + 1) % 12;
-    ctx.save();
-    ctx.globalAlpha = this.quality.grain;
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.fillStyle = this._grainPatterns[(this.grainAge / 3) | 0];
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.restore();
-  }
+  // Виньетка, зерно и мини-карта переехали в свои слои (postfx.js,
+  // minimap.js). Прежние методы drawVignette/drawGrain/drawMinimap удалены
+  // вместе с их полями кэша — они больше ниоткуда не звались.
 
   drawFireflies(sim, ctx, ox, oy, z, cw, ch, dt, L) {
     const target = Math.round(24 * this.quality.particles * L.glow);
@@ -986,60 +946,5 @@ export class Renderer {
         ctx.fillRect(p.x, p.y, 4, 3);
       }
     }
-  }
-
-  drawMinimap(sim, ctx, cw, ch) {
-    const MW = 120, MH = 120;
-    // Правый край занимает #sidePanel (шириной 330 плюс отступ). Мини-карта
-    // стояла вплотную к краю окна и на десктопе целиком уходила под панель:
-    // рендер выпекал её каждый кадр и выбрасывал. Отступаем на ширину панели,
-    // но только когда та реально показана — на узком экране она скрыта.
-    const panelW = cw > 820 ? 338 : 10;   // 320 ширина панели + 8 отступ справа + 10 зазор
-    const mx = cw - MW - panelW, my = ch - MH - 10;
-    ctx.fillStyle = 'rgba(10,14,24,0.75)';
-    ctx.fillRect(mx - 3, my - 3, MW + 6, MH + 6);
-    if (!this._miniCache || this._miniSeason !== sim.seasonIdx || this._miniSeed !== sim.world.seed) {
-      const mc = document.createElement('canvas');
-      mc.width = MW; mc.height = MH;
-      const mctx = mc.getContext('2d');
-      const scale = MW / sim.world.w;
-      const img = mctx.createImageData(MW, MH);
-      // используем terrain.low (уже посчитан со светом) — просто уменьшаем выборкой
-      this.terrain.ensure(sim);
-      const low = this.terrain.low;
-      const lctx = low.getContext('2d');
-      const src = lctx.getImageData(0, 0, low.width, low.height).data;
-      const S = low.width / sim.world.w;
-      for (let y = 0; y < MH; y++) {
-        for (let x = 0; x < MW; x++) {
-          const wx = Math.min(low.width - 1, Math.floor(x / scale * S));
-          const wy = Math.min(low.height - 1, Math.floor(y / scale * S));
-          const si = (wy * low.width + wx) * 4;
-          const di = (y * MW + x) * 4;
-          img.data[di] = src[si]; img.data[di + 1] = src[si + 1]; img.data[di + 2] = src[si + 2]; img.data[di + 3] = 255;
-        }
-      }
-      mctx.putImageData(img, 0, 0);
-      this._miniCache = mc; this._miniSeason = sim.seasonIdx; this._miniSeed = sim.world.seed;
-    }
-    ctx.drawImage(this._miniCache, mx, my, MW, MH);
-    const scale = MW / sim.world.w;
-    ctx.fillStyle = '#c9a227';
-    for (const b of sim.buildings) if (!b.destroyed) ctx.fillRect(mx + b.x * scale - 1, my + b.y * scale - 1, 3, 3);
-    for (const f of sim.factions) {
-      if (!f.alive) continue;
-      ctx.fillStyle = f.def.color;
-      for (const s of f.settlements) {
-        ctx.beginPath(); ctx.arc(mx + s.x * scale, my + s.y * scale, s.capital ? 3.5 : 2, 0, 7); ctx.fill();
-      }
-    }
-    const vx = mx + (this.cam.x - (this.canvas.width / this.dpr) / 2 / (TILE_PX * this.cam.zoom)) * scale;
-    const vy = my + (this.cam.y - (this.canvas.height / this.dpr) / 2 / (TILE_PX * this.cam.zoom)) * scale;
-    const vw = (this.canvas.width / this.dpr) / (TILE_PX * this.cam.zoom) * scale;
-    const vh = (this.canvas.height / this.dpr) / (TILE_PX * this.cam.zoom) * scale;
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(vx, vy, vw, vh);
-    this.minimapRect = { x: mx, y: my, w: MW, h: MH, scale };
   }
 }
