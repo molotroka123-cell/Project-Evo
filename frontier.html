@@ -5802,12 +5802,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num14 = 1;
+    let num15 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num14++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num15++}`));
     }
     return out;
   }
@@ -28999,6 +28999,531 @@ ${s}`, "console");
     }
   };
 
+  // app/src/render/damage.js
+  var TILE_PX3 = 32;
+  var DAMAGE_LIMITS = {
+    rubbleFrame: 48,
+    // руин в кадре; 48 блитов ≈ 0,15 мс, дальше не растём
+    smokeFrame: 40,
+    // частиц дыма в кадре суммарно по всем очагам
+    overlayEntries: 40,
+    // записей в кэше наложений (LRU)
+    rubbleEntries: 36,
+    // записей в кэше руин (LRU)
+    overlayMB: 6
+    // память под наложения; ниже ещё режется q.caps.spriteMB
+  };
+  var STAGE_HP = [0.86, 0.62, 0.38, 0.16];
+  var BURN_STAGE = 4;
+  var RUBBLE_SMOKE_S = 25;
+  var SMOKE_RATE = 0.42;
+  var SMOKE_RISE = 1.9;
+  var SMOKE_R0 = 0.16;
+  var SMOKE_GROW = 1.5;
+  var RUBBLE_HFACT = 0.62;
+  var RUBBLE_BASE = [40, 68, 92];
+  function dhash(a, b, c) {
+    let h = (a | 0) * 374761393 + (b | 0) * 668265263 + (c | 0) * 1103515245 | 0;
+    h = (h ^ h >>> 13) * 1274126177 | 0;
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+  function rngFrom(seed) {
+    let s = seed >>> 0 || 1;
+    return () => {
+      s = s * 1664525 + 1013904223 >>> 0;
+      return s / 4294967296;
+    };
+  }
+  function hpMaxOf(b) {
+    const def = BUILDINGS[b.id];
+    return b.hpMax || def && def.wall || 100;
+  }
+  function hpFrac(b) {
+    if (!b || b.hp === void 0 || b.hp === null) return 1;
+    const max = hpMaxOf(b);
+    return max > 0 ? Math.max(0, Math.min(1, b.hp / max)) : 1;
+  }
+  function damageStage(b) {
+    if (!b || b.destroyed || !b.done) return 0;
+    const f = hpFrac(b);
+    for (let i = 0; i < STAGE_HP.length; i++) if (f > STAGE_HP[i]) return i;
+    return STAGE_HP.length;
+  }
+  function isBurning(b, stage) {
+    if (b && b.burning) return true;
+    return stage >= BURN_STAGE;
+  }
+  function eraOf(b, sim2) {
+    const own = BUILDING_ERA_IDX[b.id] || 0;
+    const cur = sim2 && sim2.eraIndex !== void 0 ? sim2.eraIndex : own;
+    return Math.max(own, Math.min(9, Math.min(cur, own + 3)));
+  }
+  var VARIANTS = 4;
+  function variantOf(b, seed) {
+    return Math.floor(dhash(b.x * 3 + 11, b.y * 5 + 7, seed) * VARIANTS) % VARIANTS;
+  }
+  function mkCanvas(w, h) {
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.round(w));
+    cv.height = Math.max(1, Math.round(h));
+    return cv;
+  }
+  var DamageLayer = class {
+    constructor(quality) {
+      this.enabled = true;
+      this.overlays = /* @__PURE__ */ new Map();
+      this.rubble = /* @__PURE__ */ new Map();
+      this._sprId = /* @__PURE__ */ new WeakMap();
+      this._nextSpr = 1;
+      this._fellAt = /* @__PURE__ */ new WeakMap();
+      this._sawAlive = /* @__PURE__ */ new WeakSet();
+      this._smoke = [];
+      this.time = 0;
+      this.wind = 0;
+      this.puff = null;
+      this.ember = null;
+      this._stats = { overlays: 0, rubble: 0, puffs: 0, bakes: 0 };
+      this.setQuality(quality);
+    }
+    setQuality(q) {
+      this.q = q;
+      this.capRubble = Math.min(DAMAGE_LIMITS.rubbleFrame, Math.round(q.caps.buildings * 0.25));
+      this.capSmoke = Math.round(DAMAGE_LIMITS.smokeFrame * q.particles);
+      this.perSource = Math.max(1, Math.min(4, Math.round(4 * q.particles)));
+      this.capOverlay = q.caps.buildings;
+      this.overlayMB = Math.min(DAMAGE_LIMITS.overlayMB, q.caps.spriteMB * 0.33);
+      this.overlayMinZoom = q.lod.buildingGlowMinZoom;
+      this.smokeMinZoom = Math.min(q.lod.propsMinZoom, 1.2);
+      this.clear();
+    }
+    clear() {
+      this.overlays.clear();
+      this.rubble.clear();
+      this._smoke.length = 0;
+      this.puff = null;
+      this.ember = null;
+    }
+    stats() {
+      return { ...this._stats, overlayCache: this.overlays.size, rubbleCache: this.rubble.size };
+    }
+    // ------------------------------------------------------------------ кадр
+    // Один вызов на кадр, до всех остальных. Считает то, что не должно считаться
+    // по 200 раз: зум, гейты, бюджет выпечки, и запоминает, кто рухнул только что.
+    begin(sim2, dtReal, z, opts = {}) {
+      this.time += dtReal || 0;
+      this.wind = opts.wind || 0;
+      const zoom = z / TILE_PX3;
+      this.z = z;
+      this.zoom = zoom;
+      this.onRubble = this.enabled && z >= 6;
+      this.onOverlay = this.enabled && zoom >= this.overlayMinZoom;
+      this.onSmoke = this.enabled && this.capSmoke > 0 && zoom >= this.smokeMinZoom;
+      this.bakeLeft = this.q.caps.bakesPerFrame;
+      this._smoke.length = 0;
+      this._stats.overlays = 0;
+      this._stats.rubble = 0;
+      this._stats.puffs = 0;
+      this._stats.bakes = 0;
+      this.seed = ((sim2 && sim2.world && sim2.world.seed) | 0) & 65535;
+      this._markFallen(sim2);
+    }
+    // Отметить постройки, рухнувшие с прошлого кадра. Нужно, чтобы свежие
+    // развалины дымились, а старые (например, пришедшие из загруженного сейва) —
+    // нет: пепелище, которому три игровых года, не горит.
+    _markFallen(sim2) {
+      if (!sim2 || !sim2.buildings) return;
+      for (const b of sim2.buildings) {
+        if (b.destroyed) {
+          if (!this._fellAt.has(b)) {
+            this._fellAt.set(b, this._sawAlive.has(b) ? this.time : -1e9);
+          }
+        } else if (b.done) {
+          this._sawAlive.add(b);
+          if (this._fellAt.has(b)) this._fellAt.delete(b);
+        }
+      }
+    }
+    // --------------------------------------------------------- живые постройки
+    // Наложение поверх спрайта постройки. Вызывается из renderer.drawBuilding в
+    // тот же прямоугольник, в который лёг сам спрайт: наложение печётся ровно по
+    // размеру спрайта, поэтому совпадает пиксель в пиксель при любом зуме.
+    building(ctx, b, spr, dx, dy, dw, dh) {
+      if (!this.enabled) return;
+      const stage = damageStage(b);
+      if (stage === 0) return;
+      if (isBurning(b, stage)) this._noteSmoke(b, dx + dw / 2, dy + dh * 0.34, 1);
+      if (!this.onOverlay) return;
+      if (this._stats.overlays >= this.capOverlay) return;
+      const ov = this._overlay(spr, stage, variantOf(b, this.seed));
+      if (!ov) return;
+      ctx.drawImage(ov, dx, dy, dw, dh);
+      this._stats.overlays++;
+    }
+    // --------------------------------------------------------------- руины
+    // Отдельный проход по разрушенным постройкам: renderer их не рисует вовсе
+    // (`if (b.destroyed) continue;` в drawSortedEntities), поэтому подмешаться в
+    // общий Y-проход нельзя, не правя чужой файл.
+    //
+    // Сортировка по глубине руине не нужна: груда обломков лежит НИЖЕ линии
+    // застройки любого соседа — здание, стоящее за ней (y меньше), растёт вверх
+    // от своего же основания и физически не может её перекрыть. Поэтому проход
+    // ставится перед общим Y-проходом, и житель, идущий по развалинам, честно
+    // оказывается впереди них.
+    drawRubble(sim2, ctx, ox, oy, z, cw, ch) {
+      if (!this.onRubble || !sim2 || !sim2.buildings) return;
+      for (const b of sim2.buildings) {
+        if (!b.destroyed) continue;
+        if (this._stats.rubble >= this.capRubble) break;
+        const size = (b.size || 1) * z;
+        const sx = ox + b.x * z, sy = oy + b.y * z;
+        if (sx < -size * 2 || sy < -size * 2 || sx > cw + size || sy > ch + size) continue;
+        const cv = this._rubbleSprite(eraOf(b, sim2), b.size || 1, variantOf(b, this.seed));
+        if (!cv) continue;
+        const dw = size * 1.16, dh = dw * RUBBLE_HFACT;
+        ctx.drawImage(cv, sx - size * 0.08, sy + size - dh, dw, dh);
+        this._stats.rubble++;
+        const fell = this._fellAt.get(b);
+        if (fell !== void 0 && this.time - fell < RUBBLE_SMOKE_S) {
+          const k = 1 - (this.time - fell) / RUBBLE_SMOKE_S;
+          this._noteSmoke(b, sx + size / 2, sy + size - dh * 0.5, k);
+        }
+      }
+    }
+    // ----------------------------------------------------------------- дым
+    // Очаг дыма. heat ∈ (0,1] — насколько сильно дымит: у горящего здания 1, у
+    // остывающего пепелища — убывает к нулю.
+    _noteSmoke(b, x, y, heat) {
+      if (!this.onSmoke || heat <= 0.02) return;
+      this._smoke.push({ x, y, heat, hx: b.x | 0, hy: b.y | 0 });
+    }
+    // Флаш дыма — ПОСЛЕ зданий и жителей: дым идёт поверх крыш, иначе столб
+    // упирается в конёк собственного дома.
+    //
+    // Частица считается аналитически из времени и хеша, без накопления
+    // состояния: нет ни массива живых частиц, ни их отсева, ни зависимости от
+    // частоты кадров. Побочная выгода — при паузе картинка не «сдувается»,
+    // а при телепорте камеры дым не приезжает следом.
+    drawSmoke(ctx) {
+      if (!this._smoke.length || !this.onSmoke) return;
+      const puff = this._puff();
+      const ember = this._ember();
+      const z = this.z;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const s of this._smoke) {
+        if (s.heat < 0.35) continue;
+        const ph = dhash(s.hx, s.hy, 3) * 6.283;
+        const fl = 0.62 + 0.24 * Math.sin(this.time * 5.1 + ph) + 0.14 * Math.sin(this.time * 8.7 + ph * 2);
+        const r = z * 0.55;
+        ctx.globalAlpha = Math.min(0.85, fl * s.heat);
+        ctx.drawImage(ember, s.x - r, s.y - r * 0.75, r * 2, r * 1.5);
+      }
+      ctx.globalCompositeOperation = "source-over";
+      for (const s of this._smoke) {
+        const n = Math.max(1, Math.round(this.perSource * (0.4 + 0.6 * s.heat)));
+        for (let i = 0; i < n; i++) {
+          if (this._stats.puffs >= this.capSmoke) break;
+          const off = dhash(s.hx, s.hy, i + 1);
+          const t = (this.time * SMOKE_RATE + off + i / n) % 1;
+          const rise = t * SMOKE_RISE * z;
+          const drift = (this.wind * 0.9 * t + Math.sin((t + off) * 4.2) * 0.22 * t) * z;
+          const r = z * SMOKE_R0 * (1 + SMOKE_GROW * t) * (0.6 + 0.4 * s.heat);
+          const a = Math.min(1, t / 0.15) * (1 - t) * 0.55 * s.heat;
+          if (a <= 0.01) continue;
+          ctx.globalAlpha = a;
+          ctx.drawImage(puff, s.x + drift - r, s.y - rise - r, r * 2, r * 2);
+          this._stats.puffs++;
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+    // Клуб дыма — один раз за сессию, 64 px. Больше не нужно: на экране он
+    // занимает 10–40 px, и увеличение мылом здесь работает нам на руку.
+    _puff() {
+      if (this.puff) return this.puff;
+      const S = 64, cv = mkCanvas(S, S), c = cv.getContext("2d");
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g2.addColorStop(0, "rgba(96,86,78,0.85)");
+      g2.addColorStop(0.45, "rgba(78,70,64,0.42)");
+      g2.addColorStop(1, "rgba(70,63,58,0)");
+      c.fillStyle = g2;
+      c.fillRect(0, 0, S, S);
+      this.puff = cv;
+      return cv;
+    }
+    // Зарево огня у основания.
+    _ember() {
+      if (this.ember) return this.ember;
+      const S = 64, cv = mkCanvas(S, S), c = cv.getContext("2d");
+      const g2 = c.createRadialGradient(S / 2, S * 0.62, 0, S / 2, S * 0.62, S / 2);
+      g2.addColorStop(0, "rgba(255,206,120,0.9)");
+      g2.addColorStop(0.35, "rgba(255,128,42,0.45)");
+      g2.addColorStop(1, "rgba(180,60,20,0)");
+      c.fillStyle = g2;
+      c.fillRect(0, 0, S, S);
+      this.ember = cv;
+      return cv;
+    }
+    // ------------------------------------------------------------- выпечка
+    _sprKey(spr) {
+      let id = this._sprId.get(spr);
+      if (!id) {
+        id = this._nextSpr++;
+        this._sprId.set(spr, id);
+      }
+      return id;
+    }
+    _overlay(spr, stage, variant) {
+      if (!spr || !spr.cv) return null;
+      const key = `${this._sprKey(spr)}|${stage}|${variant}`;
+      const hit = this.overlays.get(key);
+      if (hit) {
+        touch(this.overlays, key);
+        return hit;
+      }
+      if (this.bakeLeft <= 0) return null;
+      this.bakeLeft--;
+      this._stats.bakes++;
+      const cv = bakeOverlay(spr, stage, variant, this.q.detail);
+      this.overlays.set(key, cv);
+      prune(this.overlays, {
+        maxEntries: DAMAGE_LIMITS.overlayEntries,
+        maxBytes: this.overlayMB * 1024 * 1024,
+        bytesOf: canvasBytes
+      });
+      return cv;
+    }
+    _rubbleSprite(era, sizeTiles, variant) {
+      const key = `${era}|${sizeTiles}|${variant}|${this.q.detail}`;
+      const hit = this.rubble.get(key);
+      if (hit) {
+        touch(this.rubble, key);
+        return hit;
+      }
+      if (this.bakeLeft <= 0) return null;
+      this.bakeLeft--;
+      this._stats.bakes++;
+      const cv = bakeRubble(era, sizeTiles, variant, this.q.detail);
+      this.rubble.set(key, cv);
+      prune(this.rubble, {
+        maxEntries: DAMAGE_LIMITS.rubbleEntries,
+        maxBytes: this.overlayMB * 0.5 * 1024 * 1024,
+        bytesOf: canvasBytes
+      });
+      return cv;
+    }
+  };
+  function bakeOverlay(spr, stage, variant, detail = 2) {
+    const W = spr.cv.width, H = spr.cv.height;
+    const cv = mkCanvas(W, H);
+    const c = cv.getContext("2d");
+    const dec = mkCanvas(W, H);
+    const d = dec.getContext("2d");
+    const rnd = rngFrom(variant * 2654435761 + stage * 40503 + W * 97 + 1);
+    const k = Math.max(1, W / 100);
+    const groundY = H - W * 0.16;
+    const top = H * 0.18, bot = groundY - H * 0.02;
+    d.fillStyle = `rgba(46,36,28,${0.05 + 0.045 * stage})`;
+    d.fillRect(0, 0, W, H);
+    const soot = [0, 1, 2, 3, 4][stage] * (detail === 0 ? 1 : 2);
+    for (let i = 0; i < soot; i++) {
+      const x = W * (0.16 + rnd() * 0.68);
+      const y = top + rnd() * (bot - top) * 0.8;
+      const r = W * (0.1 + rnd() * 0.16);
+      const g2 = d.createRadialGradient(x, y, 0, x, y, r);
+      const a = 0.16 + 0.09 * stage;
+      g2.addColorStop(0, `rgba(26,20,17,${a})`);
+      g2.addColorStop(1, "rgba(26,20,17,0)");
+      d.save();
+      d.translate(x, y);
+      d.scale(1, 1.9);
+      d.translate(-x, -y);
+      d.fillStyle = g2;
+      d.fillRect(x - r, y - r, r * 2, r * 2);
+      d.restore();
+    }
+    const cracks = Math.round([0, 2, 4, 6, 7][stage] * (detail === 0 ? 0.5 : 1));
+    for (let i = 0; i < cracks; i++) {
+      const x0 = W * (0.14 + rnd() * 0.72);
+      const y0 = top + rnd() * (bot - top) * 0.35;
+      const len = (bot - y0) * (0.35 + rnd() * 0.55);
+      const pts = crackPath(x0, y0, len, W * 0.14, rnd);
+      strokePath(d, pts, `rgba(28,22,18,${0.45 + 0.09 * stage})`, k * 1.15);
+      strokePath(d, pts, "rgba(255,244,226,0.16)", k * 0.7, k * 0.8, k * 0.5);
+      if (stage >= 2 && detail > 0 && rnd() < 0.7) {
+        const j = 2 + Math.floor(rnd() * Math.max(1, pts.length - 3));
+        const br = crackPath(pts[j][0], pts[j][1], len * 0.45, W * 0.1, rnd);
+        strokePath(d, br, `rgba(28,22,18,${0.35 + 0.07 * stage})`, k * 0.85);
+      }
+    }
+    if (stage >= 2 && spr.glow) {
+      const wnd = mkCanvas(W, H);
+      const w = wnd.getContext("2d");
+      w.drawImage(spr.glow, 0, 0);
+      w.globalCompositeOperation = "source-in";
+      w.fillStyle = "rgba(20,17,16,0.88)";
+      w.fillRect(0, 0, W, H);
+      w.globalCompositeOperation = "destination-out";
+      const keep = stage >= 4 ? 0.15 : stage === 3 ? 0.42 : 0.66;
+      const rows = detail === 0 ? 4 : 7, cols = detail === 0 ? 2 : 4;
+      for (let r = 0; r < rows; r++) {
+        for (let col = 0; col < cols; col++) {
+          if (rnd() > keep) continue;
+          w.fillRect(W * col / cols, H * r / rows, W / cols + 1, H / rows + 1);
+        }
+      }
+      d.drawImage(wnd, 0, 0);
+    }
+    if (stage >= 3) {
+      const right = (variant & 1) === 1;
+      const w0 = W * (0.26 + rnd() * 0.1);
+      const x0 = right ? W - w0 * 0.92 : w0 * -0.08;
+      const yTop = top + (bot - top) * (0.18 + rnd() * 0.15);
+      d.beginPath();
+      d.moveTo(x0, bot);
+      d.lineTo(x0, yTop);
+      const steps = 5;
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        const ex = x0 + (right ? -1 : 1) * w0 * t;
+        const ey = yTop + (bot - yTop) * t * (0.55 + rnd() * 0.5);
+        d.lineTo(ex, ey - (bot - yTop) * 0.08 * rnd());
+        d.lineTo(ex, ey);
+      }
+      d.lineTo(x0 + (right ? -w0 : w0), bot);
+      d.closePath();
+      d.fillStyle = "rgba(22,18,16,0.82)";
+      d.fill();
+      d.strokeStyle = "rgba(52,40,30,0.9)";
+      d.lineWidth = k * 1.4;
+      for (let i = 0, nb = detail === 0 ? 1 : 2; i < nb; i++) {
+        const y = yTop + (bot - yTop) * (0.3 + i * 0.3);
+        d.beginPath();
+        d.moveTo(x0 + (right ? -w0 * 0.9 : w0 * 0.9), y);
+        d.lineTo(x0, y + (bot - yTop) * 0.16);
+        d.stroke();
+      }
+    }
+    d.globalCompositeOperation = "destination-in";
+    d.drawImage(spr.sil || spr.cv, 0, 0);
+    c.drawImage(dec, 0, 0);
+    if (stage >= 3) {
+      const n = (stage === 4 ? 7 : 4) * (detail === 0 ? 0.5 : 1);
+      for (let i = 0; i < n; i++) {
+        const x = W * (0.1 + rnd() * 0.8);
+        const y = groundY - W * 0.02 + rnd() * W * 0.07;
+        const s = W * (0.035 + rnd() * 0.05);
+        c.fillStyle = `rgba(${80 + Math.round(rnd() * 30)},${70 + Math.round(rnd() * 26)},${62 + Math.round(rnd() * 22)},0.92)`;
+        c.beginPath();
+        c.moveTo(x - s, y + s * 0.4);
+        c.lineTo(x - s * 0.4, y - s * 0.5);
+        c.lineTo(x + s, y - s * 0.1);
+        c.lineTo(x + s * 0.5, y + s * 0.5);
+        c.closePath();
+        c.fill();
+        c.strokeStyle = "rgba(26,20,16,0.7)";
+        c.lineWidth = k * 0.6;
+        c.stroke();
+      }
+    }
+    return cv;
+  }
+  function crackPath(x, y, len, spread, rnd) {
+    const steps = 6;
+    const pts = [[x, y]];
+    let cx = x, cy = y, vx = (rnd() - 0.5) * 0.6;
+    for (let i = 0; i < steps; i++) {
+      vx = vx * 0.65 + (rnd() - 0.5) * 0.9;
+      cx += vx * spread / steps * 2;
+      cy += len / steps;
+      pts.push([cx, cy]);
+    }
+    return pts;
+  }
+  function strokePath(c, pts, style, width, dx = 0, dy = 0) {
+    c.strokeStyle = style;
+    c.lineWidth = width;
+    c.lineJoin = "round";
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(pts[0][0] + dx, pts[0][1] + dy);
+    for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0] + dx, pts[i][1] + dy);
+    c.stroke();
+  }
+  function bakeRubble(era, sizeTiles, variant, detail = 2) {
+    const W = Math.round(RUBBLE_BASE[detail] * sizeTiles);
+    const H = Math.round(W * RUBBLE_HFACT);
+    const cv = mkCanvas(W, H);
+    const c = cv.getContext("2d");
+    const rnd = rngFrom(variant * 22695477 + era * 7919 + sizeTiles * 131 + 3);
+    const pal = ERA_PALETTE[Math.max(0, Math.min(9, era))];
+    const k = Math.max(1, W / 90);
+    const baseY = H * 0.84;
+    c.fillStyle = "rgba(34,27,22,0.42)";
+    c.beginPath();
+    c.moveTo(W * 0.5, H * 0.52);
+    c.lineTo(W * 0.96, baseY);
+    c.lineTo(W * 0.5, H * 0.99);
+    c.lineTo(W * 0.04, baseY);
+    c.closePath();
+    c.fill();
+    const n = detail === 0 ? 9 : 16;
+    const blocks = [];
+    for (let i = 0; i < n; i++) {
+      const u = rnd() * 2 - 1;
+      const x = W * 0.5 + u * W * 0.4;
+      const hill = (1 - u * u) * H * 0.3;
+      const y = baseY - rnd() * hill;
+      blocks.push({ x, y, s: W * (0.055 + rnd() * 0.075), r: rnd() });
+    }
+    blocks.sort((a, b) => a.y - b.y);
+    for (const bl of blocks) {
+      const face = shade(pal.wall, -0.18 + bl.r * 0.3);
+      const topF = shade(pal.wall, 0.12 + bl.r * 0.2);
+      const s = bl.s;
+      c.fillStyle = topF;
+      c.beginPath();
+      c.moveTo(bl.x - s, bl.y - s * 0.35);
+      c.lineTo(bl.x - s * 0.2, bl.y - s * 0.75);
+      c.lineTo(bl.x + s, bl.y - s * 0.3);
+      c.lineTo(bl.x + s * 0.3, bl.y + s * 0.05);
+      c.closePath();
+      c.fill();
+      c.fillStyle = face;
+      c.beginPath();
+      c.moveTo(bl.x - s, bl.y - s * 0.35);
+      c.lineTo(bl.x + s * 0.3, bl.y + s * 0.05);
+      c.lineTo(bl.x + s * 0.3, bl.y + s * 0.5);
+      c.lineTo(bl.x - s, bl.y + s * 0.2);
+      c.closePath();
+      c.fill();
+      c.strokeStyle = "rgba(26,20,16,0.75)";
+      c.lineWidth = k * 0.55;
+      c.stroke();
+    }
+    const beams = detail === 0 ? 2 : 3;
+    c.lineCap = "round";
+    for (let i = 0; i < beams; i++) {
+      const x = W * (0.2 + rnd() * 0.6);
+      const y = baseY - rnd() * H * 0.1;
+      const ang = (rnd() - 0.5) * 1.5 - 0.4;
+      const len = W * (0.16 + rnd() * 0.16);
+      c.strokeStyle = era <= 5 ? "rgba(48,34,24,0.92)" : shade(pal.trim, -0.35);
+      c.lineWidth = k * (era <= 5 ? 1.7 : 1.1);
+      c.beginPath();
+      c.moveTo(x, y);
+      c.lineTo(x + Math.cos(ang) * len, y - Math.abs(Math.sin(ang)) * len - len * 0.2);
+      c.stroke();
+    }
+    const g2 = c.createRadialGradient(W * 0.5, baseY, 0, W * 0.5, baseY, W * 0.5);
+    g2.addColorStop(0, "rgba(186,172,150,0.20)");
+    g2.addColorStop(1, "rgba(186,172,150,0)");
+    c.fillStyle = g2;
+    c.fillRect(0, H * 0.4, W, H * 0.6);
+    return cv;
+  }
+
   // app/src/render/minimap.js
   var MAP_PX = 120;
   var MAP_PX_SMALL = 92;
@@ -29440,7 +29965,7 @@ ${s}`, "console");
   };
 
   // app/src/render/select.js
-  var TILE_PX3 = 32;
+  var TILE_PX4 = 32;
   var SELECT_LIMITS = {
     auras: 8,
     // рамок ауры в кадре; штатно их 1-2, потолок нужен для showAllAuras
@@ -29572,7 +30097,7 @@ ${s}`, "console");
       const hov = sim2 && sim2.placing ? null : this.hover;
       const sel = this.sel;
       if (!hov && !sel && !this.showAllAuras) return;
-      const lod = lodForZoom(this.q, z / TILE_PX3);
+      const lod = lodForZoom(this.q, z / TILE_PX4);
       if (hov) this.tileMark(ctx, ox, oy, z, cw, ch, hov);
       if (sel) this.markerFor(ctx, ox, oy, z, cw, ch, sel, "pick", lod);
       if (hov && !sameTarget(hov, sel)) this.markerFor(ctx, ox, oy, z, cw, ch, hov, "hover", lod);
@@ -30251,8 +30776,413 @@ ${s}`, "console");
     return `rgb(${r},${g2},${b})`;
   }
 
+  // app/src/render/notifications.js
+  var KINDS2 = {
+    death: { prio: 100, life: 2.2, color: "#e6ddd2", badge: "skull" },
+    combat: { prio: 90, life: 2, color: "#c8412f", badge: "swords" },
+    disease: { prio: 80, life: 1.8, color: "#8e6fc4", badge: "plague" },
+    birth: { prio: 70, life: 1.8, color: "#ffd08a", badge: "heart" },
+    full: { prio: 60, life: 1.6, color: "#d8a119", badge: "warn" },
+    loss: { prio: 50, life: 1.5, color: "#dd7a1e", badge: null },
+    gain: { prio: 20, life: 1.5, color: "#8ec96f", badge: null },
+    info: { prio: 10, life: 1.5, color: "#cfe2f0", badge: null }
+  };
+  var DEFAULT_KIND = "info";
+  function kindOf2(kind) {
+    return KINDS2[kind] || KINDS2[DEFAULT_KIND];
+  }
+  var MAX_LIVE = 20;
+  var BAKES_PER_FRAME = 2;
+  var MIN_PX = 12;
+  var MAX_PX = 26;
+  var PX_K = 0.42;
+  function pxFor(z) {
+    return Math.max(MIN_PX, Math.min(MAX_PX, z * PX_K));
+  }
+  var RISE_K = 1.7;
+  var AIR_K = 0.55;
+  var JITTER_K = 0.5;
+  var STACK_K = 1.15;
+  var STACK_MAX = 3;
+  var SAME_SPOT = 0.75;
+  var SAME_AGE = 0.6;
+  var MAX_CHARS = 24;
+  var DT_CAP = 0.25;
+  function minZoomFor2(q) {
+    const p = q && q.lod && typeof q.lod.peopleMinZoom === "number" ? q.lod.peopleMinZoom : 0.7;
+    return p * 0.6;
+  }
+  function capFor2(q) {
+    const d = q && typeof q.detail === "number" ? q.detail : 1;
+    return [12, 16, 20][Math.max(0, Math.min(2, d))];
+  }
+  function bakePxFor(q) {
+    const cap = q && typeof q.dprCap === "number" ? q.dprCap : 1;
+    return Math.round(MAX_PX * Math.max(1, Math.min(2, cap)));
+  }
+  function cacheCapsFor(q) {
+    const mb = q && q.caps && typeof q.caps.spriteMB === "number" ? q.caps.spriteMB : 10;
+    const n = q && q.caps && typeof q.caps.spriteEntries === "number" ? q.caps.spriteEntries : 48;
+    return { maxBytes: Math.max(0.5, mb * 0.1) * 1024 * 1024, maxEntries: n };
+  }
+  function easeRise(k) {
+    const t = 1 - k;
+    return 1 - t * t;
+  }
+  function alphaOf(k) {
+    if (k < 0.08) return k / 0.08;
+    if (k > 0.6) return (1 - k) / 0.4;
+    return 1;
+  }
+  function cacheKey(kind, text, color) {
+    return kind + "\0" + text + "\0" + (color || "");
+  }
+  function normText(text) {
+    const s = text == null ? "" : String(text);
+    return s.length > MAX_CHARS ? s.slice(0, MAX_CHARS) : s;
+  }
+  function victimIndex(live, prio) {
+    let worst = -1, worstPrio = Infinity, worstLeft = Infinity;
+    for (let i = 0; i < live.length; i++) {
+      const p = live[i];
+      const left = p.life - p.t;
+      if (p.prio < worstPrio || p.prio === worstPrio && left < worstLeft) {
+        worst = i;
+        worstPrio = p.prio;
+        worstLeft = left;
+      }
+    }
+    return worstPrio < prio ? worst : -1;
+  }
+  var Notifications = class {
+    constructor(quality) {
+      this.q = quality;
+      this.enabled = true;
+      this.pool = [];
+      for (let i = 0; i < MAX_LIVE; i++) this.pool.push(newPopup());
+      this.free = this.pool.slice();
+      this.live = [];
+      this.order = [];
+      this.cache = /* @__PURE__ */ new Map();
+      this.seed = 0;
+      this.serial = 0;
+      this.drawn = 0;
+      this.bakes = 0;
+      this.dropped = 0;
+    }
+    // Пресет меняется — кэш снимаем: кегль выпечки зависит от dprCap (bakePxFor),
+    // и карточки от «эко» на «ультре» выглядели бы мылом. Живые всплывашки при
+    // этом остаются: они просто перепекутся на следующем кадре.
+    setQuality(q) {
+      this.q = q;
+      this.cache.clear();
+    }
+    // Новая игра или загрузка сейва: над новым городом не должно висеть «+3🪵»
+    // от старого. Кэш карточек при этом не трогаем — строки «+3🪵» и «−2» в
+    // следующей партии будут те же самые, и перепекать их незачем.
+    clear() {
+      for (const p of this.live) this.free.push(p);
+      this.live.length = 0;
+    }
+    stats() {
+      return {
+        live: this.live.length,
+        drawn: this.drawn,
+        dropped: this.dropped,
+        cached: this.cache.size,
+        bakes: this.bakes,
+        bytes: this.bytes()
+      };
+    }
+    bytes() {
+      let n = 0;
+      for (const c of this.cache.values()) n += canvasBytes(c.cv);
+      return n;
+    }
+    // ЕДИНСТВЕННЫЙ ВХОД СНАРУЖИ.
+    //
+    //   x, y  — мировые координаты точки, НАД которой всплывает надпись.
+    //           Для постройки передавайте центр пятна: b.x + (b.size||1)/2, b.y —
+    //           тогда надпись встанет над коньком, а не над левым нижним углом.
+    //           Для жителя — v.x, v.y как есть.
+    //   text  — что показать: '+3🪵', '−2', '' (только значок). Длиннее MAX_CHARS
+    //           обрезается.
+    //   kind  — ключ KINDS: death | combat | disease | birth | full | loss | gain |
+    //           info. Неизвестный вид сворачивается к 'info' и не роняет кадр.
+    //   up    — необязательная добавка высоты В КЛЕТКАХ. Нужна для высоких
+    //           построек: над башней или шпилем надпись, поставленная по b.y,
+    //           окажется на середине стены. Считать высоту крыши должен тот, кто
+    //           знает архитектуру (sprites.js: ARCH/archHeight), — слой её не
+    //           угадывает.
+    //
+    // Возвращает true, если событие принято, и false, если отброшено по
+    // приоритету. Возврат нужен вызывающему, чтобы понимать, что происходит, и
+    // тестам — чтобы проверять правило вытеснения.
+    push(ev) {
+      if (!this.enabled || !ev) return false;
+      const x = +ev.x, y = +ev.y;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      const kind = KINDS2[ev.kind] ? ev.kind : DEFAULT_KIND;
+      const def = KINDS2[kind];
+      const prio = typeof ev.prio === "number" ? ev.prio : def.prio;
+      const text = normText(ev.text);
+      let p = this.free.pop();
+      if (!p) {
+        const vi = victimIndex(this.live, prio);
+        if (vi < 0) {
+          this.dropped++;
+          return false;
+        }
+        p = this.live[vi];
+        this.live.splice(vi, 1);
+        this.dropped++;
+      }
+      p.x = x;
+      p.y = y;
+      p.up = Number.isFinite(+ev.up) ? +ev.up : 0;
+      p.text = text;
+      p.kind = kind;
+      p.prio = prio;
+      p.color = typeof ev.color === "string" ? ev.color : def.color;
+      p.life = def.life;
+      p.t = 0;
+      p.n = ++this.serial;
+      p.stack = this._stackAt(x, y);
+      this.live.push(p);
+      return true;
+    }
+    // Сколько свежих надписей уже висит над этим же местом. Только свежих: те,
+    // что уже поднялись и гаснут, освободили место физически, и загонять новую
+    // ещё выше незачем.
+    _stackAt(x, y) {
+      let n = 0;
+      for (const p of this.live) {
+        if (p.t > SAME_AGE) continue;
+        if (Math.abs(p.x - x) < SAME_SPOT && Math.abs(p.y - y) < SAME_SPOT) n++;
+      }
+      return Math.min(STACK_MAX, n);
+    }
+    // Продвижение возрастов. Вынесено из draw() отдельным методом: слой обязан
+    // стареть и тогда, когда его не рисуют (зум ушёл на общий план), иначе при
+    // возврате камеры игрок увидит залежавшуюся пачку надписей о событиях
+    // полуминутной давности.
+    update(dtReal) {
+      const dt = Math.min(DT_CAP, Math.max(0, dtReal || 0));
+      if (!dt || !this.live.length) return;
+      for (let i = this.live.length - 1; i >= 0; i--) {
+        const p = this.live[i];
+        p.t += dt;
+        if (p.t >= p.life) {
+          this.live.splice(i, 1);
+          this.free.push(p);
+        }
+      }
+    }
+    // Вход из renderer. ox/oy — смещение камеры в пикселях, z — пикселей на клетку,
+    // cw/ch — размер холста в CSS-пикселях, dtReal — секунды с прошлого кадра.
+    draw(sim2, ctx, ox, oy, z, cw, ch, dtReal) {
+      this.drawn = 0;
+      if (sim2 && sim2.world && typeof sim2.world.seed === "number") this.seed = sim2.world.seed | 0;
+      this.update(dtReal);
+      if (!this.enabled || !this.live.length || !ctx) return;
+      const zoom = z / 32;
+      if (zoom < minZoomFor2(this.q)) return;
+      const px = pxFor(z);
+      const scale = px / bakePxFor(this.q);
+      const cap = capFor2(this.q);
+      const order = this.order;
+      order.length = 0;
+      for (const p of this.live) order.push(p);
+      order.sort(cmpDrawOrder);
+      const from = Math.max(0, order.length - cap);
+      let budget = BAKES_PER_FRAME;
+      ctx.save();
+      for (let i = from; i < order.length; i++) {
+        const p = order[i];
+        const k = p.t / p.life;
+        const jx = (hash2(this.seed ^ p.n | 0, Math.round(p.x * 8) + Math.round(p.y * 8) * 31) - 0.5) * px * JITTER_K;
+        const sx = ox + p.x * z + jx;
+        const sy = oy + (p.y - p.up) * z - px * AIR_K - px * RISE_K * easeRise(k) - px * STACK_K * p.stack;
+        if (sx < -cw * 0.25 || sx > cw * 1.25 || sy < -px * 3 || sy > ch + px * 3) continue;
+        const key = cacheKey(p.kind, p.text, p.color);
+        let card = this.cache.get(key);
+        if (card) {
+          touch(this.cache, key);
+        } else {
+          if (budget <= 0) continue;
+          budget--;
+          card = this._bake(p);
+          if (!card) continue;
+        }
+        const dw = card.cv.width * scale, dh = card.cv.height * scale;
+        ctx.globalAlpha = alphaOf(k);
+        ctx.drawImage(card.cv, Math.round(sx - dw / 2), Math.round(sy - dh), Math.round(dw), Math.round(dh));
+        this.drawn++;
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+    // -------------------------------------------------------------------------
+    // ВЫПЕЧКА КАРТОЧКИ
+    //
+    // Здесь живёт всё дорогое, и случается это один раз на строку: раскладка
+    // текста, обводка, вектор значка. В кадре от этого остаётся drawImage.
+    _bake(p) {
+      if (typeof document === "undefined" || !document.createElement) return null;
+      const font = bakePxFor(this.q);
+      const def = kindOf2(p.kind);
+      const cv = document.createElement("canvas");
+      const c = cv.getContext("2d");
+      if (!c) return null;
+      const fontCss = `bold ${font}px system-ui, "Segoe UI", Roboto, sans-serif`;
+      const stroke = Math.max(2, font * 0.22);
+      const pad = Math.ceil(stroke * 0.5 + font * 0.14);
+      const badge = def.badge ? Math.round(font * 1.05) : 0;
+      const gap = badge && p.text ? Math.round(font * 0.22) : 0;
+      c.font = fontCss;
+      const tw = p.text ? c.measureText ? Math.ceil(c.measureText(p.text).width) : Math.ceil(p.text.length * font * 0.62) : 0;
+      cv.width = Math.max(1, tw + badge + gap + pad * 2);
+      cv.height = Math.max(1, Math.ceil(font * 1.34) + pad * 2);
+      c.font = fontCss;
+      c.textAlign = "left";
+      c.textBaseline = "alphabetic";
+      c.lineJoin = "round";
+      c.lineCap = "round";
+      c.miterLimit = 2;
+      const baseY = pad + Math.round(font * 1.02);
+      if (badge) drawBadge(c, def.badge, pad, baseY - font * 0.95, badge, def.color);
+      if (p.text) {
+        const tx = pad + badge + gap;
+        c.lineWidth = stroke;
+        c.strokeStyle = "rgba(12,10,8,0.85)";
+        c.strokeText(p.text, tx, baseY);
+        c.fillStyle = p.color || def.color;
+        c.fillText(p.text, tx, baseY);
+      }
+      const card = { cv };
+      this.cache.set(cacheKey(p.kind, p.text, p.color), card);
+      this.bakes++;
+      const caps = cacheCapsFor(this.q);
+      prune(this.cache, { maxEntries: caps.maxEntries, maxBytes: caps.maxBytes, bytesOf: (v) => canvasBytes(v.cv) });
+      return card;
+    }
+  };
+  function newPopup() {
+    return { x: 0, y: 0, up: 0, text: "", kind: DEFAULT_KIND, prio: 0, color: "#fff", t: 0, life: 1, n: 0, stack: 0 };
+  }
+  function cmpDrawOrder(a, b) {
+    return a.prio - b.prio || b.t - a.t;
+  }
+  function drawBadge(c, id, x, y, s, color) {
+    c.save();
+    c.translate(x, y);
+    c.scale(s, s);
+    c.lineWidth = 0.16;
+    c.strokeStyle = "rgba(12,10,8,0.85)";
+    c.fillStyle = color;
+    const path = BADGES[id];
+    if (path) path(c);
+    c.restore();
+  }
+  var TAU3 = Math.PI * 2;
+  var BADGES = {
+    // Череп: свод, скулы, две глазницы, зубы. На 20 px читается именно силуэт
+    // «круг с квадратной челюстью», поэтому челюсть намеренно широкая.
+    skull(c) {
+      c.beginPath();
+      c.arc(0.5, 0.42, 0.33, Math.PI, TAU3);
+      c.lineTo(0.83, 0.52);
+      c.lineTo(0.68, 0.62);
+      c.lineTo(0.68, 0.8);
+      c.lineTo(0.32, 0.8);
+      c.lineTo(0.32, 0.62);
+      c.lineTo(0.17, 0.52);
+      c.closePath();
+      c.stroke();
+      c.fill();
+      c.fillStyle = "rgba(12,10,8,0.85)";
+      c.beginPath();
+      c.arc(0.37, 0.44, 0.1, 0, TAU3);
+      c.arc(0.63, 0.44, 0.1, 0, TAU3);
+      c.rect(0.44, 0.62, 0.12, 0.16);
+      c.fill();
+    },
+    // Скрещённые мечи: два клинка по диагоналям плюс перекрестья. Толщина клинка
+    // 0.13 — тоньше уже сливается с обводкой на мелком кегле.
+    swords(c) {
+      for (const dir of [1, -1]) {
+        c.save();
+        c.translate(0.5, 0.5);
+        c.rotate(dir * Math.PI / 4);
+        c.beginPath();
+        c.moveTo(-0.065, -0.44);
+        c.lineTo(0.065, -0.44);
+        c.lineTo(0.065, 0.2);
+        c.lineTo(-0.065, 0.2);
+        c.closePath();
+        c.stroke();
+        c.fill();
+        c.beginPath();
+        c.rect(-0.2, 0.2, 0.4, 0.09);
+        c.stroke();
+        c.fill();
+        c.restore();
+      }
+    },
+    // Болезнь: капля с тремя точками — «зараза», а не медицинский крест.
+    // Крест на карте каменного века выглядел бы как больница из другой игры.
+    plague(c) {
+      c.beginPath();
+      c.moveTo(0.5, 0.08);
+      c.bezierCurveTo(0.86, 0.46, 0.82, 0.62, 0.72, 0.74);
+      c.bezierCurveTo(0.6, 0.9, 0.4, 0.9, 0.28, 0.74);
+      c.bezierCurveTo(0.18, 0.62, 0.14, 0.46, 0.5, 0.08);
+      c.closePath();
+      c.stroke();
+      c.fill();
+      c.fillStyle = "rgba(12,10,8,0.85)";
+      c.beginPath();
+      c.arc(0.42, 0.52, 0.075, 0, TAU3);
+      c.arc(0.62, 0.62, 0.065, 0, TAU3);
+      c.arc(0.5, 0.72, 0.055, 0, TAU3);
+      c.fill();
+    },
+    // Рождение: сердце. Взято не «потому что мило»: на 18–20 px это единственная
+    // фигура, которую глаз опознаёт с одного взгляда и не путает ни с чем другим
+    // на карте — колыбель и пелёнки на таком размере становятся кляксой.
+    heart(c) {
+      c.beginPath();
+      c.moveTo(0.5, 0.86);
+      c.bezierCurveTo(0.06, 0.56, 0.14, 0.14, 0.5, 0.32);
+      c.bezierCurveTo(0.86, 0.14, 0.94, 0.56, 0.5, 0.86);
+      c.closePath();
+      c.stroke();
+      c.fill();
+    },
+    // Склад полон: треугольник с восклицательным знаком. Углы скруглены вручную
+    // (три дуги), потому что острый угол на 18 px превращается обводкой в кляксу.
+    warn(c) {
+      const r = 0.09;
+      c.beginPath();
+      c.moveTo(0.5 - r * 0.5, 0.1 + r * 0.2);
+      c.arcTo(0.5, 0.06, 0.5 + r * 0.5, 0.1 + r * 0.2, r);
+      c.lineTo(0.92 - r * 0.4, 0.84 - r * 0.5);
+      c.arcTo(0.94, 0.88, 0.86, 0.88, r);
+      c.lineTo(0.14, 0.88);
+      c.arcTo(0.06, 0.88, 0.1, 0.82, r);
+      c.closePath();
+      c.stroke();
+      c.fill();
+      c.fillStyle = "rgba(12,10,8,0.85)";
+      c.beginPath();
+      c.rect(0.44, 0.34, 0.12, 0.28);
+      c.rect(0.44, 0.68, 0.12, 0.12);
+      c.fill();
+    }
+  };
+
   // app/src/render/city_lights.js
-  var TILE_PX4 = 32;
+  var TILE_PX5 = 32;
   var clamp016 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function hashB(seed, x, y, salt) {
     let h = x * 374761393 + y * 668265263 + seed * 1442695041 + salt * 2246822519 | 0;
@@ -30279,8 +31209,8 @@ ${s}`, "console");
   }
   var STEPS = 6;
   var FRAME = 48;
-  var VARIANTS = 3;
-  var BAKES_PER_FRAME = 3;
+  var VARIANTS2 = 3;
+  var BAKES_PER_FRAME2 = 3;
   var THR_LO = 0.1;
   var THR_HI = 0.52;
   var SPAN = 0.45;
@@ -30408,11 +31338,11 @@ ${s}`, "console");
       this.stat.pools = 0;
       this.stat.windows = 0;
       this.stat.bakes = 0;
-      this.bakesLeft = BAKES_PER_FRAME;
+      this.bakesLeft = BAKES_PER_FRAME2;
       if (!sim2 || !L) return;
       this.night = L.glow;
       if (this.night <= 0.03) return;
-      const zoom = z / TILE_PX4;
+      const zoom = z / TILE_PX5;
       const lod = lodForZoom(this.q, zoom);
       if (!lod.buildingGlow) return;
       this.on = true;
@@ -30506,7 +31436,7 @@ ${s}`, "console");
       if (k <= 0) return;
       const e = Math.max(0, Math.min(9, era | 0));
       const cls = windowClass(e);
-      const variant = hashB(this.seed, b.x, b.y, 2) * VARIANTS | 0;
+      const variant = hashB(this.seed, b.x, b.y, 2) * VARIANTS2 | 0;
       const at = this.atlasFor(e, variant, cls);
       if (!at) return;
       let a = fill * this.wl.win;
@@ -30654,8 +31584,772 @@ ${s}`, "console");
     }
   };
 
+  // app/src/render/herds_view.js
+  var TILE_PX6 = 32;
+  var HERD_LIMITS = {
+    // Голов от одного стада. Стадо в шестьдесят голов на экране — это шестьдесят
+    // блитов ради картинки, которая уже с двадцати читается как «много». Сверх
+    // этого числа поголовье показывается подписью «×60», а не телами.
+    headsPerHerd: 22,
+    // Отпечатков следов в кадре по пресетам.
+    trails: { eco: 0, medium: 70, high: 140, ultra: 200 },
+    sprites: 32,
+    // испечённых пятен/отпечатков в кэше (атласы считаются отдельно)
+    layouts: 64,
+    // раскладок куч в кэше
+    labels: 8
+    // подписей с числом голов за кадр
+  };
+  var TRAIL_MIN_ZOOM = 0.55;
+  var ZONE_MIN_ZOOM = 0.22;
+  var ZONE_PPT = 4;
+  var TRAIL_LIFE = 12;
+  var TRAIL_MAX = 16;
+  var TRAIL_MIN_STEP = 0.3;
+  var TRAIL_STEP = 0.45;
+  var TRAIL_HERDS = 48;
+  var FEAR_ALERT = 0.18;
+  var FEAR_HUDDLE = 0.45;
+  var SPREAD_BASE = 0.55;
+  var YOUNG_SHARE = 0.22;
+  var YOUNG_R = 0.38;
+  var LEADER_AHEAD = 1.15;
+  var GOLDEN = 2.399963229728653;
+  var DOOM_SPREAD = 1.35;
+  var DOOM_ALPHA = 0.58;
+  var FORM = {
+    deer: { base: "deer", hgt: 0.68, wide: 1, tall: 1, tint: "#a9825a", tintK: 0, radius: 7, viable: 4, ru: "Олень" },
+    mammoth: { base: "mammoth", hgt: 1.05, wide: 1, tall: 1, tint: "#6b4f35", tintK: 0, radius: 9, viable: 3, ru: "Мамонт" },
+    boar: { base: "deer", hgt: 0.52, wide: 1.08, tall: 0.86, tint: "#4a3a2e", tintK: 0.46, radius: 6, viable: 3, ru: "Кабан" },
+    aurochs: { base: "deer", hgt: 0.86, wide: 1.06, tall: 1.02, tint: "#4a3b2c", tintK: 0.36, radius: 8, viable: 5, ru: "Дикий бык" }
+  };
+  var FALLBACK_FORM = FORM.deer;
+  function formOf(kind) {
+    return FORM[kind] || FALLBACK_FORM;
+  }
+  var GRAZE_TILT = 0.17;
+  var ALERT_TILT = 0.06;
+  var ALERT_LIFT = 0.035;
+  var clamp20 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var num14 = (v, d) => Number.isFinite(v) ? v : d;
+  function hash3(a, b, c) {
+    let h = a * 374761393 + b * 668265263 + c * 2246822519 | 0;
+    h = (h ^ h >>> 13) * 1274126177 | 0;
+    h = (h ^ h >>> 16) >>> 0;
+    return h / 4294967296;
+  }
+  function readHerds(sim2) {
+    const out = [];
+    if (!sim2 || typeof sim2 !== "object") return out;
+    const viewById = /* @__PURE__ */ new Map();
+    const view = sim2.herdsView;
+    if (view && Array.isArray(view.list)) {
+      for (const r of view.list) {
+        if (!r) continue;
+        viewById.set(String(r.id), r);
+      }
+    }
+    const st = sim2.herds;
+    if (st && Array.isArray(st.herds)) {
+      for (const h of st.herds) {
+        const rec = normalizeState(h, viewById);
+        if (rec) out.push(rec);
+      }
+      return out;
+    }
+    for (const r of viewById.values()) {
+      const rec = normalizeView(r);
+      if (rec) out.push(rec);
+    }
+    return out;
+  }
+  function normalizeState(h, viewById) {
+    if (!h || typeof h !== "object") return null;
+    const x = num14(h.cx, NaN), y = num14(h.cy, NaN);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const n = num14(h.n, 0);
+    if (!(n > 0)) return null;
+    const kind = typeof h.kind === "string" ? h.kind : "deer";
+    const f = formOf(kind);
+    const v = viewById.get(String(h.id));
+    return {
+      id: h.id | 0 || 0,
+      kind,
+      form: f,
+      x,
+      y,
+      tx: num14(h.tx, x),
+      ty: num14(h.ty, y),
+      n,
+      fear: clamp20(num14(h.fear, 0), 0, 1),
+      r: v && Number.isFinite(v.r) && v.r > 0 ? v.r : f.radius,
+      // Обречённость: слово модели весомее нашей таблицы. Флага нет — считаем
+      // сами по запасному порогу.
+      doomed: h.doomed != null ? !!h.doomed : n < f.viable
+    };
+  }
+  function normalizeView(r) {
+    const x = num14(r.x, NaN), y = num14(r.y, NaN);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const n = num14(r.head, 0);
+    if (!(n > 0)) return null;
+    const kind = typeof r.species === "string" ? r.species : "deer";
+    const f = formOf(kind);
+    return {
+      id: parseInt(r.id, 10) | 0 || 0,
+      kind,
+      form: f,
+      x,
+      y,
+      tx: x,
+      ty: y,
+      n,
+      fear: clamp20(num14(r.fear, 0), 0, 1),
+      r: Number.isFinite(r.r) && r.r > 0 ? r.r : f.radius,
+      doomed: n < f.viable
+    };
+  }
+  var HerdsView = class {
+    // animals — экземпляр AnimalSprites из people.js (renderer.beasts). Модуль
+    // не создаёт свой: два кэша листов зверья означали бы двойную память и
+    // двойную выпечку при каждой смене пресета.
+    constructor(quality, animals) {
+      this.q = quality || {
+        id: "high",
+        detail: 2,
+        lod: { beastMinZoom: 0.75 },
+        caps: { beasts: 60 }
+      };
+      this.animals = animals || null;
+      this.time = 0;
+      this.day = -1;
+      this.seed = 0;
+      this.trails = /* @__PURE__ */ new Map();
+      this.atlas = /* @__PURE__ */ new Map();
+      this.atlasGen = -1;
+      this.sprites = /* @__PURE__ */ new Map();
+      this.layouts = /* @__PURE__ */ new Map();
+      this._zoneCv = null;
+      this._zoneKey = "";
+      this._zoneBox = null;
+      this._buf = [];
+      this.drawn = 0;
+      this.prints = 0;
+      this.blobs = 0;
+    }
+    setQuality(q) {
+      this.q = q;
+      this.atlas.clear();
+      this.sprites.clear();
+      this._zoneCv = null;
+      this._zoneKey = "";
+      this._zoneBox = null;
+    }
+    // Мир подменился целиком (новая игра, загрузка сейва). Без этого над свежей
+    // картой секунду-другую тянутся тропы прошлой партии.
+    clear() {
+      this.trails.clear();
+      this.layouts.clear();
+      this.day = -1;
+      this.seed = 0;
+    }
+    attach(animals) {
+      this.animals = animals;
+      this.atlas.clear();
+    }
+    // =========================================================================
+    // ОБНОВЛЕНИЕ. Один вызов за кадр, в самом начале draw(). Здесь только время
+    // для фазы шага и тропы; ни выпечки, ни отрисовки.
+    //
+    // ПРАВИЛО «ОДИН ДЕНЬ СЧИТАЕТСЯ ОДИН РАЗ». Точка тропы кладётся строго при
+    // смене sim.day. Повторный вызов в те же сутки не добавляет ни точки: иначе
+    // тропа накапливалась бы с частотой кадров и у игрока с 144 Гц выглядела бы
+    // втрое длиннее, чем у игрока с 48.
+    // =========================================================================
+    update(sim2, dtReal) {
+      if (!sim2 || !sim2.world) return;
+      this.time += Math.min(0.05, Math.max(0, dtReal || 0));
+      const seed = sim2.world.seed | 0 || 20250808;
+      if (seed !== this.seed) {
+        this.clear();
+        this.seed = seed;
+      }
+      const day = Math.floor(num14(sim2.day, 0));
+      if (day === this.day) return;
+      if (day < this.day) this.trails.clear();
+      this.day = day;
+      const list = readHerds(sim2);
+      const alive2 = /* @__PURE__ */ new Set();
+      for (const h of list) {
+        alive2.add(h.id);
+        let t = this.trails.get(h.id);
+        if (!t) {
+          if (this.trails.size >= TRAIL_HERDS) continue;
+          t = { pts: [], kind: h.kind };
+          this.trails.set(h.id, t);
+        }
+        t.kind = h.kind;
+        const last2 = t.pts.length ? t.pts[t.pts.length - 1] : null;
+        if (!last2 || Math.hypot(last2.x - h.x, last2.y - h.y) >= TRAIL_MIN_STEP) {
+          t.pts.push({ x: h.x, y: h.y, d: day });
+          if (t.pts.length > TRAIL_MAX) t.pts.shift();
+        }
+      }
+      for (const [id, t] of this.trails) {
+        while (t.pts.length && day - t.pts[0].d > TRAIL_LIFE) t.pts.shift();
+        if (!t.pts.length && !alive2.has(id)) this.trails.delete(id);
+      }
+    }
+    // =========================================================================
+    // НИЖНИЙ СЛОЙ: зона выпаса и следы. Рисуется по земле — до построек, до
+    // жителей и до самих зверей.
+    // =========================================================================
+    drawGround(sim2, ctx, ox, oy, z, cw, ch) {
+      this.prints = 0;
+      if (!sim2 || !sim2.world) return;
+      const zoom = z / TILE_PX6;
+      if (zoom < ZONE_MIN_ZOOM) return;
+      const season = clamp20(Math.floor(num14(sim2.seasonIdx, 0)), 0, 3);
+      const herds = readHerds(sim2);
+      this._drawZones(sim2, ctx, ox, oy, z, cw, ch, season, herds);
+      const cap = HERD_LIMITS.trails[this.q.id] != null ? HERD_LIMITS.trails[this.q.id] : HERD_LIMITS.trails.high;
+      if (!cap || zoom < TRAIL_MIN_ZOOM) return;
+      const now2 = this.day + clamp20(num14(sim2.dayTime, 0), 0, 1);
+      const size = Math.max(2, z * 0.16);
+      let drawn = 0;
+      for (const t of this.trails.values()) {
+        if (drawn >= cap) break;
+        const pts = t.pts;
+        if (pts.length < 2) continue;
+        const print = this.printSprite(season);
+        for (let i = 1; i < pts.length && drawn < cap; i++) {
+          const a = pts[i - 1], b = pts[i];
+          const age = now2 - b.d;
+          if (age >= TRAIL_LIFE) continue;
+          const k = 1 - age / TRAIL_LIFE;
+          const alpha2 = 0.42 * k * k;
+          if (alpha2 < 0.02) continue;
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const len = Math.hypot(dx, dy);
+          const steps = Math.max(1, Math.min(6, Math.round(len / TRAIL_STEP)));
+          const ang = Math.atan2(dy, dx);
+          for (let s = 0; s < steps && drawn < cap; s++) {
+            const u = (s + 0.5) / steps;
+            const wx = a.x + dx * u, wy = a.y + dy * u;
+            const px = ox + wx * z, py = oy + wy * z;
+            if (px < -12 || py < -12 || px > cw + 12 || py > ch + 12) continue;
+            const j = (hash3(this.seed, b.d * 31 + s, i) - 0.5) * z * 0.55;
+            const nx = -Math.sin(ang) * j, ny = Math.cos(ang) * j;
+            ctx.globalAlpha = alpha2;
+            ctx.save();
+            ctx.translate(px + nx, py + ny);
+            ctx.rotate(ang);
+            ctx.drawImage(print, -size, -size * 0.5, size * 2, size);
+            ctx.restore();
+            drawn++;
+          }
+        }
+      }
+      ctx.globalAlpha = 1;
+      this.prints = drawn;
+    }
+    // =========================================================================
+    // ВЕРХНИЙ СЛОЙ: сами звери или пятно с числом голов.
+    // =========================================================================
+    draw(sim2, ctx, ox, oy, z, cw, ch) {
+      this.drawn = 0;
+      this.blobs = 0;
+      if (!sim2 || !sim2.world) return;
+      const herds = readHerds(sim2);
+      if (!herds.length) return;
+      const zoom = z / TILE_PX6;
+      const near = zoom >= (this.q.lod ? this.q.lod.beastMinZoom : 0.75);
+      const capHeads = (this.q.caps ? this.q.caps.beasts : 60) | 0;
+      if (this.animals && this.animals.gen !== this.atlasGen) {
+        this.atlas.clear();
+        this.atlasGen = this.animals.gen;
+      }
+      this._bakedThisFrame = 0;
+      const ccx = cw / 2, ccy = ch / 2;
+      const order = herds.map((h) => ({ h, d: Math.hypot(ox + h.x * z - ccx, oy + h.y * z - ccy) })).sort((a, b) => a.d - b.d);
+      const buf = this._buf;
+      buf.length = 0;
+      let labels = 0;
+      const pending = [];
+      for (const it of order) {
+        const h = it.h;
+        const sx = ox + h.x * z, sy = oy + h.y * z;
+        const rad = Math.max(z, SPREAD_BASE * Math.sqrt(Math.max(1, h.n)) * 1.6 * z);
+        if (sx + rad < -40 || sy + rad < -40 || sx - rad > cw + 40 || sy - rad > ch + 40) continue;
+        const atlas = near ? this.atlasFor(h.kind) : null;
+        if (!atlas) {
+          pending.push(h);
+          continue;
+        }
+        const heads = Math.min(HERD_LIMITS.headsPerHerd, Math.max(1, Math.round(h.n)));
+        if (buf.length + heads > capHeads) {
+          pending.push(h);
+          continue;
+        }
+        const alert = h.fear >= FEAR_ALERT;
+        const lay = this.layoutFor(h, heads);
+        let hx = h.tx - h.x, hy = h.ty - h.y;
+        const hl = Math.hypot(hx, hy);
+        const moving = hl > 0.15;
+        if (hl > 1e-4) {
+          hx /= hl;
+          hy /= hl;
+        } else {
+          hx = 1;
+          hy = 0;
+        }
+        const bodyH = z * h.form.hgt;
+        const alpha2 = h.doomed ? DOOM_ALPHA : 1;
+        for (let i = 0; i < lay.length; i++) {
+          const p = lay[i];
+          const wx = h.x + p.lx * hx - p.ly * hy;
+          const wy = h.y + p.lx * hy + p.ly * hx;
+          buf.push({
+            x: ox + wx * z,
+            y: oy + wy * z,
+            wy,
+            atlas,
+            alpha: alpha2,
+            bh: bodyH * p.sc,
+            // Поза: пуганое стадо стоит с поднятыми головами, спокойное пасётся.
+            pose: alert ? 1 : 0,
+            // Фаза шага у каждого своя: стадо не марширует в ногу.
+            frame: moving ? (this.time * p.rate + p.phase | 0) & 1 : p.idle ? (this.time * 0.5 + p.phase | 0) & 1 : 0,
+            // Спокойные пасутся вразнобой, пуганые смотрят в одну сторону —
+            // это половина метки пугливости.
+            dir: alert ? hx < 0 ? 1 : 0 : p.flip ? hx < 0 ? 0 : 1 : hx < 0 ? 1 : 0
+          });
+        }
+        if (heads < Math.round(h.n) && labels < HERD_LIMITS.labels && z > 14) {
+          pendingLabel(this, sx, sy, h, z);
+          labels++;
+        }
+      }
+      buf.sort((a, b) => a.wy - b.wy);
+      for (const s of buf) {
+        const A = s.atlas;
+        const H = s.bh * A.k;
+        const W = H * (A.cw / A.ch);
+        ctx.globalAlpha = s.alpha;
+        ctx.drawImage(
+          A.cv,
+          (s.pose * 2 + s.frame) * A.cw,
+          s.dir * A.ch,
+          A.cw,
+          A.ch,
+          Math.round(s.x - W / 2),
+          Math.round(s.y - H * A.ay),
+          Math.round(W),
+          Math.round(H)
+        );
+      }
+      ctx.globalAlpha = 1;
+      this.drawn = buf.length;
+      buf.length = 0;
+      for (const h of pending) this.drawBlob(sim2, ctx, ox, oy, z, cw, ch, h);
+      this.flushLabels(ctx, z);
+    }
+    // -------------------------------------------------------------------------
+    // Пятно вместо тел: тёмное облако размером по поголовью и число голов.
+    // Это не «заглушка на бедность», а нужный дальний план: игрок, отъехавший на
+    // весь материк, должен видеть, где вообще водится дичь.
+    // -------------------------------------------------------------------------
+    drawBlob(sim2, ctx, ox, oy, z, cw, ch, h) {
+      const sx = ox + h.x * z, sy = oy + h.y * z;
+      const alert = h.fear >= FEAR_ALERT;
+      let rw = SPREAD_BASE * Math.sqrt(Math.max(1, h.n)) * 1.5 * z;
+      if (alert) rw *= 1 - 0.3 * h.fear;
+      if (h.doomed) rw *= DOOM_SPREAD;
+      rw = clamp20(rw, 5, 90);
+      if (sx + rw < 0 || sy + rw < 0 || sx - rw > cw || sy - rw > ch) return;
+      const cv = this.blobSprite(h.kind, alert);
+      ctx.globalAlpha = h.doomed ? 0.34 : 0.72;
+      ctx.drawImage(cv, sx - rw, sy - rw * 0.62, rw * 2, rw * 1.24);
+      ctx.globalAlpha = 1;
+      this.blobs++;
+      if (rw >= 11) pendingLabel(this, sx, sy - rw * 0.72, h, z, true);
+    }
+    flushLabels(ctx, z) {
+      const list = this._labels;
+      if (!list || !list.length) return;
+      const px = clamp20(Math.round(z * 0.42), 9, 17);
+      ctx.save();
+      ctx.font = `600 ${px}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineWidth = Math.max(2, px * 0.28);
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(14,11,8,0.82)";
+      for (const l of list) {
+        ctx.fillStyle = l.col;
+        ctx.strokeText(l.text, l.x, l.y);
+        ctx.fillText(l.text, l.x, l.y);
+      }
+      ctx.restore();
+      list.length = 0;
+    }
+    // =========================================================================
+    // РАСКЛАДКА КУЧИ
+    //
+    // Стадо — не сетка и не кольцо. Порядок такой:
+    //   вожак      — вынесен вперёд по ходу: стадо идёт за ним, и по нему
+    //                читается направление даже у стоящего стада;
+    //   молодняк   — в середине, под защитой взрослых, и мельче ростом;
+    //   взрослые   — кольцом наружу, золотым углом (равномерно без решётки),
+    //                каждый сбит джиттером от хеша.
+    // У обречённого стада вожака нет: вести некому, куча растянута.
+    //
+    // Раскладка кэшируется по «поголовье с точностью до головы + ступень
+    // испуга»: пересчитывать её каждый кадр незачем, а дробная часть поголовья
+    // (приплод копится долями) не должна дёргать зверей с места.
+    // =========================================================================
+    layoutFor(h, heads) {
+      const fearStep = Math.round(h.fear * 5) / 5;
+      const key = `${this.seed}|${h.id}|${heads}|${fearStep}|${h.doomed ? 1 : 0}`;
+      let lay = this.layouts.get(key);
+      if (lay) {
+        touchKey(this.layouts, key);
+        return lay;
+      }
+      const huddle = 1 - FEAR_HUDDLE * fearStep;
+      const spread = SPREAD_BASE * Math.sqrt(heads) * huddle * (h.doomed ? DOOM_SPREAD : 1);
+      const young = h.doomed ? 0 : Math.min(heads - 1, Math.round(heads * YOUNG_SHARE));
+      const hasLeader = !h.doomed && heads > 1;
+      const adults = heads - young - (hasLeader ? 1 : 0);
+      lay = [];
+      if (hasLeader) {
+        lay.push({
+          lx: spread * LEADER_AHEAD,
+          ly: (hash3(this.seed, h.id, 0) - 0.5) * spread * 0.3,
+          sc: 1.16,
+          phase: hash3(this.seed, h.id, 101) * 2,
+          rate: 1.5,
+          flip: false,
+          idle: false
+        });
+      }
+      for (let i = 0; i < adults; i++) {
+        const a = i * GOLDEN + hash3(this.seed, h.id, 7) * Math.PI * 2;
+        const r = spread * Math.sqrt((i + 0.6) / Math.max(1, adults));
+        lay.push(makeSlot(
+          this,
+          h,
+          lay.length,
+          Math.cos(a) * r + (hash3(this.seed, h.id, 200 + i) - 0.5) * spread * 0.26,
+          Math.sin(a) * r + (hash3(this.seed, h.id, 400 + i) - 0.5) * spread * 0.26,
+          0.92 + hash3(this.seed, h.id, 600 + i) * 0.16
+        ));
+      }
+      for (let i = 0; i < young; i++) {
+        const a = i * GOLDEN + hash3(this.seed, h.id, 11) * Math.PI * 2;
+        const r = spread * YOUNG_R * Math.sqrt((i + 0.5) / Math.max(1, young));
+        lay.push(makeSlot(
+          this,
+          h,
+          lay.length,
+          Math.cos(a) * r,
+          Math.sin(a) * r,
+          0.58 + hash3(this.seed, h.id, 800 + i) * 0.1
+        ));
+      }
+      this.layouts.set(key, lay);
+      pruneMap(this.layouts, HERD_LIMITS.layouts);
+      return lay;
+    }
+    // =========================================================================
+    // АТЛАС ПОЗ. Один канвас на вид: 4 столбца (поза × кадр шага) × 2 строки
+    // (направление). Печётся ОДИН раз, дальше в кадре только блит.
+    //
+    // Источник — готовый лист AnimalSprites: своих зверей модуль не рисует.
+    // Что добавляется поверх: наклон корпуса (пасётся / настороже), пропорции
+    // вида и подкраска шкуры. Всё это — операции над готовым спрайтом, поэтому
+    // стадо и одиночка остаются одним и тем же животным.
+    // =========================================================================
+    atlasFor(kind) {
+      if (!this.animals || typeof this.animals.sheet !== "function") return null;
+      const detail = this.q.detail | 0;
+      const key = `${kind}|${detail}|${this.atlasGen}`;
+      const got = this.atlas.get(key);
+      if (got) return got;
+      if (this._bakedThisFrame >= 1) return null;
+      this._bakedThisFrame++;
+      const a = this.bakeAtlas(kind);
+      if (a) this.atlas.set(key, a);
+      return a;
+    }
+    bakeAtlas(kind) {
+      const f = formOf(kind);
+      let src = null;
+      try {
+        src = this.animals.sheet(f.base);
+      } catch {
+        return null;
+      }
+      if (!src || !src.cv || !src.fw) return null;
+      const pad = Math.max(2, Math.round(src.fh * 0.15));
+      const dw = Math.max(1, Math.round(src.fw * f.wide));
+      const dh = Math.max(1, Math.round(src.fh * f.tall));
+      const CW = dw + pad * 2, CH = dh + pad * 2;
+      const anchorY = pad + dh * 0.93;
+      const cv = document.createElement("canvas");
+      cv.width = CW * 4;
+      cv.height = CH * 2;
+      const c = cv.getContext("2d");
+      const tmp = document.createElement("canvas");
+      tmp.width = CW;
+      tmp.height = CH;
+      const tc = tmp.getContext("2d");
+      for (let dir = 0; dir < 2; dir++) {
+        for (let pose = 0; pose < 2; pose++) {
+          for (let fr = 0; fr < 2; fr++) {
+            tc.clearRect(0, 0, CW, CH);
+            tc.save();
+            tc.translate(CW / 2, anchorY);
+            const sgn = dir === 0 ? 1 : -1;
+            tc.rotate(pose === 0 ? GRAZE_TILT * sgn : -ALERT_TILT * sgn);
+            tc.translate(-CW / 2, -anchorY);
+            const lift = pose === 1 ? -dh * ALERT_LIFT : 0;
+            tc.drawImage(
+              src.cv,
+              fr * src.fw,
+              dir * src.fh,
+              src.fw,
+              src.fh,
+              (CW - dw) / 2,
+              pad + lift,
+              dw,
+              dh
+            );
+            tc.restore();
+            if (f.tintK > 0) {
+              tc.save();
+              tc.globalCompositeOperation = "source-atop";
+              tc.globalAlpha = f.tintK;
+              tc.fillStyle = f.tint;
+              tc.fillRect(0, 0, CW, CH);
+              tc.restore();
+            }
+            c.drawImage(tmp, (pose * 2 + fr) * CW, dir * CH);
+          }
+        }
+      }
+      return { cv, cw: CW, ch: CH, ay: anchorY / CH, k: CH / dh };
+    }
+    // =========================================================================
+    // МЕЛКИЕ СПРАЙТЫ: зона выпаса, пятно стада, отпечаток. Все — один раз в
+    // канвас, дальше только блит с globalAlpha.
+    // =========================================================================
+    // -------------------------------------------------------------------------
+    // Зоны выпаса одним блитом.
+    //
+    // Буфер живёт в МИРОВЫХ координатах, а не в экранных: от панорамы он не
+    // зависит вовсе, и при движении камеры не перепекается ни разу. Пересборка
+    // нужна только когда сдвинулось само стадо, сменился сезон или размер мира.
+    //
+    // ZONE_PPT — пикселей буфера на клетку. Четыре: пятно радиусом семь клеток
+    // ложится в буфер кругом в 56 px, а внутри у него мягкий градиент без единой
+    // резкой грани — растянуть такой круг обратно на 448 px можно без потерь,
+    // которые различил бы глаз. Мир 96×96 даёт буфер 384×384, это 590 КБ.
+    // -------------------------------------------------------------------------
+    _drawZones(sim2, ctx, ox, oy, z, cw, ch, season, herds) {
+      const W = sim2.world.w | 0, H = sim2.world.h | 0;
+      if (!(W > 0 && H > 0) || !herds.length) {
+        this._zoneBox = null;
+        return;
+      }
+      let key = `${season}|${W}x${H}|${this.q.id}`;
+      for (const h of herds) {
+        key += `|${h.id},${Math.round(h.x * 4)},${Math.round(h.y * 4)},${Math.round(h.r * 4)},${Math.round(h.fear * 20)},${h.doomed ? 1 : 0}`;
+      }
+      if (key !== this._zoneKey || !this._zoneCv) {
+        const bw = Math.max(8, W * ZONE_PPT), bh = Math.max(8, H * ZONE_PPT);
+        if (!this._zoneCv || this._zoneCv.width !== bw || this._zoneCv.height !== bh) {
+          const cv = document.createElement("canvas");
+          if (!cv) {
+            this._zoneBox = null;
+            return;
+          }
+          cv.width = bw;
+          cv.height = bh;
+          this._zoneCv = cv;
+        }
+        const c = this._zoneCv.getContext("2d");
+        if (!c) {
+          this._zoneBox = null;
+          return;
+        }
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.clearRect(0, 0, bw, bh);
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const h of herds) {
+          const rr = h.r * (1 - 0.22 * h.fear);
+          c.globalAlpha = 0.3 * (h.doomed ? 0.55 : 1) * (1 - 0.25 * h.fear);
+          const cv = this.zoneSprite(season, h.fear >= FEAR_ALERT, h.doomed);
+          c.drawImage(
+            cv,
+            (h.x - rr) * ZONE_PPT,
+            (h.y - rr) * ZONE_PPT,
+            rr * 2 * ZONE_PPT,
+            rr * 2 * ZONE_PPT
+          );
+          if (h.x - rr < x0) x0 = h.x - rr;
+          if (h.y - rr < y0) y0 = h.y - rr;
+          if (h.x + rr > x1) x1 = h.x + rr;
+          if (h.y + rr > y1) y1 = h.y + rr;
+        }
+        c.globalAlpha = 1;
+        this._zoneKey = key;
+        this._zoneBox = x1 > x0 ? { x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(W, x1), y1: Math.min(H, y1) } : null;
+      }
+      const box2 = this._zoneBox;
+      if (!box2) return;
+      const sx0 = Math.max(0, ox + box2.x0 * z), sy0 = Math.max(0, oy + box2.y0 * z);
+      const sx1 = Math.min(cw, ox + box2.x1 * z), sy1 = Math.min(ch, oy + box2.y1 * z);
+      if (!(sx1 > sx0 && sy1 > sy0)) return;
+      const k = ZONE_PPT / z;
+      const bx = (sx0 - ox) * k, by = (sy0 - oy) * k;
+      const bwv = (sx1 - sx0) * k, bhv = (sy1 - sy0) * k;
+      const smooth3 = ctx.imageSmoothingEnabled;
+      if ("imageSmoothingEnabled" in ctx) ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(this._zoneCv, bx, by, bwv, bhv, sx0, sy0, sx1 - sx0, sy1 - sy0);
+      if ("imageSmoothingEnabled" in ctx) ctx.imageSmoothingEnabled = smooth3;
+    }
+    zoneSprite(season, alert, doomed) {
+      const key = `zone|${season}|${alert ? 1 : 0}|${doomed ? 1 : 0}`;
+      const got = this.sprites.get(key);
+      if (got) {
+        touchKey(this.sprites, key);
+        return got;
+      }
+      const S = 128;
+      const cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const grass = TERRAIN[season][TILE.GRASS];
+      let col = mixHex(grass.det, "#6b5a3c", 0.42);
+      if (alert) col = mixHex(col, "#5a5f66", 0.35);
+      if (doomed) col = mixHex(col, grass.base, 0.45);
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g2.addColorStop(0, hexA(col, 0.55));
+      g2.addColorStop(0.62, hexA(col, 0.34));
+      g2.addColorStop(0.87, hexA(shade(col, -0.18), 0.3));
+      g2.addColorStop(0.94, hexA(col, 0.14));
+      g2.addColorStop(1, hexA(col, 0));
+      c.fillStyle = g2;
+      c.beginPath();
+      c.arc(S / 2, S / 2, S / 2, 0, 7);
+      c.fill();
+      this.sprites.set(key, cv);
+      pruneMap(this.sprites, HERD_LIMITS.sprites);
+      return cv;
+    }
+    blobSprite(kind, alert) {
+      const key = `blob|${kind}|${alert ? 1 : 0}`;
+      const got = this.sprites.get(key);
+      if (got) {
+        touchKey(this.sprites, key);
+        return got;
+      }
+      const S = 128;
+      const cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const base = formOf(kind).tint;
+      const col = mixHex(base, "#20180f", alert ? 0.3 : 0.46);
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g2.addColorStop(0, hexA(col, 0.92));
+      g2.addColorStop(alert ? 0.62 : 0.4, hexA(col, alert ? 0.8 : 0.52));
+      g2.addColorStop(alert ? 0.78 : 0.72, hexA(col, alert ? 0.46 : 0.2));
+      g2.addColorStop(1, hexA(col, 0));
+      c.fillStyle = g2;
+      c.beginPath();
+      c.arc(S / 2, S / 2, S / 2, 0, 7);
+      c.fill();
+      if (alert) {
+        c.strokeStyle = hexA(mixHex(base, "#ffe6b0", 0.55), 0.45);
+        c.lineWidth = S * 0.035;
+        c.beginPath();
+        c.arc(S / 2, S / 2, S * 0.4, 0, 7);
+        c.stroke();
+      }
+      this.sprites.set(key, cv);
+      pruneMap(this.sprites, HERD_LIMITS.sprites);
+      return cv;
+    }
+    printSprite(season) {
+      const key = `print|${season}`;
+      const got = this.sprites.get(key);
+      if (got) {
+        touchKey(this.sprites, key);
+        return got;
+      }
+      const W = 32, H = 16;
+      const cv = document.createElement("canvas");
+      cv.width = W;
+      cv.height = H;
+      const c = cv.getContext("2d");
+      const col = shade(mixHex(TERRAIN[season][TILE.GRASS].lo, "#2b2115", 0.55), -0.05);
+      c.fillStyle = col;
+      for (const k of [-1, 1]) {
+        c.beginPath();
+        c.ellipse(W * 0.5 + k * W * 0.13, H * 0.5, W * 0.1, H * 0.26, 0, 0, 7);
+        c.fill();
+      }
+      this.sprites.set(key, cv);
+      pruneMap(this.sprites, HERD_LIMITS.sprites);
+      return cv;
+    }
+  };
+  function makeSlot(view, h, i, lx, ly, sc) {
+    return {
+      lx,
+      ly,
+      sc,
+      phase: hash3(view.seed, h.id, 1e3 + i) * 2,
+      // Своя скорость ног у каждого: 1,1–1,9 «шага в секунду». Разброс небольшой
+      // намеренно — стадо идёт вместе, а не рассыпается на спринтеров.
+      rate: 1.1 + hash3(view.seed, h.id, 1300 + i) * 0.8,
+      // Часть зверей пасётся мордой в другую сторону: стадо не строй.
+      flip: hash3(view.seed, h.id, 1600 + i) < 0.34,
+      // Часть переминается даже у стоящего стада — иначе картинка мертва.
+      idle: hash3(view.seed, h.id, 1900 + i) < 0.28
+    };
+  }
+  function pendingLabel(view, x, y, h, z, blob2) {
+    if (!view._labels) view._labels = [];
+    if (view._labels.length >= HERD_LIMITS.labels) return;
+    view._labels.push({
+      x,
+      y: blob2 ? y : y - z * 0.95,
+      text: `${Math.round(h.n)}`,
+      col: h.doomed ? "#c9bda6" : "#f2e6c8"
+    });
+  }
+  function hexA(col, a) {
+    return rgb2css(hex2rgb(col), a);
+  }
+  function touchKey(map, key) {
+    if (!map.has(key)) return;
+    const v = map.get(key);
+    map.delete(key);
+    map.set(key, v);
+  }
+  function pruneMap(map, maxEntries) {
+    while (map.size > maxEntries) {
+      const k = map.keys().next().value;
+      map.delete(k);
+    }
+  }
+
   // app/src/render/postfx.js
-  var TILE_PX5 = 32;
+  var TILE_PX7 = 32;
   var clamp017 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var RATE = {
     copy: 35e-8,
@@ -30886,7 +32580,7 @@ ${s}`, "console");
       if (!this.on || !this.bufOn || !this.bctx || !sim2 || !sim2.buildings) return 0;
       const glow = L ? L.glow : 0;
       if (glow < 0.05) return 0;
-      const zoom = z / TILE_PX5;
+      const zoom = z / TILE_PX7;
       if (zoom < (this.q.lod.buildingGlowMinZoom || 0) * 0.7) return 0;
       let n = 0;
       for (const b of sim2.buildings) {
@@ -31206,7 +32900,7 @@ ${s}`, "console");
   }
 
   // app/src/render/renderer.js
-  var TILE_PX6 = 32;
+  var TILE_PX8 = 32;
   var Renderer = class {
     constructor(canvas2) {
       this.canvas = canvas2;
@@ -31228,6 +32922,7 @@ ${s}`, "console");
       this.sprites = new SpriteCache(this.quality);
       this.people = new PeopleSprites(this.quality);
       this.beasts = new AnimalSprites(this.quality);
+      this.herds = new HerdsView(this.quality, this.beasts);
       this.vstate = /* @__PURE__ */ new WeakMap();
       this.art = new ArtPack();
       this.art.preload();
@@ -31236,11 +32931,13 @@ ${s}`, "console");
       this.veg = new Vegetation(this.quality);
       this.relief = new ReliefLayer(this.quality);
       this.shadows = new ShadowLayer(this.quality);
+      this.damage = new DamageLayer(this.quality);
       this.fx = new FxLayer(this.quality);
       this.minimap = new MinimapLayer(this.quality);
       this.postfx = new PostFX(this.quality);
       this.select = new SelectLayer(this.quality);
       this.icons = new IconLayer(this.quality);
+      this.notify = new Notifications(this.quality);
       this.cityLights = new CityLights(this.quality);
     }
     // id ∈ QUALITY_ORDER или 'auto'
@@ -31264,10 +32961,12 @@ ${s}`, "console");
       this.relief.setQuality(this.quality);
       this.shadows.setQuality(this.quality);
       this.fx.setQuality(this.quality);
+      this.damage.setQuality(this.quality);
       this.minimap.setQuality(this.quality);
       this.postfx.setQuality(this.quality);
       this.select.setQuality(this.quality);
       this.icons.setQuality(this.quality);
+      this.notify.setQuality(this.quality);
       this.cityLights.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
@@ -31281,20 +32980,21 @@ ${s}`, "console");
     }
     screenToWorld(sx, sy) {
       return {
-        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX6 * this.cam.zoom),
-        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX6 * this.cam.zoom)
+        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX8 * this.cam.zoom),
+        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX8 * this.cam.zoom)
       };
     }
     worldToScreen(wx, wy) {
       return {
-        x: (wx - this.cam.x) * TILE_PX6 * this.cam.zoom + this.canvas.width / this.dpr / 2,
-        y: (wy - this.cam.y) * TILE_PX6 * this.cam.zoom + this.canvas.height / this.dpr / 2
+        x: (wx - this.cam.x) * TILE_PX8 * this.cam.zoom + this.canvas.width / this.dpr / 2,
+        y: (wy - this.cam.y) * TILE_PX8 * this.cam.zoom + this.canvas.height / this.dpr / 2
       };
     }
     // ---------------------------------------------------------------------
     draw(sim2, dtReal) {
       this.time += dtReal;
       this.tuneAuto(dtReal);
+      this.herds.update(sim2, dtReal);
       const ctx = this.ctx;
       const dpr = this.dpr;
       const cw = this.canvas.width / dpr, ch = this.canvas.height / dpr;
@@ -31302,7 +33002,7 @@ ${s}`, "console");
       const L = lightAt(sim2.dayTime);
       ctx.fillStyle = L.sky;
       ctx.fillRect(0, 0, cw, ch);
-      const z = TILE_PX6 * this.cam.zoom;
+      const z = TILE_PX8 * this.cam.zoom;
       const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
       this.postfx.begin(sim2, cw, ch, L, { dpr, ox, oy, z, zoom: this.cam.zoom, time: this.time });
       this.terrain.draw(ctx, sim2, ox, oy, z, cw, ch);
@@ -31313,9 +33013,11 @@ ${s}`, "console");
       this.fx.update(sim2, dtReal, ox, oy, z, cw, ch);
       this.veg.update(sim2, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
       this.shadows.begin(sim2, dtReal, z, { fog: this.atmo.fogK });
+      this.damage.begin(sim2, dtReal, z, { wind: this.atmo.wind });
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.richVeg) this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
       this.terrain.landmarks.drawLive(sim2, ctx, ox, oy, z, cw, ch, this.time);
+      this.herds.drawGround(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
       if (sim2.showTerritory) this.drawTerritory(sim2, ctx, ox, oy, z);
       for (const f of sim2.factions) {
@@ -31326,7 +33028,10 @@ ${s}`, "console");
           this.drawFactionSettlement(ctx, sx, sy, z, f, s, sim2);
         }
       }
+      this.damage.drawRubble(sim2, ctx, ox, oy, z, cw, ch);
+      this.herds.draw(sim2, ctx, ox, oy, z, cw, ch);
       this.drawSortedEntities(sim2, ctx, ox, oy, z, cw, ch, L);
+      this.damage.drawSmoke(ctx);
       this.cityLights.begin(sim2, ox, oy, z, cw, ch, L, { zoom: this.cam.zoom, time: this.time });
       this.select.drawGround(sim2, ctx, ox, oy, z, cw, ch, dtReal);
       this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
@@ -31376,10 +33081,11 @@ ${s}`, "console");
       }
       this.icons.draw(sim2, ctx, ox, oy, z, cw, ch, this.time, dtReal);
       this.postfx.draw(ctx);
+      this.notify.draw(sim2, ctx, ox, oy, z, cw, ch, dtReal);
       this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
       this.minimapRect = this.minimap.draw(sim2, ctx, cw, ch, {
         cam: this.cam,
-        tilePx: TILE_PX6,
+        tilePx: TILE_PX8,
         time: this.time,
         quality: this.quality
       });
@@ -31394,16 +33100,19 @@ ${s}`, "console");
         this.sprites.setQuality(this.quality);
         this.people.setQuality(this.quality);
         this.beasts.setQuality(this.quality);
+        this.herds.setQuality(this.quality);
         this.atmo.setQuality(this.quality);
         this.water.setQuality(this.quality);
         this.veg.setQuality(this.quality);
         this.relief.setQuality(this.quality);
         this.shadows.setQuality(this.quality);
         this.fx.setQuality(this.quality);
+        this.damage.setQuality(this.quality);
         this.minimap.setQuality(this.quality);
         this.postfx.setQuality(this.quality);
         this.select.setQuality(this.quality);
         this.icons.setQuality(this.quality);
+        this.notify.setQuality(this.quality);
         this.cityLights.setQuality(this.quality);
         this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
         this.resize();
@@ -31428,16 +33137,10 @@ ${s}`, "console");
         if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
         items.push({ y: v.y + 0.05, kind: "v", v, sx, sy });
       }
-      for (const a of sim2.animals) {
-        const sx = ox + a.x * z, sy = oy + a.y * z;
-        if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
-        items.push({ y: a.y + 0.05, kind: "a", a, sx, sy });
-      }
       items.sort((p, q) => p.y - q.y);
       for (const it of items) {
         if (it.kind === "b") this.drawBuilding(sim2, ctx, it.b, it.sx, it.sy, it.size);
-        else if (it.kind === "v") this.drawVillager(ctx, it.sx, it.sy, z, it.v, sim2.eraIndex);
-        else this.drawAnimal(ctx, it.sx, it.sy, z, it.a);
+        else this.drawVillager(ctx, it.sx, it.sy, z, it.v, sim2.eraIndex);
       }
       if (L.glow > 0.03 && this._pendingGlow.length) {
         ctx.save();
@@ -31592,6 +33295,7 @@ ${s}`, "console");
       this.shadows.building(ctx, spr, dx, dy, dw, dh);
       ctx.drawImage(spr.cv, dx, dy, dw, dh);
       this.shadows.selfShade(ctx, spr, dx, dy, dw, dh);
+      this.damage.building(ctx, b, spr, dx, dy, dw, dh);
       this._pendingGlow.push({ spr, dx, dy, dw, dh });
     }
     buildingCategory(id, def) {

@@ -14,10 +14,13 @@ import { Vegetation } from './vegetation.js';
 import { ReliefLayer } from './relief.js';
 import { ShadowLayer } from './shadows.js';
 import { FxLayer } from './fx.js';
+import { DamageLayer } from './damage.js';
 import { MinimapLayer } from './minimap.js';
 import { SelectLayer } from './select.js';
 import { IconLayer } from './icons.js';
+import { Notifications } from './notifications.js';
 import { CityLights } from './city_lights.js';
+import { HerdsView } from './herds_view.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
 import { PostFX } from './postfx.js';
 
@@ -45,6 +48,9 @@ export class Renderer {
     this.sprites = new SpriteCache(this.quality);
     this.people = new PeopleSprites(this.quality);
     this.beasts = new AnimalSprites(this.quality);
+    // Стада берут спрайты у AnimalSprites — того же листа, которым рисуются
+    // одиночки в sim.animals. Второго набора зверья в игре быть не должно.
+    this.herds = new HerdsView(this.quality, this.beasts);
     // Состояние анимации жителей живёт СНАРУЖИ симуляции: рендер читает
     // положение и сам считает направление и фазу шага.
     this.vstate = new WeakMap();
@@ -57,11 +63,13 @@ export class Renderer {
     this.veg = new Vegetation(this.quality);
     this.relief = new ReliefLayer(this.quality);
     this.shadows = new ShadowLayer(this.quality);
+    this.damage = new DamageLayer(this.quality);
     this.fx = new FxLayer(this.quality);
     this.minimap = new MinimapLayer(this.quality);
     this.postfx = new PostFX(this.quality);
     this.select = new SelectLayer(this.quality);       // наведение и выделение
     this.icons = new IconLayer(this.quality);          // значки состояния
+    this.notify = new Notifications(this.quality);     // всплывающие числа
     this.cityLights = new CityLights(this.quality);    // окна и фонари ночью
   }
 
@@ -86,10 +94,12 @@ export class Renderer {
     this.relief.setQuality(this.quality);
     this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
+    this.damage.setQuality(this.quality);
     this.minimap.setQuality(this.quality);
     this.postfx.setQuality(this.quality);
     this.select.setQuality(this.quality);
     this.icons.setQuality(this.quality);
+    this.notify.setQuality(this.quality);
     this.cityLights.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
@@ -120,6 +130,9 @@ export class Renderer {
   draw(sim, dtReal) {
     this.time += dtReal;
     this.tuneAuto(dtReal);
+    // Тропы стад и фаза шага. Точка тропы кладётся строго при смене sim.day —
+    // модуль сам следит, чтобы одни сутки не посчитались дважды.
+    this.herds.update(sim, dtReal);
 
     const ctx = this.ctx;
     const dpr = this.dpr;
@@ -156,6 +169,7 @@ export class Renderer {
     // Свой гейт слою не нужен: begin() сам молчит на eco и при quality.shadows
     // = false, а ниже порога зума не рисует вообще ничего.
     this.shadows.begin(sim, dtReal, z, { fog: this.atmo.fogK });
+    this.damage.begin(sim, dtReal, z, { wind: this.atmo.wind });
     this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
     // Растительность стоит 15 FPS на общем виде карты (58 -> 43). Держим её
     // там, где есть запас: на eco лес остаётся тем, что печёт terrain.js.
@@ -168,6 +182,9 @@ export class Renderer {
     // ориентиров на карте три-пять, а не тысячи, и слой сам молчит на eco
     // и при зуме мельче 11 пикселей на клетку.
     this.terrain.landmarks.drawLive(sim, ctx, ox, oy, z, cw, ch, this.time);
+    // Зона выпаса и следы — часть земли: они обязаны лежать ПОД постройками и
+    // жителями, иначе тропа пойдёт по крышам.
+    this.herds.drawGround(sim, ctx, ox, oy, z, cw, ch);
 
     // --- тени облаков (мировые координаты — не дрожат при панораме) ---
     if (this.quality.clouds) this.drawClouds(sim, ctx, ox, oy, z, cw, ch);
@@ -186,7 +203,16 @@ export class Renderer {
     }
 
     // --- единый проход по глубине: здания + жители + животные, сортировка по Y ---
+    // Руины — до общего Y-прохода: они лежат на земле, и житель, идущий по
+    // развалинам, обязан быть впереди них.
+    this.damage.drawRubble(sim, ctx, ox, oy, z, cw, ch);
+    // Стада идут ДО общего Y-прохода: постройка и житель перекрывают зверя,
+    // а не наоборот. Тот же осознанный компромисс, что у vegetation.js.
+    this.herds.draw(sim, ctx, ox, oy, z, cw, ch);
     this.drawSortedEntities(sim, ctx, ox, oy, z, cw, ch, L);
+    // Дым — после: он поднимается над крышами, а нарисованный до зданий
+    // столб упирался бы в собственный конёк.
+    this.damage.drawSmoke(ctx);
     this.cityLights.begin(sim, ox, oy, z, cw, ch, L, { zoom: this.cam.zoom, time: this.time });
     this.select.drawGround(sim, ctx, ox, oy, z, cw, ch, dtReal);
     this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
@@ -253,6 +279,22 @@ export class Renderer {
     this.icons.draw(sim, ctx, ox, oy, z, cw, ch, this.time, dtReal);
     this.postfx.draw(ctx);
 
+    // --- то, что пост-обработка не трогает ---
+    //
+    // ОТСТУПЛЕНИЕ ОТ БЛОКА ПОДКЛЮЧЕНИЯ notifications.js, НАРОЧНОЕ. Тот блок
+    // просит поставить всплывашки сразу после значков состояния, и довод там
+    // верный: «−2» обязано читаться ночью так же, как днём, а до виньетки —
+    // чтобы надписи по краям не оказались ярче центра. Но блок писался под
+    // прежний кадр, где ночной тон ложился РАНЬШЕ значков. Сейчас тон, тон
+    // погоды и виньетка слиты в один проход postfx.draw в самом конце, и та
+    // точка исчезла: поставить туда — значит утопить число в ночной синеве,
+    // ровно то, чего блок и просил избежать.
+    //
+    // Поэтому всплывашки идут ПОСЛЕ прохода, рядом с подписями fx.drawLabels,
+    // которые живут здесь по той же причине. Плата — числа не виньетируются;
+    // на краю экрана это незаметно, а читаемость ночью сохранена.
+    this.notify.draw(sim, ctx, ox, oy, z, cw, ch, dtReal);
+
     // --- миникарта (без пост-эффектов) ---
     this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
     this.minimapRect = this.minimap.draw(sim, ctx, cw, ch, {
@@ -270,16 +312,19 @@ export class Renderer {
       this.sprites.setQuality(this.quality);
       this.people.setQuality(this.quality);
       this.beasts.setQuality(this.quality);
+      this.herds.setQuality(this.quality);
     this.atmo.setQuality(this.quality);
     this.water.setQuality(this.quality);
     this.veg.setQuality(this.quality);
     this.relief.setQuality(this.quality);
     this.shadows.setQuality(this.quality);
     this.fx.setQuality(this.quality);
+    this.damage.setQuality(this.quality);
     this.minimap.setQuality(this.quality);
     this.postfx.setQuality(this.quality);
     this.select.setQuality(this.quality);
     this.icons.setQuality(this.quality);
+    this.notify.setQuality(this.quality);
     this.cityLights.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
@@ -305,16 +350,25 @@ export class Renderer {
       if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
       items.push({ y: v.y + 0.05, kind: 'v', v, sx, sy });
     }
-    for (const a of sim.animals) {
-      const sx = ox + a.x * z, sy = oy + a.y * z;
-      if (sx < -20 || sy < -20 || sx > cw + 20 || sy > ch + 20) continue;
-      items.push({ y: a.y + 0.05, kind: 'a', a, sx, sy });
-    }
+    // ОДИНОЧКИ ИЗ sim.animals БОЛЬШЕ НЕ РИСУЮТСЯ. Зверьё на карте теперь даёт
+    // herds_view: пятнадцать стад, у каждого своя зона выпаса, тропа, испуг и
+    // конечное число голов. Двадцать шесть оленей и два мамонта из sim.animals
+    // бродили по тем же полям вторым, ни к чему не привязанным набором: игрок
+    // видел вдвое больше зверя, чем есть в модели, охотился на стада, а гулял
+    // по экрану кто-то ещё. Сцена платила за это дважды и потолок q.caps.beasts
+    // тратила каждым слоем отдельно.
+    //
+    // Снят ТОЛЬКО показ. Сам sim.animals и tickAnimals в ядре остались: они
+    // берут числа из sim.rng, и удалить их — значит сдвинуть общий поток
+    // случайности, а на нём стоят и старые сейвы, и «призрак прошлой партии»,
+    // который ищется по тому же сиду. Это отдельная работа с отдельными
+    // тестами (порядок описан в herds.js, пункт R3), а не побочное следствие
+    // подключения слоя. Здесь же правка стоит одной строки и так же легко
+    // отменяется.
     items.sort((p, q) => p.y - q.y);
     for (const it of items) {
       if (it.kind === 'b') this.drawBuilding(sim, ctx, it.b, it.sx, it.sy, it.size);
-      else if (it.kind === 'v') this.drawVillager(ctx, it.sx, it.sy, z, it.v, sim.eraIndex);
-      else this.drawAnimal(ctx, it.sx, it.sy, z, it.a);
+      else this.drawVillager(ctx, it.sx, it.sy, z, it.v, sim.eraIndex);
     }
     // Свечение окон: карта свечения испечена вместе со спрайтом, поэтому светятся
     // ровно окна и горны, а не абстрактный кружок в центре здания, как раньше.
@@ -481,6 +535,7 @@ export class Renderer {
     ctx.drawImage(spr.cv, dx, dy, dw, dh);
     // Самозатенение ложится ПОВЕРХ спрайта и гасит грани, отвёрнутые от света.
     this.shadows.selfShade(ctx, spr, dx, dy, dw, dh);
+    this.damage.building(ctx, b, spr, dx, dy, dw, dh);
     this._pendingGlow.push({ spr, dx, dy, dw, dh });
   }
 
