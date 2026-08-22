@@ -652,22 +652,48 @@ console.log('\n--- На настоящей симуляции ---');
     };
   };
   const snap = JSON.stringify({ pol: sim.politics ? sim.politics.state : null, res: sim.res, pop: sim.villagers.length });
-  let st = createDynasty(sim.rng, { day: sim.day });
+
+  // ЖИЗНЬ РОДА ПРОГОНЯЕТСЯ ВОСЕМЬ РАЗ НА СВОИХ ПОТОКАХ СЛУЧАЙНОСТИ, а не один
+  // раз на sim.rng, как было. Две причины, обе выяснились на деле.
+  //
+  // Первая: sim.rng — это поток ЖИВОЙ партии, и сколько бросков из него уйдёт
+  // за тридцать суток прогрева, зависит от всего подключённого к игре. Стоило
+  // подключить связь охоты — поток сдвинулся, основателю выпал другой возраст,
+  // и проверка упала, хотя в роду не поменялось ни строки. Тест обязан падать
+  // от поломок в роду, а не от соседних систем.
+  //
+  // Вторая: одиночный прогон здесь и был лотереей — теперь с числом. Основатель
+  // начинает в 28–45; если ему выпало 33, вероятность дожить до 93, ни разу не
+  // умерев, по кривой annualMortality × ROYAL_MORT равна примерно 10 %. Каждый
+  // десятый прогон законно давал ноль смен власти. Комментарий на этом месте
+  // обещал, что шестьдесят лет лотерею снимают, — не снимают.
+  //
+  // Восемь родов на постоянных сидах: результат один и тот же при каждом
+  // запуске, а требование «хотя бы в пяти из восьми трон пережил основателя»
+  // оставляет запас — три нуля подряд по чистому невезению это доли процента.
   let successions = 0, births = 0;
-  // Шестьдесят лет: за меньший срок основатель, начавший в 28–45, может и не
-  // умереть ни разу (кривая смертности пологая до пятидесяти), и проверка на
-  // смену власти превращается в лотерею.
-  for (let i = 1; i <= 6000; i++) {
-    const rep = dynastyNewDay(st, simCtx(sim.day + i), sim.rng);
-    st = rep.state;
-    successions += rep.events.filter(e => e.cause === 'succession' || e.cause === 'house_change').length;
-    births += rep.events.filter(e => e.cause === 'birth').length;
+  let housesWithSuccession = 0;
+  let st = null;
+  for (let run = 0; run < 8; run++) {
+    const rng = createRng(9000 + run * 137);
+    let h = createDynasty(rng, { day: sim.day });
+    let ownSucc = 0;
+    for (let i = 1; i <= 6000; i++) {
+      const rep = dynastyNewDay(h, simCtx(sim.day + i), rng);
+      h = rep.state;
+      ownSucc += rep.events.filter(e => e.cause === 'succession' || e.cause === 'house_change').length;
+      births += rep.events.filter(e => e.cause === 'birth').length;
+    }
+    successions += ownSucc;
+    if (ownSucc > 0) housesWithSuccession++;
+    if (run === 0) st = h;      // дальнейшие проверки идут по первому роду
   }
+
   t('модуль не изменил sim (снимок до и после совпал)',
     () => ok(JSON.stringify({ pol: sim.politics ? sim.politics.state : null, res: sim.res, pop: sim.villagers.length }) === snap, 'sim изменён'));
   t('за шестьдесят лет род прожил жизнь: рождения были', () => ok(births > 0, `рождений ${births}`));
   t('за шестьдесят лет власть сменилась — трон пережил своего основателя',
-    () => ok(successions > 0, `смен власти ${successions}`));
+    () => ok(housesWithSuccession >= 5, `смена власти была лишь в ${housesWithSuccession} родах из 8 (всего смен ${successions})`));
   t('трон не остаётся пустым навсегда',
     () => ok(st.rulerId !== null || st.interregnum > 0, JSON.stringify({ ruler: st.rulerId, inter: st.interregnum })));
   t('законность всё это время держалась в берегах',

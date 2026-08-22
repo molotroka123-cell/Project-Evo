@@ -7,6 +7,7 @@ import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX,
 import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore, herdsNearest, herdsHunt } from './systems/integrate.js';
 import { memoryEatMult } from './systems/link_memory.js';
 import { wearWorkMult } from './systems/build2.js';
+import { huntParty, huntLodgeMult } from './systems/link_hunt.js';
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
@@ -623,6 +624,10 @@ export class Simulation {
           }
         }
       } else if (this.seasonIdx === 3 && !def.winter) mult *= 0.6;
+      // Охотничья стоянка у стада кормит втрое лучше стоянки в пустой степи.
+      // Умножается, а не подменяет зимний коэффициент: стоянка у дичи зимой
+      // всё равно хуже такой же стоянки летом.
+      if (b.id === 'hunter_lodge') mult *= huntLodgeMult(this, b);
     }
     if (out.knowledge && b.id === 'datacenter' && this.dcPenaltyDays > 0) mult *= 0.5;
     // Склад продукта полон — не жечь сырьё впустую. Раньше фабрика при стали
@@ -747,7 +752,15 @@ export class Simulation {
       // Одна ходка — одна облава. Сколько взято, решает модель стада: она
       // знает и поголовье, и испуг. Здоровье охотнику снимаем здесь: модуль
       // только сообщает, что человек ранен, но сам ничего не мутирует.
-      const rep = herdsHunt(this, t.herd, { hunters: 1, skill: 1 });
+      // hunters: 1 означало, что артельного бонуса в игре нет ВОВСЕ: сколько бы
+      // охотников ни сошлось у стада, модель считала одиночный гон, и облава
+      // ничем не отличалась от него. Число рук поблизости знает связь охоты.
+      const rep = herdsHunt(this, t.herd, { hunters: huntParty(this, t.x, t.y), skill: 1 });
+      // Отметка для связи: что, где и сколько взяли за эти сутки. Без неё связь
+      // считает добычу по падению поголовья — верно, но без вида зверя.
+      if (rep.heads > 0 && this.sys && Array.isArray(this.sys.huntKills)) {
+        this.sys.huntKills.push({ day: this.day, species: rep.flags.kind, head: rep.heads, food: rep.food, x: t.x, y: t.y, herdId: t.herd });
+      }
       if (rep.food > 0) this.res.food = Math.min(this.resCap.food, this.res.food + rep.food);
       if (rep.injured && v.hp !== undefined) v.hp = Math.max(1, v.hp - 3);
       for (const e of rep.events) this.addLog(e.text, e.type === 'bad' ? 'bad' : 'info');

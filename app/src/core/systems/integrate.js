@@ -28,6 +28,7 @@ import * as MEM from './link_memory.js';
 import * as INT from './link_intel.js';
 import * as MAS from './link_masters.js';
 import * as GH from './link_ghost.js';
+import * as HUNT from './link_hunt.js';
 import * as LDYN from './link_dynasty.js';
 import * as B2 from './build2.js';
 import * as HERD from './herds.js';
@@ -85,6 +86,10 @@ export function installSystems(sim) {
   // Тень прошлой партии: слепки состояния через равные промежутки.
   sim.linkGhost = GH.createGhost();
   sim.linkGhost.seed = sim.seed | 0;
+  // Связь охоты: журнал добычи за месяц, выбитые виды, прирученные стада.
+  sim.linkHunt = HUNT.createHuntMemory();
+  // Ядро кладёт сюда отметку в момент добычи; связь читает и забывает.
+  sim.sys.huntKills = [];
   // Строительство: очередь чертежей, износ, ремонт, улучшение на месте.
   sim.build = B2.createBuild();
   // Стада: дичь возобновляема, но исчерпаема. Ставится ПОСЛЕ мира и ДО первого
@@ -121,14 +126,20 @@ export function installSystems(sim) {
     // мира, и она не имеет права сдвигать главный поток: всё, что создаётся
     // после неё в конструкторе, получило бы другие числа.
     //
-    // Это не предосторожность, а починка. С sim.rng круговой сейв ломался:
-    // часть состояния держав выводится при конструировании и в файл не
-    // попадает, поэтому сдвинутый поток давал после загрузки другие значения
-    // (sys.emp.sites.fog расходился на двух позициях из многих). Ошибка тихая:
-    // мир выглядит нормальным, а сохранение перестаёт быть точным.
+    // Это было починкой: с sim.rng круговой сейв ломался на sys.emp.sites.fog,
+    // и правка снимала симптом.
     //
-    // Свой поток от того же сида оставляет расстановку воспроизводимой —
-    // один сид даёт одни и те же стада, — и при этом главный поток не трогает.
+    // ДОПИСАНО ПОЗЖЕ, ЧТОБЫ НЕ ВВОДИТЬ В ЗАБЛУЖДЕНИЕ: настоящая причина той
+    // поломки найдена и устранена не здесь, а в wire_empire.empireRestore — он
+    // после загрузки доoткрывал туман ещё раз, поверх записанного, и добавлял
+    // несколько клеток сверх того, что было в исходной партии. Любой сдвиг
+    // потока просто делал это заметным. Теперь записанный туман считается
+    // истиной, и sim.rng здесь сейв бы уже не сломал.
+    //
+    // Строку всё равно оставляю: расстановка стад — это генерация мира, ей не
+    // место в потоке, которым идёт партия. Свой поток от того же сида
+    // оставляет расстановку воспроизводимой — один сид даёт одни и те же
+    // стада, — и при этом главный поток не трогает.
     const herdRng = createRng((sim.seed ^ 0x48455244) >>> 0);   // 'HERD'
     const rep = HERD.spawnHerds(sim.herds, ctx, herdRng);
     sim.herds = rep.state;
@@ -159,6 +170,10 @@ export function systemsNewDay(sim) {
   // выживания намеренно — налоги и долг это причина, а голод и стужа читают
   // уже пошатнувшуюся державу, а не вчерашнюю.
   applyEconomyLinks(sim);
+  // Выше лестницы голода намеренно: связь охоты кладёт на склад мясо со
+  // скота, а лестница обязана читать уже сложившийся запас, иначе пастбище
+  // «сработает» только на следующие сутки.
+  const huntOut = applyHuntLinks(sim);
   const survOut = applySurvivalLinks(sim);
   applyIndustryLinks(sim);
   // Мастера идут ПОСЛЕ хозяйства: они поднимают тот выпуск, который оно
@@ -182,7 +197,8 @@ export function systemsNewDay(sim) {
   // Стада считаются ДО памяти: вымирание вида — событие, которое память
   // должна записать в те же сутки.
   applyHerds(sim);
-  applyMemoryLinks(sim, harvestScars(sim, { war: warOut, surv: survOut }));
+  applyMemoryLinks(sim, harvestScars(sim, { war: warOut, surv: survOut })
+    .concat(HUNT.huntScars(huntOut)));
   // Род идёт ПОСЛЕ памяти намеренно: связь берёт удары по законности из уже
   // записанных за эти сутки шрамов, а не разбирает летопись во второй раз.
   // Отсюда суточная задержка: собранное сегодня applyDynasty съест завтра.
@@ -318,7 +334,8 @@ export function systemsHappyMod(sim) {
     + (sim.sys.nbrLinks ? sim.sys.nbrLinks.mods.happy : 0)
     + MEM.memoryHappyMod(sim)
     + TER.territoryHappyMod(sim)
-    + (sim.sys.warLinks ? sim.sys.warLinks.mods.happy : 0);
+    + (sim.sys.warLinks ? sim.sys.warLinks.mods.happy : 0)
+    + HUNT.huntHappyMod(sim);
 }
 
 // Своя земля даёт где ставить выселки: площадь границ поднимает потолок
@@ -358,6 +375,7 @@ export function systemsSerialize(sim) {
     intel: sim.linkIntel || null,
     masters: sim.linkMasters || null,
     ghost: sim.linkGhost || null,
+    hunt: sim.linkHunt || null,
     herds: HERD.serializeHerds(sim.herds),
     build: B2.serializeBuild(sim.build),
   };
@@ -385,6 +403,7 @@ export function systemsRestore(sim, data) {
   sim.linkIntel = INT.restoreIntel(data.intel);
   sim.linkMasters = MAS.restoreMasters(data.masters);
   sim.linkGhost = GH.restoreGhost(data.ghost);
+  sim.linkHunt = HUNT.restoreHuntMemory(data.hunt);
   sim.herds = HERD.restoreHerds(data.herds);
   sim.build = B2.restoreBuild(data.build);
 }
@@ -1104,6 +1123,108 @@ function applySurvivalLinks(sim) {
   for (const e of out.events) sim.addLog(e.text, e.type);
   return out;
 }
+
+// Связь «охота ↔ стада ↔ еда»: облава, стоянки у дичи, истощение и скот.
+// Модуль только считает; всё, что меняет мир, делается здесь.
+function applyHuntLinks(sim) {
+  if (!sim.linkHunt) sim.linkHunt = HUNT.createHuntMemory();
+  const out = HUNT.huntLinks(sim);
+  sim.linkHunt = out.flags.memory;
+  sim.sys.huntLinks = out;             // кэш для HUD и для huntLodgeMult
+
+  // Скот кормит каждый день. Потолок склада тот же, что у промыслов:
+  // приручение не должно быть способом обойти вместимость амбара.
+  if (out.mods.food > 0) {
+    sim.res.food = Math.min(sim.resCap.food, sim.res.food + out.mods.food);
+  }
+
+  // Поправки к модели стад. Пока herds.js не подключён, sim.herds нет и
+  // цикл просто не находит, что править.
+  // sim.herds.HERDS, а не .list. Блок подключения искал поле list, которого у
+  // состояния стад нет вовсе: herds.js держит стада в поле herds. Цикл ниже
+  // молча не находил бы ни одного стада, и весь пункт «связь пугает и гонит
+  // зверя» не работал бы — без ошибки, без предупреждения, просто впустую.
+  const herds = Array.isArray(sim.herds) ? sim.herds
+    : (sim.herds && Array.isArray(sim.herds.herds) ? sim.herds.herds
+      : (sim.herds && Array.isArray(sim.herds.list) ? sim.herds.list : null));
+  if (herds) {
+    for (const [id, d] of Object.entries(out.mods.herds)) {
+      const h = herds.find(x => x && String(x.id) === id);
+      if (!h) continue;
+      h.fear = Math.max(0, Math.min(1, (h.fear || 0) + d.fear));
+      // Координаты стада в herds.js называются cx/cy; x/y у него нет. Правим
+      // ту пару, которая на самом деле есть, иначе гон зверя опять ушёл бы в
+      // пустоту — на этот раз создав стаду лишние поля x и y.
+      if (h.cx !== undefined) {
+        h.cx = Math.max(0, Math.min(sim.world.w - 1, h.cx + d.dx));
+        h.cy = Math.max(0, Math.min(sim.world.h - 1, h.cy + d.dy));
+      } else {
+        h.x = Math.max(0, Math.min(sim.world.w - 1, (h.x || 0) + d.dx));
+        h.y = Math.max(0, Math.min(sim.world.h - 1, (h.y || 0) + d.dy));
+      }
+    }
+  }
+
+  // Отметки, которые связь только что прочла, выбрасываем: остаются лишь
+  // сегодняшние, а их прочтут завтрашним проходом. Так каждая отметка идёт в
+  // счёт ровно один раз — это то самое «одни сутки считаются однажды».
+  //
+  // Было `sim.day - k.day < 2`, то есть отметка жила двое суток. Вместе со
+  // строгим равенством дней внутри связи это давало не двойной счёт, а ноль:
+  // отметку не читали ни разу. Теперь связь берёт и вчерашние, поэтому срок
+  // хранения обязан ужаться, иначе вчерашняя добыча сосчиталась бы дважды.
+  if (Array.isArray(sim.sys.huntKills)) {
+    sim.sys.huntKills = sim.sys.huntKills.filter(k => k && k.day >= sim.day);
+  }
+
+  for (const e of out.events) sim.addLog(e.text, e.type);
+  if (out.flags.extinctToday.length) {
+    sim.sfx?.('alarm');
+    for (const s of out.flags.extinctToday) {
+      const sp = HUNT.SPECIES[s] || HUNT.SPECIES.wild;
+      sim.addChronicle(`${sp.many} извели подчистую (день ${sim.day}).`);
+    }
+  }
+  return out;
+}
+
+// Приручение — приказ игрока, а не автоматика. Панель зовёт huntTameList,
+// кнопка — huntTame. Здесь же сходятся два модуля: условия проверяет
+// link_hunt (он один знает про пастбище), само стадо снимает с карты
+// herds.js, а головы забирает себе счётчик скота link_hunt — иначе после
+// приручения стадо просто исчезло бы, ведь herds.js его у себя удаляет.
+export function huntTameList(sim) { return HUNT.tameCandidates(sim); }
+export function huntTame(sim, herdId) {
+  const check = HUNT.tameHerd(sim, herdId);
+  if (!check.ok) { sim.toast?.(check.reason, 'warn'); return check; }
+
+  // Есть модель стад — приручает она (у неё свой отчёт и своё состояние).
+  if (sim.herds && Array.isArray(sim.herds.herds)) {
+    const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
+    const rep = HERD.tameHerd(sim.herds, Number(herdId), ctx);
+    if (!rep.ok) { sim.toast?.(rep.reasons[0]?.ru || 'Нельзя', 'warn'); return rep; }
+    sim.herds = rep.state;
+    sim.linkHunt = HUNT.withStock(sim.linkHunt, rep.flags.kind, rep.flags.heads);
+    for (const e of rep.events) sim.addLog(e.text, e.type);
+    return rep;
+  }
+
+  // Модели стад нет (старый мир на sim.animals) — работаем по своей форме.
+  const list = Array.isArray(sim.herds) ? sim.herds
+    : (sim.herds && Array.isArray(sim.herds.list) ? sim.herds.list : null);
+  if (list) {
+    for (const id of check.mods.tame) {
+      const h = list.find(x => x && String(x.id) === id);
+      if (h) { h.tame = true; h.fear = 0; }
+    }
+  }
+  for (const e of check.events) sim.addLog(e.text, e.type);
+  return check;
+}
+
+// Готовая строка для HUD: «Стада редеют: за месяц выбито 14 гол. из 40…».
+// Память НЕ двигает — звать из рендера безопасно.
+export function huntPanel(sim) { return HUNT.huntBreakdown(sim); }
 
 // ---------- Экраны новых систем ----------
 export const PANELS = {

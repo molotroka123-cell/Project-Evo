@@ -769,7 +769,20 @@ function killsToday(sim, st, mem) {
     const out = [];
     for (const k of inbox) {
       if (!k || typeof k !== 'object') continue;
-      if (Math.round(numOf(k.day, -1)) !== st.day) continue;
+      // ДЕНЬ, КОТОРЫЙ ТОЛЬКО ЧТО КОНЧИЛСЯ, ТОЖЕ СЧИТАЕТСЯ. Здесь стояло строгое
+      // равенство с st.day, и из-за него связь не видела охоты ВООБЩЕ: отметки
+      // кладёт ядро в миг добычи, то есть в течение суток N, а дневной проход
+      // идёт в начале суток N+1 (simulation.js: сперва this.day++, потом
+      // onNewDay). Отметка со вчерашним числом под равенство не подходила, и
+      // kills30 стоял на нуле всю партию при живой охоте — проверено прогоном
+      // на 600 суток: двадцать четыре выхода на зверя, пятьдесят семь отметок,
+      // ноль засчитанных.
+      //
+      // Дважды одна отметка не сосчитается: применитель в integrate.js сразу
+      // после этого прохода выбрасывает всё, что старше нынешних суток, — то
+      // есть ровно то, что связь только что прочла.
+      const kd = Math.round(numOf(k.day, -1));
+      if (kd !== st.day && kd !== st.day - 1) continue;
       out.push({ species: speciesId(k.species), n: Math.max(1, Math.floor(numOf(k.head, 1))), x: numOf(k.x, null), y: numOf(k.y, null), herdId: k.herdId != null ? String(k.herdId) : null, food: numOf(k.food, 0) });
     }
     return out;

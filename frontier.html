@@ -415,14 +415,14 @@
       return (l1 + v * (l2 - l1)) * 0.7071;
     }
     return function fbm(x, y, octaves = 4) {
-      let sum = 0, amp = 1, freq = 1, norm = 0;
+      let sum2 = 0, amp = 1, freq = 1, norm = 0;
       for (let o = 0; o < octaves; o++) {
-        sum += noise(x * freq, y * freq) * amp;
+        sum2 += noise(x * freq, y * freq) * amp;
         norm += amp;
         amp *= 0.5;
         freq *= 2;
       }
-      return sum / norm;
+      return sum2 / norm;
     };
   }
 
@@ -857,8 +857,8 @@
     for (let y = 0; y < WORLD_H; y++) {
       for (let x = 0; x < WORLD_W; x++) {
         const dx = (x - cx) / cx, dy = (y - cy) / cy;
-        const dist = Math.sqrt(dx * dx + dy * dy) + noise(x * 0.055 + 900, y * 0.055 + 900, 2) * 0.22;
-        const falloff = Math.pow(Math.max(0, dist), 2.4) * 1.15;
+        const dist2 = Math.sqrt(dx * dx + dy * dy) + noise(x * 0.055 + 900, y * 0.055 + 900, 2) * 0.22;
+        const falloff = Math.pow(Math.max(0, dist2), 2.4) * 1.15;
         const base = noise(x * 0.035, y * 0.035, 4) * 1.7;
         const detail = noise(x * 0.1 + 200, y * 0.1 + 200, 3) * 0.3;
         const h = base + detail + 0.5 - falloff;
@@ -893,19 +893,19 @@
     const t = tileAt(world, x, y);
     return t === TILE.DEEP || t === TILE.WATER;
   }
-  function stepToward(world, ent, tx, ty, dist) {
+  function stepToward(world, ent, tx, ty, dist2) {
     const dx = tx - ent.x, dy = ty - ent.y;
     const len = Math.hypot(dx, dy);
     if (len < 1e-6) return true;
-    if (dist >= len) {
+    if (dist2 >= len) {
       if (!isWater(world, tx, ty)) {
         ent.x = tx;
         ent.y = ty;
         return true;
       }
-      dist = len * 0.5;
+      dist2 = len * 0.5;
     }
-    const nx = ent.x + dx / len * dist, ny = ent.y + dy / len * dist;
+    const nx = ent.x + dx / len * dist2, ny = ent.y + dy / len * dist2;
     if (!isWater(world, nx, ny)) {
       ent.x = nx;
       ent.y = ny;
@@ -914,7 +914,7 @@
       else if (!isWater(world, ent.x, ny)) ent.y = ny;
       else {
         const a = Math.atan2(dy, dx) + 0.6;
-        const px = ent.x + Math.cos(a) * dist, py = ent.y + Math.sin(a) * dist;
+        const px = ent.x + Math.cos(a) * dist2, py = ent.y + Math.sin(a) * dist2;
         if (!isWater(world, px, py)) {
           ent.x = px;
           ent.y = py;
@@ -1096,6 +1096,9 @@
     herdsNearest: () => herdsNearest,
     herdsPanel: () => herdsPanel,
     herdsSustainable: () => herdsSustainable,
+    huntPanel: () => huntPanel,
+    huntTame: () => huntTame,
+    huntTameList: () => huntTameList,
     installSystems: () => installSystems,
     intelOf: () => intelOf,
     intelRows: () => intelRows,
@@ -1161,12 +1164,12 @@
     return s;
   })();
   var WINTER_WEATHER_AVG = (() => {
-    let sum = 0, tot = 0;
+    let sum2 = 0, tot = 0;
     for (const [w, p] of WEATHER_TABLE[WINTER_SEASON]) {
-      sum += (HEAT_WEATHER[w] ?? 1) * p;
+      sum2 += (HEAT_WEATHER[w] ?? 1) * p;
       tot += p;
     }
-    return tot ? sum / tot : 1;
+    return tot ? sum2 / tot : 1;
   })();
   function createWinter() {
     return {
@@ -1473,7 +1476,7 @@
       ids.push(b.id);
     }
     const techs = o.techs;
-    const hasTech = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
+    const hasTech2 = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
     const idSet = new Set(ids);
     const villagers = Array.isArray(o.villagers) ? o.villagers : null;
     const pop = Math.max(0, Math.round(num(o.pop, villagers ? villagers.filter((v) => !v || v.hp === void 0 || v.hp > 0).length : 0)));
@@ -1494,7 +1497,7 @@
       woodPerDay: num(o.woodPerDay, 0),
       housingCap,
       ids,
-      hasTech,
+      hasTech: hasTech2,
       hasBuilding: (id) => idSet.has(id),
       hearths: hearthCount(ids, pop)
     };
@@ -2520,14 +2523,14 @@
       for (const b of live) {
         if (b.id === a.id) continue;
         if (isAtWar(D, a.id, b.id) || isAllied(D, a.id, b.id) || inTruce(D, a.id, b.id, day)) continue;
-        const dist = nearestDist(a, b);
-        if (dist > 34) continue;
+        const dist2 = nearestDist(a, b);
+        if (dist2 > 34) continue;
         const theirs = Math.max(1, (b.armyPts || 1) * (1 + rng.range(-noise, noise)));
         const R = aiRel(D, a.id, b.id);
         const cb = hasCasusBelli(D, a.id, b.id, day);
-        if (tr.expansion >= 7 && dist < 20) addCasusBelli(D, a.id, b.id, "claim", day);
+        if (tr.expansion >= 7 && dist2 < 20) addCasusBelli(D, a.id, b.id, "claim", day);
         let u = 0.45 * (tr.aggression / 10) + 0.5 * Math.min(1.2, mine / theirs - 1);
-        u += 0.2 * (tr.expansion / 10) * (dist < 18 ? 1 : 0.3);
+        u += 0.2 * (tr.expansion / 10) * (dist2 < 18 ? 1 : 0.3);
         u -= R / 140;
         u += cb ? 0.25 : 0;
         u -= 0.25 * fronts;
@@ -3508,14 +3511,14 @@
     }
     const def = BUILDINGS[req.building] || { name: req.building, cost: {} };
     const total = Math.max(1, sim2.pop.request.deadline - sim2.pop.request.issued);
-    const pct = Math.max(0, Math.min(100, req.daysLeft / total * 100));
+    const pct2 = Math.max(0, Math.min(100, req.daysLeft / total * 100));
     const col = req.daysLeft <= 10 ? "var(--bad)" : req.daysLeft <= 25 ? "var(--warn)" : "var(--good)";
     const lack = typeof sim2.lackCost === "function" ? sim2.lackCost(def.cost) : "";
     const canDelay = !sim2.pop.request.delayed && sim2.res.gold >= DELAY_COST;
     return `<h4 class="group">Просьба жителей</h4>
     <div class="card"><div class="ttl"><span>${_esc(req.text)}</span><span class="cost" style="color:${col}">${req.daysLeft} дн.</span></div>
       <div class="desc">Исполнить — значит построить: ${_esc(def.name)} (${_cost(sim2, def.cost)}). Исполненная просьба поднимает настроение, просроченная роняет.</div>
-      <div class="relbar"><div style="width:${pct.toFixed(0)}%;background:${col}"></div></div>
+      <div class="relbar"><div style="width:${pct2.toFixed(0)}%;background:${col}"></div></div>
       <div class="btns" style="display:flex;gap:8px;margin-top:8px">
         <button class="btn primary" style="flex:2;padding:8px;font-size:12px" data-build="${req.building}">Заложить ${_esc(def.name)}</button>
         <button class="btn${canDelay ? "" : " disabled"}" style="flex:1;padding:8px;font-size:12px" data-pop="delay"${canDelay ? "" : " disabled"}>Отсрочка 🪙${DELAY_COST}</button>
@@ -3563,8 +3566,8 @@
     const total = Math.max(1, list.length);
     let html = '<div class="card">';
     for (const e of es) {
-      const pct = Math.round(e.n / total * 100);
-      html += `<div class="kv"><span>${e.ru} <span style="color:var(--dim)">— ${e.desc}</span></span><span>${e.n} · ${pct}%</span></div>`;
+      const pct2 = Math.round(e.n / total * 100);
+      html += `<div class="kv"><span>${e.ru} <span style="color:var(--dim)">— ${e.desc}</span></span><span>${e.n} · ${pct2}%</span></div>`;
     }
     html += "</div>";
     const cr = crafts(list);
@@ -4245,9 +4248,9 @@
   }
   var LAFFER_NORM = 2.2;
   function taxPain(rates) {
-    let sum = 0;
-    for (const k of TAX_KINDS) sum += TAX_PAIN[k] * Math.pow(clamp2(rates[k] || 0, 0, 1), 1.3);
-    return sum;
+    let sum2 = 0;
+    for (const k of TAX_KINDS) sum2 += TAX_PAIN[k] * Math.pow(clamp2(rates[k] || 0, 0, 1), 1.3);
+    return sum2;
   }
   function loanRate(rel, credit) {
     return clamp2(0.35 - rel * 2e-3 - (credit - 50) * 3e-3, 0.05, 0.6);
@@ -4818,12 +4821,12 @@
   function _stock(sim2, S) {
     const rows = INTERMEDIATES.map((it) => {
       const have = S.prod.stock[it.id] || 0;
-      const pct = Math.max(0, Math.min(100, have / it.cap * 100));
+      const pct2 = Math.max(0, Math.min(100, have / it.cap * 100));
       const spoiled = S.prodReport && S.prodReport.spoiled ? S.prodReport.spoiled[it.id] || 0 : 0;
-      const col = pct > 92 ? "var(--bad)" : pct > 60 ? "var(--warn)" : "var(--good)";
-      const note = pct > 92 ? "склад полон — стадия ниже по цепочке не поспевает" : it.spoil ? `портится ${Math.round(it.spoil * 100)}%/день${spoiled > 0.05 ? ` · вчера пропало ${_n(spoiled)}` : ""}` : "не портится";
+      const col = pct2 > 92 ? "var(--bad)" : pct2 > 60 ? "var(--warn)" : "var(--good)";
+      const note = pct2 > 92 ? "склад полон — стадия ниже по цепочке не поспевает" : it.spoil ? `портится ${Math.round(it.spoil * 100)}%/день${spoiled > 0.05 ? ` · вчера пропало ${_n(spoiled)}` : ""}` : "не портится";
       return `<div class="kv"><span>${it.icon} ${it.ru}</span><span style="color:${col}">${_n(have)} / ${it.cap}</span></div>
-      <div class="relbar"><div style="width:${pct.toFixed(0)}%;background:${col}"></div></div>
+      <div class="relbar"><div style="width:${pct2.toFixed(0)}%;background:${col}"></div></div>
       <div class="desc">${note}</div>`;
     }).join("");
     return `<h4 class="group">Склад сырья</h4>
@@ -4849,18 +4852,18 @@
       const up = taxPreview(S, k, Math.min(1, rate + TAX_STEP));
       const down = taxPreview(S, k, Math.max(0, rate - TAX_STEP));
       const past = rate > LAFFER_PEAK + 0.02;
-      const pct = Math.round(rate * 100);
+      const pct2 = Math.round(rate * 100);
       const col = past ? "var(--bad)" : rate > 0.25 ? "var(--warn)" : "var(--good)";
       const track = `<div data-prod-track="${k}" title="Ткните по шкале — ставка встанет туда"
         style="position:relative;height:14px;border-radius:7px;background:rgba(255,255,255,0.1);overflow:hidden;margin:8px 0;cursor:pointer">
-        <div style="height:100%;width:${pct}%;background:${col};border-radius:7px"></div>
+        <div style="height:100%;width:${pct2}%;background:${col};border-radius:7px"></div>
         <div style="position:absolute;top:0;left:${Math.round(LAFFER_PEAK * 100)}%;width:2px;height:100%;background:rgba(255,255,255,0.75)"></div>
       </div>`;
       const gain = up.gold === null ? null : up.gold - got;
       const loss = down.gold === null ? null : got - down.gold;
       const tradeoff = gain === null ? "Поднимите ставку — тогда станет видно, сколько она приносит." : `+5%: ${_sign(gain, _n)}🪙/день ценой ${_sign(-up.painDelta, _n)} счастья · −5%: ${_sign(-loss, _n)}🪙/день, зато ${_sign(-down.painDelta, _n)} счастья`;
       html += `<div class="card"><div class="ttl"><span>${meta.ru}</span>
-        <span class="cost" style="color:${col}">${pct}% · +${_g(got)}🪙/день</span></div>
+        <span class="cost" style="color:${col}">${pct2}% · +${_g(got)}🪙/день</span></div>
       <div class="desc">Берётся ${meta.base}. ${meta.note}</div>
       ${track}
       <div class="desc">${tradeoff}</div>
@@ -5706,7 +5709,7 @@
     state.squads = state.squads.filter((s) => !s.dead);
     return events;
   }
-  function advance(sq, dist, world) {
+  function advance(sq, dist2, world) {
     if (!sq.path || sq.pathIdx >= sq.path.length) {
       if (sq.path && sq.pathIdx >= sq.path.length) {
         sq.path = null;
@@ -5714,7 +5717,7 @@
       }
       return false;
     }
-    let left = dist;
+    let left = dist2;
     while (left > 0 && sq.pathIdx < sq.path.length) {
       const n = sq.path[sq.pathIdx];
       const dx = n.x - sq.x, dy = n.y - sq.y;
@@ -5922,12 +5925,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num16 = 1;
+    let num17 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num16++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num17++}`));
     }
     return out;
   }
@@ -7688,7 +7691,7 @@
     }
     const idSet = new Set(ids);
     const techs = o.techs;
-    const hasTech = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
+    const hasTech2 = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
     const res = o.res || {};
     const villagers = Array.isArray(o.villagers) ? o.villagers : null;
     const pop = Math.max(0, Math.round(num2(o.pop, villagers ? villagers.length : 0)));
@@ -7705,7 +7708,7 @@
       gold: num2(res.gold, 0),
       food: num2(res.food, 0),
       ids,
-      hasTech,
+      hasTech: hasTech2,
       hasBuilding: (id) => idSet.has(id),
       wars,
       atWar: wars.length > 0,
@@ -7842,9 +7845,9 @@
     for (const [kind, v] of Object.entries(opt.mult || {})) {
       const k = LAW_KINDS[kind];
       if (!k) continue;
-      const pct = Math.round((v - 1) * 100);
-      if (!pct) continue;
-      out.push({ kind, ru: k.ru, pct, good: pct > 0 === (k.good === "up") });
+      const pct2 = Math.round((v - 1) * 100);
+      if (!pct2) continue;
+      out.push({ kind, ru: k.ru, pct: pct2, good: pct2 > 0 === (k.good === "up") });
     }
     if (opt.happy) out.push({ kind: "happy", ru: "счастье", flat: opt.happy, good: opt.happy > 0 });
     if (opt.rel) out.push({ kind: "rel", ru: "отношения с соседями", flat: opt.rel, good: opt.rel > 0 });
@@ -8292,7 +8295,20 @@
     if (data.ruler && Array.isArray(data.ruler.traits)) {
       s.ruler = {
         name: String(data.ruler.name || "Безымянный"),
-        age: clamp4(num3(data.ruler.age, 30), 14, 120),
+        // НИЖНЯЯ ГРАНИЦА 0, А НЕ 14. Здесь стояло 14, и пока правителей делал
+        // только createRuler (он даёт взрослых), это ничего не значило. С
+        // подключением рода на трон законно садится ребёнок: наследник принимает
+        // власть в том возрасте, в каком застала его смерть отца, и панель «Род»
+        // так и пишет — «Хорс Косматый, 9 лет».
+        //
+        // Порог ломал сейв. Род сохранял правителя 11 лет (1100 дней), politics
+        // при загрузке поднимал его до 14, и второе сохранение уже не совпадало
+        // с первым — круг рвался на ровном месте. Поймалось на test-worldsites.
+        //
+        // Ничего, кроме порчи данных, эта граница не давала: единственный, кто
+        // читает возраст, — deathChance, а он до пятидесяти возвращает одно и то
+        // же число. Верхняя граница 120 остаётся: она отсекает мусор.
+        age: clamp4(num3(data.ruler.age, 30), 0, 120),
         since: num3(data.ruler.since, 0),
         traits: data.ruler.traits.filter((t) => TRAIT_BY_ID2[t])
       };
@@ -9069,11 +9085,11 @@
     const parts = [];
     for (const [kind, v] of Object.entries(mult || {})) {
       const k = LAW_KINDS[kind];
-      const pct = Math.round((v - 1) * 100);
-      if (!pct) continue;
+      const pct2 = Math.round((v - 1) * 100);
+      if (!pct2) continue;
       const ru = k ? k.ru : kind;
-      const good = k ? pct > 0 === (k.good === "up") : pct > 0;
-      parts.push(`<span style="color:${good ? "var(--good)" : "var(--bad)"}">${ru} ${_sign2(pct)}%</span>`);
+      const good = k ? pct2 > 0 === (k.good === "up") : pct2 > 0;
+      parts.push(`<span style="color:${good ? "var(--good)" : "var(--bad)"}">${ru} ${_sign2(pct2)}%</span>`);
     }
     return parts.length ? parts.join(", ") : "без прямых последствий";
   }
@@ -9199,14 +9215,14 @@
     const c = readCtx4(ctx);
     return Math.hypot(city.x - c.capitalX, city.y - c.capitalY);
   }
-  function corruption(dist, ctx) {
+  function corruption(dist2, ctx) {
     const c = readCtx4(ctx);
-    let corr = clamp5(CORR_PER_TILE * (num4(dist, 0) - CORR_FREE_DIST), 0, CORR_MAX);
+    let corr = clamp5(CORR_PER_TILE * (num4(dist2, 0) - CORR_FREE_DIST), 0, CORR_MAX);
     for (const [id, k] of Object.entries(CORR_TECH)) if (c.hasTech(id)) corr *= k;
     return round3(corr);
   }
-  function upkeepPerDay(dist) {
-    return round23(UPKEEP_BASE + UPKEEP_PER_TILE * Math.max(0, num4(dist, 0) - CORR_FREE_DIST));
+  function upkeepPerDay(dist2) {
+    return round23(UPKEEP_BASE + UPKEEP_PER_TILE * Math.max(0, num4(dist2, 0) - CORR_FREE_DIST));
   }
   function foundCost(state) {
     const m = Math.pow(FOUND_COST_GROWTH, state.cities.length);
@@ -9337,8 +9353,8 @@
     }
     if (!Object.keys(load).length) return { ok: false, reason: "Караван пуст" };
     const tx = to ? to.x : c.capitalX, ty = to ? to.y : c.capitalY;
-    const dist = Math.hypot(from.x - tx, from.y - ty);
-    const days = Math.max(1, Math.ceil(dist / CARAVAN_SPEED));
+    const dist2 = Math.hypot(from.x - tx, from.y - ty);
+    const days = Math.max(1, Math.ceil(dist2 / CARAVAN_SPEED));
     for (const [r, amt] of Object.entries(load)) from.local[r] -= amt;
     const caravan = {
       id: state.nextCaravanId++,
@@ -9602,7 +9618,7 @@
     const o = ctx || {};
     if (o.__empCtx) return o;
     const techs = o.techs;
-    const hasTech = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
+    const hasTech2 = (id) => !techs ? false : typeof techs.has === "function" ? techs.has(id) : Array.isArray(techs) && techs.includes(id);
     const world = o.world || null;
     return {
       __empCtx: true,
@@ -9613,7 +9629,7 @@
       seasonIdx: Number.isFinite(o.seasonIdx) ? o.seasonIdx : 0,
       armyPower: Math.max(0, num4(o.armyPower, 0)),
       atWar: !!o.atWar,
-      hasTech
+      hasTech: hasTech2
     };
   }
   function goodsText(goods) {
@@ -10052,8 +10068,8 @@
       };
       if (!capital) {
         const cap = this.capital();
-        const dist = cap ? Math.hypot(x - cap.x, y - cap.y) : 0;
-        s.linkDays = Math.max(1, Math.round(dist / 12));
+        const dist2 = cap ? Math.hypot(x - cap.x, y - cap.y) : 0;
+        s.linkDays = Math.max(1, Math.round(dist2 / 12));
         s.convoyTimer = OUTPOST.convoyEvery;
       }
       this.settlements.push(s);
@@ -10173,8 +10189,8 @@
         s.raidTimer--;
         if (s.raidTimer > 0) continue;
         const target = this.nearestSettlement(s.x, s.y) || this.capital();
-        const dist = target ? Math.hypot(s.x - target.x, s.y - target.y) : Infinity;
-        if (day < BANDIT.firstRaidDay || this._raidCooldown > 0 || dist > BANDIT.raidRange) {
+        const dist2 = target ? Math.hypot(s.x - target.x, s.y - target.y) : Infinity;
+        if (day < BANDIT.firstRaidDay || this._raidCooldown > 0 || dist2 > BANDIT.raidRange) {
           s.raidTimer = this.rng.int(5, 12);
           continue;
         }
@@ -10387,7 +10403,7 @@
       W.ruinsLooted = data.stat.ruins || 0;
       W.spots = { day: -1, cities: -1, list: [] };
     }
-    empireFog(sim2);
+    if (!data.sites || !sim2.sites) empireFog(sim2);
     return true;
   }
   function spotReport(sim2, x, y, ctx = null) {
@@ -10719,8 +10735,8 @@
     <div class="desc">Излишки уходят в столицу сами: город держит еду на ${KEEP_DAYS} дней и ${WOOD_KEEP}🪵, остальное грузит в обоз. Вручную возят к соседям — прежде всего кормить город, который не дотянет до весны. Золото и знания караван не возит: они и так общие.</div>`;
     let any = false;
     for (const t of targets) {
-      const dist = Math.hypot(city.x - t.x, city.y - t.y);
-      const days = Math.max(1, Math.ceil(dist / CARAVAN_SPEED));
+      const dist2 = Math.hypot(city.x - t.x, city.y - t.y);
+      const days = Math.max(1, Math.ceil(dist2 / CARAVAN_SPEED));
       const rob = robChance(days, ctx, city, t.city || null);
       const robCol = rob > 0.25 ? "var(--bad)" : rob > 0.1 ? "var(--warn)" : "var(--good)";
       const btns = [];
@@ -11471,12 +11487,12 @@
     const cy = numOf(sim2.world && sim2.world.startY, 0);
     let best = null, bestKey = -Infinity, bestDist = 0;
     for (const c of cities) {
-      const dist = Math.hypot(numOf(c.x, 0) - cx, numOf(c.y, 0) - cy);
-      const key = numOf(c.unrest, 0) * 100 + dist;
+      const dist2 = Math.hypot(numOf(c.x, 0) - cx, numOf(c.y, 0) - cy);
+      const key = numOf(c.unrest, 0) * 100 + dist2;
       if (key > bestKey) {
         bestKey = key;
         best = c;
-        bestDist = dist;
+        bestDist = dist2;
       }
     }
     return best ? { id: best.id, name: best.name, dist: Math.round(bestDist), unrest: round24(numOf(best.unrest, 0)) } : null;
@@ -11611,7 +11627,7 @@
     let tiles = 0, reach = 0, farTiles = 0;
     if (borders && borders.owners && borders.w) {
       const W = borders.w, H = borders.h, owners = borders.owners;
-      let sum = 0;
+      let sum2 = 0;
       for (let y = 0; y < H; y++) {
         const dy = y - capY, dy2 = dy * dy, row = y * W;
         for (let x = 0; x < W; x++) {
@@ -11619,11 +11635,11 @@
           const dx = x - capX;
           const d = Math.sqrt(dx * dx + dy2);
           tiles++;
-          sum += d;
+          sum2 += d;
           if (d > reachFree) farTiles++;
         }
       }
-      reach = tiles > 0 ? sum / tiles : 0;
+      reach = tiles > 0 ? sum2 / tiles : 0;
     } else if (borders) {
       tiles = territoryTiles(borders, "player");
     }
@@ -11633,8 +11649,8 @@
     let corrWeight = 0, corrSum = 0, lostGold = 0, unrestSum = 0;
     const st = sim2 && sim2.empire && sim2.empire.state || null;
     for (const c of st && Array.isArray(st.cities) ? st.cities : []) {
-      const dist = Math.hypot(num6(c.x, 0) - capX, num6(c.y, 0) - capY);
-      const corr = corruption(dist, ectx);
+      const dist2 = Math.hypot(num6(c.x, 0) - capX, num6(c.y, 0) - capY);
+      const corr = corruption(dist2, ectx);
       const happy = clamp7(num6(c.happy, 50), 0, 100);
       const pop = Math.max(0, num6(c.pop, 0));
       const nominal = pop * PROD_PER_POP.gold * prodMult(c, "gold") * (happy < 35 ? 0.7 : 1);
@@ -11648,7 +11664,7 @@
         spec: c.spec || null,
         happy,
         unrest,
-        dist,
+        dist: dist2,
         corr,
         lost: nominal * corr
       });
@@ -12831,15 +12847,15 @@
     return { surplus: best, surplusShare: r2(clamp8(share, 0, 1)) };
   }
   function craftGoldOf(sim2, buildings) {
-    let sum = 0;
+    let sum2 = 0;
     for (const b of buildings) {
       if (!CRAFT_GOLD_IDS.includes(b.id)) continue;
       const def = BUILDINGS[b.id];
       if (!def || !def.out || !def.out.gold) continue;
       const n = b.workers ? b.workers.length : def.workers || 0;
-      sum += def.out.gold * n;
+      sum2 += def.out.gold * n;
     }
-    return sum * (typeof sim2.globalMult === "function" ? sim2.globalMult("gold") : 1);
+    return sum2 * (typeof sim2.globalMult === "function" ? sim2.globalMult("gold") : 1);
   }
   function oldShareOf(buildings, era) {
     let old = 0, n = 0;
@@ -13097,10 +13113,10 @@
     }
     return best;
   }
-  function proximity(dist) {
-    if (!isFinite(dist)) return 0;
-    if (dist <= NEAR) return 1;
-    return clamp9((REACH - dist) / (REACH - NEAR), 0, 1);
+  function proximity(dist2) {
+    if (!isFinite(dist2)) return 0;
+    if (dist2 <= NEAR) return 1;
+    return clamp9((REACH - dist2) / (REACH - NEAR), 0, 1);
   }
   function ourStrength(sim2) {
     const army = typeof sim2.armyPower === "function" ? sim2.armyPower() || 0 : (sim2.army && sim2.army.soldiers || 0) * 2;
@@ -13133,14 +13149,14 @@
     const out = [];
     for (const f of sim2 && sim2.factions || []) {
       if (!f || f.alive === false) continue;
-      const dist = nearestDist2(home, f.settlements);
+      const dist2 = nearestDist2(home, f.settlements);
       const atWarWithUs = (sim2.wars || []).some((w) => w && w.fid === f.id);
       const foes = aiFoes(sim2, f.id);
       out.push({
         fid: f.id,
         name: f.def && f.def.name || f.id,
-        dist: isFinite(dist) ? r22(dist) : Infinity,
-        w: proximity(dist),
+        dist: isFinite(dist2) ? r22(dist2) : Infinity,
+        w: proximity(dist2),
         rel: sim2.relations && typeof sim2.relations[f.id] === "number" ? sim2.relations[f.id] : 0,
         treaty: (sim2.treaties || []).some((t) => t && t.b === f.id && (t.type || "trade") === "trade"),
         atWarWithUs,
@@ -13165,20 +13181,20 @@
   }
   function routeDanger(nb) {
     const rows = [];
-    let sum = 0;
+    let sum2 = 0;
     for (const n of nb) {
       if (n.w <= 0 || n.wars <= 0) continue;
       const own = (n.atWarWithUs ? RISK_OUR_WAR : 0) + n.foes.length * RISK_AI_WAR;
       const v = own * n.w;
       if (v <= 1e-3) continue;
-      sum += v;
+      sum2 += v;
       rows.push({
         ru: n.atWarWithUs ? `${n.name} воюет с нами (${n.dist} кл.)` : `${n.name} воюет (${n.foes.length}) в ${n.dist} кл. от нас`,
         v: r33(v)
       });
     }
     rows.sort((a, b) => b.v - a.v);
-    return { risk: r33(clamp9(sum, 0, RISK_CAP)), raw: r33(sum), rows };
+    return { risk: r33(clamp9(sum2, 0, RISK_CAP)), raw: r33(sum2), rows };
   }
   function fearFrom(n, mine) {
     if (n.army < ARMY_FLOOR || n.w <= 0) return 0;
@@ -13548,12 +13564,12 @@
   }
   function forceOf(mem, kind, day, healK = 1) {
     const cap = KIND[kind] ? KIND[kind].cap : 1;
-    let sum = 0;
+    let sum2 = 0;
     for (const s of mem.scars) {
       if (s.kind !== kind) continue;
-      sum += strengthOf(s, day, healK);
+      sum2 += strengthOf(s, day, healK);
     }
-    return Math.min(cap, sum);
+    return Math.min(cap, sum2);
   }
   function memoryState(sim2) {
     const day = sim2 && typeof sim2.day === "number" ? sim2.day : 0;
@@ -14372,6 +14388,722 @@
     return Number.isFinite(v) ? v : def;
   }
 
+  // app/src/core/systems/link_hunt.js
+  var SPECIES = {
+    deer: { ru: "олень", many: "оленьи стада", tame: false, battue: 1, r: 7, meat: 9 },
+    mammoth: { ru: "мамонт", many: "мамонты", tame: false, battue: 1.25, r: 9, meat: 55 },
+    boar: { ru: "кабан", many: "кабаньи стада", tame: false, battue: 0.85, r: 6, meat: 13 },
+    aurochs: { ru: "дикий бык", many: "стада быков", tame: true, battue: 1.15, r: 8, meat: 24 },
+    // Запасной вид для зверя, про которого модель ничего не сказала: без него
+    // любая опечатка в species выбрасывала бы голову из всех подсчётов молча.
+    wild: { ru: "дичь", many: "дичь", tame: false, battue: 1, r: 6, meat: 12 }
+  };
+  var KILL_WINDOW = DAYS_PER_SEASON;
+  var BATTUE_MAX = 0.9;
+  var BATTUE_MIN_HEAD = 4;
+  var BATTUE_FULL_HEAD = 25;
+  var BATTUE_PARTY_FULL = 4;
+  var PARTY_RADIUS = 6;
+  var BATTUE_HEAD_W = 0.5;
+  var BATTUE_PARTY_W = 0.5;
+  var FEAR_YIELD = 0.5;
+  var LODGE_RADIUS = 9;
+  var LODGE_FULL_HEAD = 30;
+  var LODGE_MIN = 0.5;
+  var LODGE_MAX = 1.6;
+  var LODGE_FEAR_CUT = 0.35;
+  var REGROW_PER_HEAD = 0.012;
+  var PRESSURE_WARN = 1;
+  var PRESSURE_FLEE = 2;
+  var PRESSURE_CAP = 4;
+  var FEAR_PER_KILL = 0.05;
+  var FEAR_DAY_CAP = 0.25;
+  var FEAR_CALM = 0.04;
+  var FLEE_FEAR = 0.55;
+  var FLEE_STEP = 0.8;
+  var FLEE_MAX_DIST = 40;
+  var RETURN_FEAR = 0.2;
+  var RETURN_STEP = 0.4;
+  var RETURN_DIST = 12;
+  var TAME_RADIUS = 8;
+  var TAME_MIN_HEAD = 8;
+  var TAME_MAX_FEAR = 0.5;
+  var TAME_FOOD_PER_HEAD = 0.06;
+  var TAME_PER_PASTURE = 25;
+  var RISK_WARN = 0.5;
+  var HOME_RANGE = 18;
+  var HAPPY_EMPTY_MAX = 3;
+  var HAPPY_TAME_MAX = 2;
+  var FAIL_CAP = 60;
+  var SAY_COOLDOWN = 20;
+  var EXTINCT_SCAR_KIND = "famine";
+  var EXTINCT_SCAR_SCALE = 0.8;
+  var EXTINCT_GAP = 2;
+  var DEFAULT_RANGE = 6;
+  function createHuntMemory() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного применения в одни сутки
+      kills: [],
+      // [{d, s, n}] — сутки, вид, сколько голов; окно KILL_WINDOW
+      seen: {},
+      // вид → последний день, когда он ещё водился
+      extinct: {},
+      // вид → день, когда его извели (пишется ОДИН раз)
+      tamed: {},
+      // id стада → день приручения
+      // Скот. herds.js прирученное стадо из своего списка УБИРАЕТ (оно перестало
+      // быть дичью и его модели больше не касается) — и головам нужен хозяин,
+      // иначе приручение означало бы «стадо исчезло». Хозяин здесь: вид → голов.
+      // Это не состояние-которое-переписывается, а итог events приручения: число
+      // меняется только приказом игрока, см. withStock.
+      stock: {},
+      said: {},
+      // ключ рассказа → день (чтобы не бубнить)
+      headSeen: 0,
+      // общее поголовье вчера — запасной способ поймать добычу
+      failDays: 0,
+      // сколько суток подряд охота не кормит того, кто на ней живёт
+      happyMod: 0
+      // последняя поправка к счастью — её читает happiness()
+    };
+  }
+  function restoreHuntMemory(data) {
+    const m = createHuntMemory();
+    if (!data || typeof data !== "object") return m;
+    m.day = num12(data.day, -1);
+    m.headSeen = Math.max(0, num12(data.headSeen, 0));
+    m.failDays = clamp13(num12(data.failDays, 0), 0, FAIL_CAP);
+    m.happyMod = num12(data.happyMod, 0);
+    if (Array.isArray(data.kills)) {
+      for (const k of data.kills) {
+        if (!k || typeof k !== "object") continue;
+        const n = Math.floor(num12(k.n, 0));
+        if (!(n > 0)) continue;
+        m.kills.push({ d: Math.round(num12(k.d, 0)), s: speciesId(k.s), n });
+      }
+    }
+    m.seen = numMap(data.seen);
+    m.extinct = numMap(data.extinct);
+    m.tamed = numMap(data.tamed);
+    m.said = numMap(data.said);
+    for (const [k, v] of Object.entries(numMap(data.stock))) {
+      if (v > 0) m.stock[speciesId(k)] = Math.floor(v);
+    }
+    return m;
+  }
+  function withStock(mem, species, heads) {
+    const m = cloneMem(mem && typeof mem === "object" ? { ...createHuntMemory(), ...mem } : createHuntMemory());
+    const n = Math.floor(numOf2(heads, 0));
+    if (!(n > 0)) return m;
+    const s = speciesId(species);
+    m.stock[s] = Math.max(0, (m.stock[s] || 0) + n);
+    return m;
+  }
+  function huntState(sim2) {
+    const day = Math.round(numOf2(sim2 && sim2.day, 0));
+    const pop = aliveCount4(sim2);
+    const food = Math.max(0, numOf2(sim2 && sim2.res && sim2.res.food, 0));
+    const foodDays = pop > 0 ? food / (pop * EAT2) : Infinity;
+    const modelled = readHerds(sim2);
+    const herds = modelled !== null ? modelled : loneAnimals(sim2);
+    const hasSource = modelled !== null || Array.isArray(sim2 && sim2.animals);
+    const cx = numOf2(sim2 && sim2.world && sim2.world.startX, 0);
+    const cy = numOf2(sim2 && sim2.world && sim2.world.startY, 0);
+    const wild = herds.filter((h) => !h.tame && h.head > 0);
+    const tame = herds.filter((h) => h.tame && h.head > 0);
+    const wildHead = sum(wild.map((h) => h.head));
+    const tameHead = sum(tame.map((h) => h.head));
+    const nearHead = sum(wild.filter((h) => dist(h.x, h.y, cx, cy) <= HOME_RANGE).map((h) => h.head));
+    const done = doneBuildings(sim2);
+    return {
+      day,
+      pop,
+      food,
+      foodDays,
+      cx,
+      cy,
+      herds,
+      wild,
+      tame,
+      wildHead,
+      tameHead,
+      nearHead,
+      hasSource,
+      lodges: done.filter((b) => b.id === "hunter_lodge"),
+      pastures: done.filter((b) => b.id === "pasture"),
+      hunters: countHunters(sim2),
+      hasHunting: hasTech(sim2, "hunting"),
+      hasHusbandry: hasTech(sim2, "animal_husbandry"),
+      bySpecies: headBySpecies(herds),
+      gone: goneByModel(sim2)
+    };
+  }
+  function huntParty(sim2, x, y) {
+    return Math.max(1, countHunters(sim2, x, y, PARTY_RADIUS));
+  }
+  function battueMult(h, hunters) {
+    if (h.head < BATTUE_MIN_HEAD) return 1;
+    const sp = SPECIES[h.species] || SPECIES.wild;
+    const head2 = clamp13((h.head - BATTUE_MIN_HEAD) / (BATTUE_FULL_HEAD - BATTUE_MIN_HEAD), 0, 1);
+    const party = clamp13((hunters - 1) / (BATTUE_PARTY_FULL - 1), 0, 1);
+    const gain = BATTUE_MAX * (BATTUE_HEAD_W * head2 + BATTUE_PARTY_W * party) * sp.battue;
+    return (1 + gain) * (1 - FEAR_YIELD * clamp13(h.fear, 0, 1));
+  }
+  function huntLodgeMult(sim2, b) {
+    if (!b) return 1;
+    const cached = sim2 && sim2.sys && sim2.sys.huntLinks && sim2.sys.huntLinks.flags.lodges;
+    const key = lodgeKey(b);
+    if (cached && cached[key] != null) return cached[key];
+    const herds = readHerds(sim2);
+    return lodgeMultAt(herds === null ? loneAnimals(sim2) : herds, b.x, b.y);
+  }
+  function lodgeMultAt(herds, x, y) {
+    let head2 = 0, fearW = 0;
+    for (const h of herds) {
+      if (h.tame || h.head <= 0) continue;
+      if (dist(h.x, h.y, x, y) > LODGE_RADIUS + h.r) continue;
+      head2 += h.head;
+      fearW += h.head * clamp13(h.fear, 0, 1);
+    }
+    if (head2 <= 0) return LODGE_MIN;
+    const fear = fearW / head2;
+    const avail = clamp13(head2 / LODGE_FULL_HEAD, 0, 1);
+    return round29(LODGE_MIN + (LODGE_MAX - LODGE_MIN) * avail * (1 - LODGE_FEAR_CUT * fear));
+  }
+  function tameCandidates(sim2) {
+    const st = huntState(sim2);
+    const out = [];
+    for (const h of st.wild) {
+      const sp = SPECIES[h.species] || SPECIES.wild;
+      const near = nearestDist3(st.pastures, h.x, h.y);
+      let why = "";
+      if (!sp.tame) why = `${cap1(sp.ru)} не приручается: это дичь, а не скот`;
+      else if (!st.hasHusbandry) why = "Нужно скотоводство";
+      else if (near === null) why = "Нужно пастбище";
+      else if (near > TAME_RADIUS) why = `Пастбище далеко: ${Math.round(near)} кл. вместо ${TAME_RADIUS}`;
+      else if (h.head < TAME_MIN_HEAD) why = `Мало голов: ${h.head} из ${TAME_MIN_HEAD}`;
+      else if (h.fear > TAME_MAX_FEAR) why = `Стадо пуганое (${pct(h.fear)}): к людям не подойдёт`;
+      out.push({
+        id: h.id,
+        species: h.species,
+        ru: sp.ru,
+        head: h.head,
+        fear: round29(h.fear),
+        pasture: near === null ? null : Math.round(near),
+        ok: why === "",
+        why,
+        // Сколько корма даст приручение: игрок должен видеть цену выбора числом.
+        food: round29(h.head * TAME_FOOD_PER_HEAD)
+      });
+    }
+    out.sort((a, b) => b.ok - a.ok || b.head - a.head);
+    return out;
+  }
+  function tameHerd(sim2, herdId) {
+    const c = tameCandidates(sim2).find((x) => x.id === herdId);
+    if (!c) return { ok: false, reason: "Такого стада нет", mods: { tame: [] }, events: [] };
+    if (!c.ok) return { ok: false, reason: c.why, mods: { tame: [] }, events: [] };
+    return {
+      ok: true,
+      reason: "",
+      mods: { tame: [herdId] },
+      events: [{
+        text: `🐂 Стадо приручено: ${c.head} голов (${c.ru}). Это больше не дичь — это скот, и кормит он каждый день, а не один раз.`,
+        type: "good"
+      }]
+    };
+  }
+  function huntLinks(sim2) {
+    const st = huntState(sim2);
+    const prev = readMemory4(sim2);
+    const mem = cloneMem(prev);
+    const events = [];
+    const reasons = [];
+    const sameDay = prev.day === st.day;
+    const mods = {
+      food: 0,
+      // дневная прибавка еды со скота
+      happy: 0,
+      // уныние от пустых ходок / уверенность от скота
+      yieldMult: 1,
+      // лучший множитель облавы поблизости — для панели
+      herds: {},
+      // id → {fear, dx, dy}: поправки к модели стад
+      tame: []
+      // id стад, ставших скотом (заполняет tameHerd, не связь)
+    };
+    const killed = sameDay ? [] : killsToday(sim2, st, mem);
+    if (!sameDay) {
+      mem.day = st.day;
+      for (const k of killed) addKill(mem, st.day, k.species, k.n);
+      mem.kills = mem.kills.filter((k) => st.day - k.d < KILL_WINDOW);
+      mem.headSeen = st.wildHead;
+    }
+    const kills30 = sum(mem.kills.map((k) => k.n));
+    const killsToday_ = sum(killed.map((k) => k.n));
+    const wasHead = st.wildHead + kills30;
+    const born = st.wildHead * REGROW_PER_HEAD * KILL_WINDOW;
+    const pressure = born > 0.5 ? Math.min(PRESSURE_CAP, kills30 / born) : kills30 > 0 ? PRESSURE_CAP : 0;
+    let best = null;
+    for (const h of st.wild) {
+      if (dist(h.x, h.y, st.cx, st.cy) > HOME_RANGE) continue;
+      const m = battueMult(h, countHunters(sim2, h.x, h.y, PARTY_RADIUS));
+      if (!best || m > best.m) best = { h, m };
+    }
+    mods.yieldMult = best ? round29(best.m) : 1;
+    if (best && best.m > 1.05) {
+      const sp = SPECIES[best.h.species] || SPECIES.wild;
+      reasons.push({
+        ru: `Облава на ${sp.many} (${best.h.head} гол.): мяса за ходку ×${f2(best.m)}`,
+        v: round29(best.m)
+      });
+    }
+    const lodges = {};
+    let poorLodges = 0;
+    for (const b of st.lodges) {
+      const k = lodgeMultAt(st.herds, b.x, b.y);
+      lodges[lodgeKey(b)] = k;
+      if (k <= LODGE_MIN + 0.02) poorLodges++;
+      reasons.push({
+        ru: k > 1 ? `Стоянка (${b.x},${b.y}) стоит у дичи: выработка ×${f2(k)}` : `Стоянка (${b.x},${b.y}) в пустой степи: выработка ×${f2(k)}`,
+        v: k
+      });
+    }
+    const stockHead = sum(Object.values(mem.stock));
+    const tameHead = st.tameHead + stockHead;
+    const roomForHead = st.pastures.length * TAME_PER_PASTURE;
+    const fedHead = Math.min(tameHead, roomForHead);
+    if (tameHead > 0) {
+      if (!sameDay) mods.food = round29(fedHead * TAME_FOOD_PER_HEAD);
+      if (fedHead > 0) {
+        reasons.push({ ru: `Скот у пастбища: ${fedHead} гол. дают ${f2(fedHead * TAME_FOOD_PER_HEAD)} еды в день`, v: round29(fedHead * TAME_FOOD_PER_HEAD) });
+      }
+      if (tameHead > roomForHead) {
+        reasons.push({
+          ru: roomForHead > 0 ? `Скота больше, чем прокормит пастбище: ${tameHead - roomForHead} гол. впроголодь` : `Скот без пастбища: ${tameHead} гол. кормить негде`,
+          v: 0
+        });
+      }
+    }
+    const need = Math.max(0.1, st.pop * EAT2);
+    const huntIncome = kills30 > 0 ? kills30 * meanMeat(mem) / KILL_WINDOW : 0;
+    const huntShare = clamp13(huntIncome / need, 0, 1);
+    const availability = clamp13(st.nearHead / BATTUE_FULL_HEAD, 0, 1);
+    const starveRisk = round29(huntShare * (1 - availability));
+    if (!sameDay) {
+      mem.failDays = huntShare > 0.25 && availability < 0.25 ? Math.min(FAIL_CAP, mem.failDays + 1) : Math.max(0, mem.failDays - 2);
+    }
+    if (starveRisk > 0.05) {
+      const d = -round29(HAPPY_EMPTY_MAX * starveRisk);
+      mods.happy += d;
+      reasons.push({ ru: "Охотники возвращаются пустыми", v: d });
+    }
+    if (fedHead > 0) {
+      const d = round29(HAPPY_TAME_MAX * clamp13(fedHead / TAME_PER_PASTURE, 0, 1));
+      mods.happy += d;
+      reasons.push({ ru: "Свой скот у дома", v: d });
+    }
+    mods.happy = round29(clamp13(mods.happy, -HAPPY_EMPTY_MAX, HAPPY_TAME_MAX));
+    mem.happyMod = mods.happy;
+    if (!sameDay) {
+      const byHerd = killsByHerd(sim2, st, killed);
+      for (const h of st.wild) {
+        const n = byHerd.get(h.id) || 0;
+        let dFear;
+        if (n > 0) {
+          const share = h.head + n > 0 ? n / (h.head + n) : 0;
+          dFear = Math.min(FEAR_DAY_CAP, FEAR_PER_KILL * n * (0.5 + share));
+        } else {
+          dFear = -FEAR_CALM;
+        }
+        if (pressure >= PRESSURE_FLEE) dFear += FEAR_CALM;
+        dFear = clamp13(dFear, -FEAR_CALM, FEAR_DAY_CAP);
+        const newFear = clamp13(h.fear + dFear, 0, 1);
+        const step = fleeStep(h, newFear, st.cx, st.cy);
+        const dF = round29(newFear - h.fear);
+        if (dF !== 0 || step.dx !== 0 || step.dy !== 0) {
+          mods.herds[h.id] = { fear: dF, dx: step.dx, dy: step.dy };
+        }
+      }
+    }
+    const extinctToday = [];
+    if (!sameDay && st.hasSource) {
+      for (const [species, head2] of Object.entries(st.bySpecies)) {
+        if (head2 > 0) mem.seen[species] = st.day;
+      }
+      for (const species of Object.keys(mem.seen)) {
+        const head2 = st.bySpecies[species] || 0;
+        if (head2 > 0) continue;
+        if (mem.extinct[species] != null) continue;
+        if (st.day - mem.seen[species] > EXTINCT_GAP) continue;
+        mem.extinct[species] = st.day;
+        if (st.gone[species] != null) continue;
+        extinctToday.push(species);
+        const sp = SPECIES[species] || SPECIES.wild;
+        events.push({
+          text: `☠ ${cap1(sp.many)} выбиты подчистую. Больше их не будет никогда — в летописи останется, что этот род зверя извели мы.`,
+          type: "bad"
+        });
+      }
+    }
+    if (!sameDay) {
+      if (pressure >= PRESSURE_WARN && kills30 > 0 && st.wildHead > 0 && canSay(mem, "depletion", st.day)) {
+        mem.said.depletion = st.day;
+        const hard = pressure >= PRESSURE_FLEE;
+        events.push({
+          text: hard ? `‼ Стада уходят: за месяц выбито ${kills30} голов из ${wasHead}, приплод не поспевает вдвое. Дичь откочёвывает от поселения — добыча будет падать, пока бьём.` : `⚠ Стада редеют: за месяц выбито ${kills30} голов из ${wasHead}, приплод не поспевает. Сбавить охоту на месяц — и стада отойдут; не сбавить — уйдут сами.`,
+          type: hard ? "bad" : "warn"
+        });
+      }
+      if (st.wildHead > 0 && st.wildHead < BATTUE_MIN_HEAD && kills30 > 0 && canSay(mem, "last", st.day)) {
+        mem.said.last = st.day;
+        events.push({
+          text: `‼ Дичи почти не осталось: ${st.wildHead} гол. на всю округу. Ещё несколько ходок — и охота кончится навсегда.`,
+          type: "bad"
+        });
+      }
+      if (starveRisk >= RISK_WARN && mem.failDays >= 3 && canSay(mem, "starve", st.day)) {
+        mem.said.starve = st.day;
+        const mouths = Math.round(huntShare * st.pop);
+        events.push({
+          text: `⚠ Охота кормила ${mouths} ртов из ${st.pop}, а дичи рядом не осталось. Запаса на ${f13(st.foodDays)} дн. — нужны поля или пастбище.`,
+          type: "warn"
+        });
+      }
+      if (poorLodges > 0 && canSay(mem, "lodge", st.day)) {
+        mem.said.lodge = st.day;
+        events.push({
+          text: `⚠ Охотничьих стоянок в пустой степи: ${poorLodges}. Дичи рядом нет, добыча вдвое ниже — стоянку ставят у стада, а не где придётся.`,
+          type: "warn"
+        });
+      }
+      if (best && best.m >= 1.5 && canSay(mem, "battue", st.day)) {
+        mem.said.battue = st.day;
+        const sp = SPECIES[best.h.species] || SPECIES.wild;
+        events.push({
+          text: `Облава удалась: ${sp.many} в ${best.h.head} голов, охотники бьют вместе — мяса за ходку ×${f2(best.m)} против одиночного гона.`,
+          type: "good"
+        });
+      }
+      const ready = tameCandidates(sim2).filter((c) => c.ok);
+      if (ready.length && canSay(mem, "tame", st.day)) {
+        mem.said.tame = st.day;
+        const c = ready[0];
+        events.push({
+          text: `🐂 Стадо у пастбища можно приручить: ${c.head} гол. (${c.ru}). Прирученное перестанет быть дичью и станет кормить каждый день.`,
+          type: "good"
+        });
+      }
+    }
+    const flags = {
+      kills30,
+      killsToday: killsToday_,
+      wasHead,
+      pressure: round29(pressure),
+      wildHead: st.wildHead,
+      tameHead,
+      stockHead,
+      nearHead: st.nearHead,
+      fedHead,
+      roomForHead,
+      huntShare: round29(huntShare),
+      availability: round29(availability),
+      starveRisk,
+      failDays: mem.failDays,
+      lodges,
+      poorLodges,
+      bestBattue: mods.yieldMult,
+      extinctToday,
+      extinct: Object.keys(mem.extinct),
+      memory: mem
+    };
+    return { mods, reasons, events, flags };
+  }
+  function huntHappyMod(sim2) {
+    const m = sim2 && sim2.linkHunt;
+    return m ? Math.round(numOf2(m.happyMod, 0)) : 0;
+  }
+  function huntScars(out) {
+    const list = [];
+    const gone = out && out.flags && out.flags.extinctToday;
+    if (!Array.isArray(gone)) return list;
+    for (const s of gone) {
+      const sp = SPECIES[s] || SPECIES.wild;
+      list.push({ kind: EXTINCT_SCAR_KIND, scale: EXTINCT_SCAR_SCALE, note: `Извели вид: ${sp.many}` });
+    }
+    return list;
+  }
+  function huntBreakdown(sim2) {
+    const st = huntState(sim2);
+    const mem = readMemory4(sim2);
+    const kills30 = sum(mem.kills.map((k) => k.n));
+    const born = st.wildHead * REGROW_PER_HEAD * KILL_WINDOW;
+    const pressure = born > 0.5 ? Math.min(PRESSURE_CAP, kills30 / born) : kills30 > 0 ? PRESSURE_CAP : 0;
+    const rows = [];
+    for (const [s, head2] of Object.entries(st.bySpecies)) {
+      if (head2 <= 0) continue;
+      const sp = SPECIES[s] || SPECIES.wild;
+      rows.push({ species: s, ru: sp.many, head: head2 });
+    }
+    rows.sort((a, b) => b.head - a.head);
+    let text;
+    if (!st.hasSource || st.wildHead === 0 && st.tameHead === 0) {
+      text = "Дичи в округе нет: охота больше не кормит.";
+    } else if (pressure >= PRESSURE_WARN && kills30 > 0) {
+      text = `Стада редеют: за месяц выбито ${kills30} гол. из ${st.wildHead + kills30}, приплод не поспевает.`;
+    } else if (kills30 > 0) {
+      text = `Охота в меру: за месяц взято ${kills30} гол. из ${st.wildHead + kills30}, стада держатся.`;
+    } else {
+      text = `Стада не тронуты: ${st.wildHead} гол. дичи в округе.`;
+    }
+    return {
+      rows,
+      text,
+      kills30,
+      pressure: round29(pressure),
+      wildHead: st.wildHead,
+      tameHead: st.tameHead,
+      extinct: Object.keys(mem.extinct)
+    };
+  }
+  function killsToday(sim2, st, mem) {
+    const inbox = sim2 && sim2.sys && sim2.sys.huntKills;
+    if (Array.isArray(inbox)) {
+      const out = [];
+      for (const k of inbox) {
+        if (!k || typeof k !== "object") continue;
+        const kd = Math.round(numOf2(k.day, -1));
+        if (kd !== st.day && kd !== st.day - 1) continue;
+        out.push({ species: speciesId(k.species), n: Math.max(1, Math.floor(numOf2(k.head, 1))), x: numOf2(k.x, null), y: numOf2(k.y, null), herdId: k.herdId != null ? String(k.herdId) : null, food: numOf2(k.food, 0) });
+      }
+      return out;
+    }
+    const drop2 = Math.max(0, Math.round(mem.headSeen - st.wildHead));
+    return drop2 > 0 ? [{ species: "wild", n: drop2, x: null, y: null, herdId: null, food: 0 }] : [];
+  }
+  function killsByHerd(sim2, st, killed) {
+    const map = /* @__PURE__ */ new Map();
+    for (const k of killed) {
+      let h = null;
+      if (k.herdId) h = st.herds.find((x) => x.id === k.herdId) || null;
+      if (!h && k.x !== null && k.y !== null) h = herdAt(st.herds, k.x, k.y);
+      if (!h) continue;
+      map.set(h.id, (map.get(h.id) || 0) + k.n);
+    }
+    return map;
+  }
+  function addKill(mem, day, species, n) {
+    const same = mem.kills.find((k) => k.d === day && k.s === species);
+    if (same) same.n += n;
+    else mem.kills.push({ d: day, s: species, n });
+  }
+  function meanMeat(mem) {
+    let n = 0, food = 0;
+    for (const k of mem.kills) {
+      n += k.n;
+      food += k.n * (SPECIES[k.s] || SPECIES.wild).meat;
+    }
+    return n > 0 ? food / n : SPECIES.wild.meat;
+  }
+  function fleeStep(h, fear, cx, cy) {
+    const d = dist(h.x, h.y, cx, cy);
+    let dx = 0, dy = 0;
+    if (fear >= FLEE_FEAR && d < FLEE_MAX_DIST) {
+      const ux = d > 1e-3 ? (h.x - cx) / d : 1;
+      const uy = d > 1e-3 ? (h.y - cy) / d : 0;
+      dx = round29(ux * FLEE_STEP);
+      dy = round29(uy * FLEE_STEP);
+    } else if (fear <= RETURN_FEAR && d > RETURN_DIST) {
+      const ux = (cx - h.x) / d, uy = (cy - h.y) / d;
+      dx = round29(ux * RETURN_STEP);
+      dy = round29(uy * RETURN_STEP);
+    }
+    return { dx, dy };
+  }
+  function herdAt(herds, x, y) {
+    let best = null, bestD = Infinity;
+    for (const h of herds) {
+      if (h.head <= 0) continue;
+      const d = dist(h.x, h.y, x, y);
+      if (d > h.r) continue;
+      if (d < bestD) {
+        bestD = d;
+        best = h;
+      }
+    }
+    return best;
+  }
+  function readHerds(sim2) {
+    const raw = sim2 && sim2.herds;
+    const list = Array.isArray(raw) ? raw : raw && Array.isArray(raw.herds) ? raw.herds : raw && Array.isArray(raw.list) ? raw.list : null;
+    if (!list) return null;
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const h = list[i];
+      if (!h || typeof h !== "object") continue;
+      const species = speciesId(h.species != null ? h.species : h.kind);
+      const head2 = Math.max(0, Math.floor(numOf2(h.head != null ? h.head : h.n, 0)));
+      out.push({
+        id: String(h.id != null ? h.id : "h" + i),
+        species,
+        head: head2,
+        x: numOf2(h.x != null ? h.x : h.cx, 0),
+        y: numOf2(h.y != null ? h.y : h.cy, 0),
+        r: Math.max(1, numOf2(h.r, (SPECIES[species] || SPECIES.wild).r || DEFAULT_RANGE)),
+        cap: Math.max(0, numOf2(h.cap, head2)),
+        fear: clamp13(numOf2(h.fear, 0), 0, 1),
+        tame: !!h.tame
+      });
+    }
+    return out;
+  }
+  function goneByModel(sim2) {
+    const g2 = sim2 && sim2.herds && sim2.herds.gone;
+    const out = {};
+    if (!g2 || typeof g2 !== "object") return out;
+    for (const k of Object.keys(g2)) if (Number.isFinite(g2[k])) out[speciesId(k)] = g2[k];
+    return out;
+  }
+  function loneAnimals(sim2) {
+    const list = sim2 && sim2.animals;
+    if (!Array.isArray(list)) return [];
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      if (!a || typeof a !== "object") continue;
+      if (numOf2(a.hp, 1) <= 0) continue;
+      out.push({
+        id: "a" + i,
+        species: speciesId(a.kind),
+        head: 1,
+        x: numOf2(a.x, 0),
+        y: numOf2(a.y, 0),
+        r: 0.5,
+        cap: 1,
+        fear: 0,
+        tame: false
+      });
+    }
+    return out;
+  }
+  function headBySpecies(herds) {
+    const out = {};
+    for (const h of herds) {
+      if (h.head <= 0) continue;
+      out[h.species] = (out[h.species] || 0) + h.head;
+    }
+    return out;
+  }
+  function countHunters(sim2, x, y, r) {
+    const list = sim2 && sim2.villagers;
+    if (!Array.isArray(list)) return 0;
+    let n = 0;
+    for (const v of list) {
+      if (!v || v.job !== "hunt") continue;
+      if (v.hp !== void 0 && v.hp <= 0) continue;
+      if (x === void 0) {
+        n++;
+        continue;
+      }
+      if (dist(numOf2(v.x, 0), numOf2(v.y, 0), x, y) <= r) n++;
+    }
+    return n;
+  }
+  function doneBuildings(sim2) {
+    const list = sim2 && sim2.buildings;
+    if (!Array.isArray(list)) return [];
+    return list.filter((b) => b && b.done && !b.destroyed);
+  }
+  function nearestDist3(list, x, y) {
+    let best = null;
+    for (const b of list) {
+      const d = dist(numOf2(b.x, 0), numOf2(b.y, 0), x, y);
+      if (best === null || d < best) best = d;
+    }
+    return best;
+  }
+  function hasTech(sim2, id) {
+    const t = sim2 && sim2.techs;
+    if (!t) return false;
+    return typeof t.has === "function" ? t.has(id) : Array.isArray(t) ? t.includes(id) : false;
+  }
+  function canSay(mem, key, day) {
+    return day - (mem.said[key] != null ? mem.said[key] : -9999) >= SAY_COOLDOWN;
+  }
+  function readMemory4(sim2) {
+    const m = sim2 && sim2.linkHunt;
+    if (!m || typeof m !== "object") return createHuntMemory();
+    return cloneMem({ ...createHuntMemory(), ...m });
+  }
+  function cloneMem(m) {
+    return {
+      ...m,
+      kills: Array.isArray(m.kills) ? m.kills.map((k) => ({ ...k })) : [],
+      seen: { ...m.seen || {} },
+      extinct: { ...m.extinct || {} },
+      tamed: { ...m.tamed || {} },
+      // stock копируется вместе с остальными: без этой строки withStock правил
+      // счётчик скота ПРЯМО в памяти, лежащей в sim, — то самое запрещённое
+      // «модуль мутирует состояние», только через недокопированную ссылку.
+      // Ловится тестом «withStock не трогает переданную память».
+      stock: { ...m.stock || {} },
+      said: { ...m.said || {} }
+    };
+  }
+  function speciesId(s) {
+    return typeof s === "string" && SPECIES[s] ? s : "wild";
+  }
+  function numMap(o) {
+    const out = {};
+    if (!o || typeof o !== "object") return out;
+    for (const [k, v] of Object.entries(o)) if (Number.isFinite(v)) out[String(k)] = v;
+    return out;
+  }
+  function lodgeKey(b) {
+    return `${Math.round(numOf2(b.x, 0))},${Math.round(numOf2(b.y, 0))}`;
+  }
+  function aliveCount4(sim2) {
+    const list = sim2 && sim2.villagers;
+    if (!Array.isArray(list)) return 0;
+    let n = 0;
+    for (const v of list) if (!v || v.hp === void 0 || v.hp > 0) n++;
+    return n;
+  }
+  function dist(x1, y1, x2, y2) {
+    return Math.hypot(x1 - x2, y1 - y2);
+  }
+  function sum(a) {
+    let s = 0;
+    for (const v of a) s += v;
+    return s;
+  }
+  function clamp13(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function num12(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function numOf2(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round29(v) {
+    return Math.round(v * 100) / 100;
+  }
+  function f13(v) {
+    return (Math.round(v * 10) / 10).toFixed(1);
+  }
+  function f2(v) {
+    return (Math.round(v * 100) / 100).toFixed(2);
+  }
+  function pct(v) {
+    return Math.round(v * 100) + "%";
+  }
+  function cap1(s) {
+    return s ? s[0].toUpperCase() + s.slice(1) : s;
+  }
+
   // app/src/core/systems/dynasty.js
   var YEAR5 = DAYS_PER_SEASON * 4;
   var ADULT_YEARS = 16;
@@ -14462,7 +15194,7 @@
   var FEMALE_NAMES2 = NAMES.filter((n) => /[ая]$/.test(n) && !MALE_EXCEPTIONS2.has(n));
   var MALE_NAMES2 = NAMES.filter((n) => !FEMALE_NAMES2.includes(n));
   function createDynasty(rng, opts = {}) {
-    const day = numOf2(opts.day, 0);
+    const day = numOf3(opts.day, 0);
     const st = {
       v: 1,
       day: -1,
@@ -14478,7 +15210,7 @@
       rulerId: null,
       namedHeirId: null,
       // назначенный игроком; перебивает закон
-      legitimacy: numOf2(opts.legitimacy, LEG_START),
+      legitimacy: numOf3(opts.legitimacy, LEG_START),
       court: 1,
       patronCd: 0,
       claimants: [],
@@ -14532,16 +15264,16 @@
   function restoreDynasty(data) {
     const st = createDynasty(null);
     if (!data || typeof data !== "object") return st;
-    st.day = numOf2(data.day, -1);
-    st.nextId = Math.max(1, Math.round(numOf2(data.nextId, 1)));
+    st.day = numOf3(data.day, -1);
+    st.nextId = Math.max(1, Math.round(numOf3(data.nextId, 1)));
     st.fam = strOf(data.fam, "—");
     st.founder = strOf(data.founder, "—");
-    st.foundedDay = numOf2(data.foundedDay, 0);
-    st.generations = Math.max(1, Math.round(numOf2(data.generations, 1)));
-    st.legitimacy = clamp13(numOf2(data.legitimacy, LEG_START), LEG_MIN, LEG_MAX);
-    st.court = clampInt(Math.round(numOf2(data.court, 1)), 0, COURT.length - 1);
-    st.patronCd = Math.max(0, numOf2(data.patronCd, 0));
-    st.interregnum = Math.max(0, numOf2(data.interregnum, 0));
+    st.foundedDay = numOf3(data.foundedDay, 0);
+    st.generations = Math.max(1, Math.round(numOf3(data.generations, 1)));
+    st.legitimacy = clamp14(numOf3(data.legitimacy, LEG_START), LEG_MIN, LEG_MAX);
+    st.court = clampInt(Math.round(numOf3(data.court, 1)), 0, COURT.length - 1);
+    st.patronCd = Math.max(0, numOf3(data.patronCd, 0));
+    st.interregnum = Math.max(0, numOf3(data.interregnum, 0));
     if (Array.isArray(data.members)) {
       for (const m of data.members) {
         const r = _restoreMember(m);
@@ -14558,7 +15290,7 @@
     st.rulerId = ids.has(data.rulerId) ? data.rulerId : null;
     st.namedHeirId = ids.has(data.namedHeirId) ? data.namedHeirId : null;
     if (Array.isArray(data.graves)) {
-      st.graves = data.graves.filter((g2) => g2 && typeof g2 === "object").map((g2) => ({ name: strOf(g2.name, "—"), day: numOf2(g2.day, 0), years: Math.max(0, Math.round(numOf2(g2.years, 0))), text: strOf(g2.text, "") })).slice(-GRAVE_KEEP);
+      st.graves = data.graves.filter((g2) => g2 && typeof g2 === "object").map((g2) => ({ name: strOf(g2.name, "—"), day: numOf3(g2.day, 0), years: Math.max(0, Math.round(numOf3(g2.years, 0))), text: strOf(g2.text, "") })).slice(-GRAVE_KEEP);
     }
     if (Array.isArray(data.claimants)) {
       for (const c of data.claimants.slice(0, MAX_CLAIMANTS)) {
@@ -14567,21 +15299,21 @@
           name: strOf(c.name, "Безымянный"),
           fam: strOf(c.fam, "—"),
           sex: c.sex === "ж" ? "ж" : "м",
-          age: Math.max(0, numOf2(c.age, 30 * YEAR5)),
-          strength: clamp13(numOf2(c.strength, 40), 0, 100),
+          age: Math.max(0, numOf3(c.age, 30 * YEAR5)),
+          strength: clamp14(numOf3(c.strength, 40), 0, 100),
           fid: c.fid == null ? null : String(c.fid),
-          since: numOf2(c.since, 0)
+          since: numOf3(c.since, 0)
         });
       }
     }
     if (Array.isArray(data.ties)) {
-      st.ties = data.ties.filter((t) => t && typeof t === "object" && t.fid != null).map((t) => ({ fid: String(t.fid), house: strOf(t.house, "—"), since: numOf2(t.since, 0), memberId: numOf2(t.memberId, 0), claim: clamp13(numOf2(t.claim, FOREIGN_CLAIM), 0, 100) }));
+      st.ties = data.ties.filter((t) => t && typeof t === "object" && t.fid != null).map((t) => ({ fid: String(t.fid), house: strOf(t.house, "—"), since: numOf3(t.since, 0), memberId: numOf3(t.memberId, 0), claim: clamp14(numOf3(t.claim, FOREIGN_CLAIM), 0, 100) }));
     }
     if (Array.isArray(data.seen)) {
-      st.seen = data.seen.filter((s) => s && typeof s === "object" && typeof s.key === "string").map((s) => ({ key: s.key, day: numOf2(s.day, 0) })).slice(-40);
+      st.seen = data.seen.filter((s) => s && typeof s === "object" && typeof s.key === "string").map((s) => ({ key: s.key, day: numOf3(s.day, 0) })).slice(-40);
     }
     if (data.stats && typeof data.stats === "object") {
-      for (const k of Object.keys(st.stats)) st.stats[k] = Math.max(0, Math.round(numOf2(data.stats[k], st.stats[k])));
+      for (const k of Object.keys(st.stats)) st.stats[k] = Math.max(0, Math.round(numOf3(data.stats[k], st.stats[k])));
     }
     return st;
   }
@@ -14592,9 +15324,9 @@
       name: strOf(m.name, "Безымянный"),
       fam: strOf(m.fam, "—"),
       sex: m.sex === "ж" ? "ж" : "м",
-      age: Math.max(0, numOf2(m.age, 20 * YEAR5)),
-      born: numOf2(m.born, 0),
-      gen: Math.max(1, Math.round(numOf2(m.gen, 1))),
+      age: Math.max(0, numOf3(m.age, 20 * YEAR5)),
+      born: numOf3(m.born, 0),
+      gen: Math.max(1, Math.round(numOf3(m.gen, 1))),
       blood: !!m.blood,
       origin: ["blood", "married", "foreign"].includes(m.origin) ? m.origin : m.blood ? "blood" : "married",
       fid: m.fid == null ? null : String(m.fid),
@@ -14602,8 +15334,8 @@
       father: Number.isFinite(m.father) ? m.father : null,
       mother: Number.isFinite(m.mother) ? m.mother : null,
       spouse: Number.isFinite(m.spouse) ? m.spouse : null,
-      fertCd: Math.max(0, numOf2(m.fertCd, 0)),
-      since: numOf2(m.since, 0)
+      fertCd: Math.max(0, numOf3(m.fertCd, 0)),
+      since: numOf3(m.since, 0)
     };
   }
   function memberOf(state, id) {
@@ -14697,8 +15429,8 @@
     return m.father === parent.id || m.mother === parent.id;
   }
   function baseLegitimacy(state, day) {
-    const years = Math.max(0, (numOf2(day, 0) - numOf2(state.foundedDay, 0)) / YEAR5);
-    return clamp13(30 + 6 * (state.generations - 1) + years * 0.15, 0, LEG_BASE_CAP);
+    const years = Math.max(0, (numOf3(day, 0) - numOf3(state.foundedDay, 0)) / YEAR5);
+    return clamp14(30 + 6 * (state.generations - 1) + years * 0.15, 0, LEG_BASE_CAP);
   }
   function legitimacyWord(v) {
     if (v >= 80) return "непререкаемая";
@@ -14755,6 +15487,8 @@
     S.stats.deaths++;
     for (const o of S.members) {
       if (o.spouse === m.id) o.spouse = null;
+      if (o.father === m.id) o.father = null;
+      if (o.mother === m.id) o.mother = null;
     }
     if (S.namedHeirId === m.id) S.namedHeirId = null;
     const text = `✝ ${m.name} умер${m.sex === "ж" ? "ла" : ""} в ${y} ${plural2(y, "год", "года", "лет")}.`;
@@ -14776,7 +15510,7 @@
       if (S.members.length >= MAX_MEMBERS) break;
       const spouse = _makeMember(S, rng, {
         sex: m.sex === "м" ? "ж" : "м",
-        ageYears: clamp13(ageYears(m) + rng.int(-6, 6), MARRY_MIN, MARRY_MAX),
+        ageYears: clamp14(ageYears(m) + rng.int(-6, 6), MARRY_MIN, MARRY_MAX),
         day: c.day,
         gen: m.gen,
         blood: false,
@@ -14897,7 +15631,7 @@
     const before = S.legitimacy;
     const base = baseLegitimacy(S, c.day);
     const parts = [];
-    const pull = clamp13(base - S.legitimacy, -LEG_DRIFT, LEG_DRIFT);
+    const pull = clamp14(base - S.legitimacy, -LEG_DRIFT, LEG_DRIFT);
     S.legitimacy += pull;
     if (Math.abs(pull) > 1e-9) {
       parts.push(pull > 0 ? `род на троне ${S.generations} ${plural2(S.generations, "поколение", "поколения", "поколений")}: привычка к власти +${pull.toFixed(2)}` : `род зазнался выше своего веса: ${pull.toFixed(2)}`);
@@ -14907,7 +15641,7 @@
       if (d == null) continue;
       if (_alreadySeen(S, ev.kind, ev.key, c.day)) continue;
       S.seen.push({ key: ev.key ? `${ev.kind}:${ev.key}` : ev.kind, day: c.day });
-      const v = d * (ev.scale != null && Number.isFinite(ev.scale) ? clamp13(ev.scale, 0.25, 2) : 1);
+      const v = d * (ev.scale != null && Number.isFinite(ev.scale) ? clamp14(ev.scale, 0.25, 2) : 1);
       S.legitimacy += v;
       out.reasons.push(`${_eventWord(ev.kind)}: законность ${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}.`);
       out.events.push({
@@ -14930,7 +15664,7 @@
       parts.push(`сомнительный преемник −${LEG_ODD_HEIR}`);
       out.reasons.push(`Преемник сомнителен (${heir.why}): знать шепчется. Отменить назначение — и шёпот стихнет.`);
     }
-    S.legitimacy = clamp13(S.legitimacy, LEG_MIN, LEG_MAX);
+    S.legitimacy = clamp14(S.legitimacy, LEG_MIN, LEG_MAX);
     out.flags.legParts = parts;
     out.flags.legDelta = Math.round((S.legitimacy - before) * 100) / 100;
   }
@@ -14951,7 +15685,7 @@
     }[kind] || kind;
   }
   function _legHit(S, v, out, why) {
-    S.legitimacy = clamp13(S.legitimacy - v, LEG_MIN, LEG_MAX);
+    S.legitimacy = clamp14(S.legitimacy - v, LEG_MIN, LEG_MAX);
     out.reasons.push(`${why} Законность −${v.toFixed(1)}.`);
   }
   function _tickClaimants(S, c, rng, out) {
@@ -14984,7 +15718,7 @@
       fam: tie ? tie.house : rng.pick(NICKNAMES),
       sex,
       age: rng.int(22, 48) * YEAR5,
-      strength: Math.round(clamp13((tie ? tie.claim : 25) + (CLAIM_BELOW - S.legitimacy), 10, 90)),
+      strength: Math.round(clamp14((tie ? tie.claim : 25) + (CLAIM_BELOW - S.legitimacy), 10, 90)),
       fid: tie ? tie.fid : null,
       since: c.day
     };
@@ -15000,13 +15734,13 @@
     const lvl = COURT[clampInt(S.court, 0, COURT.length - 1)];
     const gold = lvl.gold * (1 + c.pop * COURT_PER_POP);
     if (gold > 0 && c.gold < gold) {
-      S.legitimacy = clamp13(S.legitimacy - COURT_UNPAID_LEG, LEG_MIN, LEG_MAX);
+      S.legitimacy = clamp14(S.legitimacy - COURT_UNPAID_LEG, LEG_MIN, LEG_MAX);
       out.mods.estates.nobles -= 0.05;
       out.reasons.push(`Двору не заплатили (нужно ${gold.toFixed(1)} 🪙 в сутки): законность −${COURT_UNPAID_LEG}, знать недовольна. Понизьте содержание двора.`);
       out.flags.courtUnpaid = true;
     } else {
       out.mods.goldPerDay -= gold;
-      S.legitimacy = clamp13(S.legitimacy + lvl.leg, LEG_MIN, LEG_MAX);
+      S.legitimacy = clamp14(S.legitimacy + lvl.leg, LEG_MIN, LEG_MAX);
       out.mods.estates.nobles += lvl.nobles;
       out.mods.estates.commons += lvl.commons;
       out.mods.happy += lvl.happy;
@@ -15064,7 +15798,7 @@
     const chk = canPatronize(state, ctx);
     if (!chk.ok) return { ...chk, state };
     const S = clone(state);
-    S.legitimacy = clamp13(S.legitimacy + PATRON_LEG, LEG_MIN, LEG_MAX);
+    S.legitimacy = clamp14(S.legitimacy + PATRON_LEG, LEG_MIN, LEG_MAX);
     S.patronCd = PATRON_CD;
     return {
       ok: true,
@@ -15076,7 +15810,7 @@
     };
   }
   function canSetCourt(state, level) {
-    const l = Math.round(numOf2(level, -1));
+    const l = Math.round(numOf3(level, -1));
     if (!state) return { ok: false, reason: "Рода нет" };
     if (!COURT[l]) return { ok: false, reason: "Такого содержания двора не бывает" };
     if (state.court === l) return { ok: false, reason: `${COURT[l].ru} — уже так и есть` };
@@ -15112,7 +15846,7 @@
     const S = clone(state);
     S.namedHeirId = chk.member.id;
     const odd = chk.odd;
-    if (odd) S.legitimacy = clamp13(S.legitimacy + NAME_HEIR_LEG, LEG_MIN, LEG_MAX);
+    if (odd) S.legitimacy = clamp14(S.legitimacy + NAME_HEIR_LEG, LEG_MIN, LEG_MAX);
     return {
       ok: true,
       state: S,
@@ -15143,7 +15877,7 @@
     if (!m) return { ok: false, reason: "В роду некого женить: свободных наследников нет" };
     if (m.spouse != null) return { ok: false, reason: `${m.name} уже в браке` };
     if (ageYears(m) < MARRY_MIN) return { ok: false, reason: `${m.name} слишком юн: женить можно с ${MARRY_MIN} лет` };
-    if (numOf2(opts.rel, 0) < 0) return { ok: false, reason: "Сосед враждебен — сватов не примут" };
+    if (numOf3(opts.rel, 0) < 0) return { ok: false, reason: "Сосед враждебен — сватов не примут" };
     return { ok: true, member: m };
   }
   function marryHeir(state, ctx, opts, rng) {
@@ -15156,7 +15890,7 @@
     const sex = m.sex === "м" ? "ж" : "м";
     const spouse = _makeMember(S, rng, {
       sex,
-      ageYears: clamp13(ageYears(m) + (rng ? rng.int(-4, 4) : 0), MARRY_MIN, MARRY_MAX),
+      ageYears: clamp14(ageYears(m) + (rng ? rng.int(-4, 4) : 0), MARRY_MIN, MARRY_MAX),
       day: c.day,
       gen: m.gen,
       blood: false,
@@ -15166,7 +15900,7 @@
     });
     _wed(m, spouse);
     S.ties.push({ fid: String(opts.fid), house, since: c.day, memberId: m.id, claim: FOREIGN_CLAIM });
-    S.legitimacy = clamp13(S.legitimacy + MARRY_LEG, LEG_MIN, LEG_MAX);
+    S.legitimacy = clamp14(S.legitimacy + MARRY_LEG, LEG_MIN, LEG_MAX);
     return {
       ok: true,
       state: S,
@@ -15228,7 +15962,7 @@
     S.fam = opts.fam || (rng ? rng.pick(NICKNAMES) : "Новый");
     S.generations = 1;
     S.foundedDay = c.day;
-    S.legitimacy = clamp13(numOf2(opts.legitimacy, COUP_LEG), LEG_MIN, LEG_MAX);
+    S.legitimacy = clamp14(numOf3(opts.legitimacy, COUP_LEG), LEG_MIN, LEG_MAX);
     S.interregnum = 0;
     S.court = 1;
     S.stats.houses++;
@@ -15247,7 +15981,7 @@
     if (rng) {
       const spouse = _makeMember(S, rng, {
         sex: head2.sex === "м" ? "ж" : "м",
-        ageYears: clamp13(ageYears(head2) + rng.int(-5, 3), MARRY_MIN, MARRY_MAX),
+        ageYears: clamp14(ageYears(head2) + rng.int(-5, 3), MARRY_MIN, MARRY_MAX),
         day: c.day,
         gen: 1,
         blood: false,
@@ -15347,9 +16081,9 @@
       name: o.name && String(o.name).includes(" ") ? String(o.name) : `${first} ${fam}`,
       fam,
       sex,
-      age: Math.max(0, Math.round(numOf2(o.ageYears, 0) * YEAR5)),
-      born: numOf2(o.day, 0) - Math.max(0, Math.round(numOf2(o.ageYears, 0) * YEAR5)),
-      gen: Math.max(1, Math.round(numOf2(o.gen, 1))),
+      age: Math.max(0, Math.round(numOf3(o.ageYears, 0) * YEAR5)),
+      born: numOf3(o.day, 0) - Math.max(0, Math.round(numOf3(o.ageYears, 0) * YEAR5)),
+      gen: Math.max(1, Math.round(numOf3(o.gen, 1))),
       blood: !!o.blood,
       origin: o.origin || (o.blood ? "blood" : "married"),
       fid: o.fid == null ? null : String(o.fid),
@@ -15358,7 +16092,7 @@
       mother: o.mother ? o.mother.id : null,
       spouse: null,
       fertCd: 0,
-      since: numOf2(o.day, 0)
+      since: numOf3(o.day, 0)
     };
     S.members.push(m);
     return m;
@@ -15393,18 +16127,18 @@
     const o = ctx || {};
     const gov = SUCCESSION_LAW[o.gov] ? o.gov : "chiefdom";
     return {
-      day: Math.max(0, Math.round(numOf2(o.day, 0))),
+      day: Math.max(0, Math.round(numOf3(o.day, 0))),
       gov,
-      era: Math.max(0, Math.round(numOf2(o.era, 0))),
-      pop: Math.max(0, Math.round(numOf2(o.pop, 0))),
-      gold: Math.max(0, numOf2(o.gold, 0)),
-      foodDays: numOf2(o.foodDays, 99),
-      wars: Math.max(0, Math.round(numOf2(o.wars, 0))),
-      stability: clamp13(numOf2(o.stability, 50), 0, 100),
-      happy: clamp13(numOf2(o.happy, 50), 0, 100),
-      mortalityMult: Math.max(0, numOf2(o.mortalityMult, 1)),
-      nobles: clamp13(numOf2(o.nobles, 50), 0, 100),
-      military: clamp13(numOf2(o.military, 50), 0, 100),
+      era: Math.max(0, Math.round(numOf3(o.era, 0))),
+      pop: Math.max(0, Math.round(numOf3(o.pop, 0))),
+      gold: Math.max(0, numOf3(o.gold, 0)),
+      foodDays: numOf3(o.foodDays, 99),
+      wars: Math.max(0, Math.round(numOf3(o.wars, 0))),
+      stability: clamp14(numOf3(o.stability, 50), 0, 100),
+      happy: clamp14(numOf3(o.happy, 50), 0, 100),
+      mortalityMult: Math.max(0, numOf3(o.mortalityMult, 1)),
+      nobles: clamp14(numOf3(o.nobles, 50), 0, 100),
+      military: clamp14(numOf3(o.military, 50), 0, 100),
       events: Array.isArray(o.events) ? o.events.filter((e) => e && typeof e.kind === "string") : []
     };
   }
@@ -15420,14 +16154,14 @@
   function clone(s) {
     return s ? JSON.parse(JSON.stringify(s)) : s;
   }
-  function clamp13(v, lo, hi) {
+  function clamp14(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
   function clampInt(v, lo, hi) {
-    const n = Math.round(numOf2(v, lo));
+    const n = Math.round(numOf3(v, lo));
     return n < lo ? lo : n > hi ? hi : n;
   }
-  function numOf2(v, def) {
+  function numOf3(v, def) {
     return Number.isFinite(v) ? v : def;
   }
   function strOf(v, def) {
@@ -15538,13 +16272,13 @@
   function restoreDynastyLink(data) {
     const L = createDynastyLink();
     if (!data || typeof data !== "object") return L;
-    L.day = num12(data.day, -1);
-    L.plot = clamp14(num12(data.plot, 0), 0, PLOT_MAX);
-    L.stage = clampInt2(num12(data.stage, 0), 0, 3);
-    L.coupDays = Math.max(0, Math.round(num12(data.coupDays, 0)));
-    L.coupCd = Math.max(0, Math.round(num12(data.coupCd, 0)));
+    L.day = num13(data.day, -1);
+    L.plot = clamp15(num13(data.plot, 0), 0, PLOT_MAX);
+    L.stage = clampInt2(num13(data.stage, 0), 0, 3);
+    L.coupDays = Math.max(0, Math.round(num13(data.coupDays, 0)));
+    L.coupCd = Math.max(0, Math.round(num13(data.coupCd, 0)));
     if (Array.isArray(data.seen)) {
-      L.seen = data.seen.filter((s) => s && typeof s === "object" && typeof s.key === "string").map((s) => ({ key: s.key, day: num12(s.day, 0) })).slice(-60);
+      L.seen = data.seen.filter((s) => s && typeof s === "object" && typeof s.key === "string").map((s) => ({ key: s.key, day: num13(s.day, 0) })).slice(-60);
     }
     if (data.lastSaid && typeof data.lastSaid === "object") {
       for (const [k, v] of Object.entries(data.lastSaid)) {
@@ -15558,15 +16292,15 @@
   }
   function dynastyLinkState(sim2) {
     const s = sim2 || {};
-    const day = Math.max(0, Math.round(num12(s.day, 0)));
+    const day = Math.max(0, Math.round(num13(s.day, 0)));
     const pol = s.politics && s.politics.state || null;
     const dyn = s.dynasty || null;
-    const pop = aliveCount4(s);
-    const food = Math.max(0, num12(s.res && s.res.food, 0));
+    const pop = aliveCount5(s);
+    const food = Math.max(0, num13(s.res && s.res.food, 0));
     const foodDays = pop > 0 ? food / (pop * 0.7) : 99;
     const factions = {};
     for (const fid of Object.keys(SOCIAL_FACTIONS)) {
-      factions[fid] = pol && pol.factions ? clamp14(num12(pol.factions[fid], 50), 0, 100) : 50;
+      factions[fid] = pol && pol.factions ? clamp15(num13(pol.factions[fid], 50), 0, 100) : 50;
     }
     let traits2 = [];
     if (pol && pol.ruler && Array.isArray(pol.ruler.traits)) traits2 = pol.ruler.traits.slice();
@@ -15583,14 +16317,14 @@
       hasDyn,
       fam: hasDyn ? str(dyn.fam, "—") : "—",
       // Без рода законность равна точке равнодушия: связь молчит и не мешает.
-      legitimacy: hasDyn ? clamp14(num12(dyn.legitimacy, LEG_PIVOT), 0, 100) : LEG_PIVOT,
-      court: hasDyn ? clampInt2(num12(dyn.court, 1), 0, COURT_LUX.length - 1) : 1,
+      legitimacy: hasDyn ? clamp15(num13(dyn.legitimacy, LEG_PIVOT), 0, 100) : LEG_PIVOT,
+      court: hasDyn ? clampInt2(num13(dyn.court, 1), 0, COURT_LUX.length - 1) : 1,
       claimants: hasDyn && Array.isArray(dyn.claimants) ? dyn.claimants.slice(0, 4) : [],
-      interregnum: hasDyn ? Math.max(0, num12(dyn.interregnum, 0)) : 0,
-      houseYears: hasDyn ? Math.max(0, (day - num12(dyn.foundedDay, day)) / YEAR6) : 99,
-      coups: hasDyn && dyn.stats ? Math.max(0, num12(dyn.stats.coups, 0)) : 0,
+      interregnum: hasDyn ? Math.max(0, num13(dyn.interregnum, 0)) : 0,
+      houseYears: hasDyn ? Math.max(0, (day - num13(dyn.foundedDay, day)) / YEAR6) : 99,
+      coups: hasDyn && dyn.stats ? Math.max(0, num13(dyn.stats.coups, 0)) : 0,
       gov: pol ? str(pol.gov, "chiefdom") : "chiefdom",
-      stability: pol ? clamp14(num12(pol.stability, 60), 0, 100) : 60,
+      stability: pol ? clamp15(num13(pol.stability, 60), 0, 100) : 60,
       factions,
       traits: traits2,
       // Отчёт рода за прошлые сутки: оттуда узнаём, потянула ли казна двор.
@@ -15604,13 +16338,13 @@
     const out = [];
     for (const sc of mem.scars) {
       if (!sc || !SCAR_TO_LEG[sc.kind]) continue;
-      if (day - num12(sc.day, -999) > 1) continue;
-      out.push({ kind: sc.kind, day: num12(sc.day, day), w: Math.max(0, num12(sc.w, 0)) });
+      if (day - num13(sc.day, -999) > 1) continue;
+      out.push({ kind: sc.kind, day: num13(sc.day, day), w: Math.max(0, num13(sc.w, 0)) });
     }
     return out;
   }
   function fedShare(st) {
-    return clamp14(st.foodDays / FED_DAYS, 0, 1);
+    return clamp15(st.foodDays / FED_DAYS, 0, 1);
   }
   function legitimacyEstates(st) {
     const out = zeroEstates2();
@@ -15735,8 +16469,8 @@
       rows.push({ v: 0, ru: "Правитель слабоволен: пробуют то, чего не пробовали бы" });
     }
     let calm = 0;
-    const legCalm = clamp14((st.legitimacy - PLOT_LEG) / (PLOT_CALM_LEG - PLOT_LEG), 0, 1);
-    const estCalm = clamp14((Math.min(st.factions.nobles, st.factions.military) - PLOT_ANGRY_NOBLES) / (PLOT_CALM_ESTATES - PLOT_ANGRY_NOBLES), 0, 1);
+    const legCalm = clamp15((st.legitimacy - PLOT_LEG) / (PLOT_CALM_LEG - PLOT_LEG), 0, 1);
+    const estCalm = clamp15((Math.min(st.factions.nobles, st.factions.military) - PLOT_ANGRY_NOBLES) / (PLOT_CALM_ESTATES - PLOT_ANGRY_NOBLES), 0, 1);
     if (st.interregnum <= 0) {
       calm = PLOT_CALM * Math.min(legCalm, estCalm);
       if (calm > 0.01) {
@@ -15747,7 +16481,7 @@
         rows.push({ v: -KIND_PLOT_CALM, ru: "Правителя любят: заговорщикам не на кого опереться" });
       }
     }
-    const d = clamp14(grow - calm, -PLOT_STEP_CALM, PLOT_STEP_MAX);
+    const d = clamp15(grow - calm, -PLOT_STEP_CALM, PLOT_STEP_MAX);
     return { d, grow, calm, rows };
   }
   function stageOf4(plot, prevStage) {
@@ -15858,12 +16592,12 @@
     if (!sameDay) {
       L.day = st.day;
       L.coupCd = Math.max(0, L.coupCd - 1);
-      L.plot = L.coupCd > 0 ? Math.max(0, L.plot - PLOT_CALM) : clamp14(L.plot + step.d, 0, PLOT_MAX);
+      L.plot = L.coupCd > 0 ? Math.max(0, L.plot - PLOT_CALM) : clamp15(L.plot + step.d, 0, PLOT_MAX);
     }
     const stage = stageOf4(L.plot, L.stage);
     const prevStage = L.stage;
     if (!sameDay) L.stage = stage;
-    out.reasons.plot.push(...step.rows.map((r) => ({ ru: r.ru, v: round29(r.v) })));
+    out.reasons.plot.push(...step.rows.map((r) => ({ ru: r.ru, v: round210(r.v) })));
     out.flags.plot = round1(L.plot);
     out.flags.stage = stage;
     out.flags.stageRu = STAGE_RU[stage];
@@ -15928,8 +16662,8 @@
         if (out.flags.dynEvents.length >= DYN_EVENTS_CAP) break;
         L.seen.push({ key, day: st.day });
         const base = KIND[sc.kind] ? KIND[sc.kind].weight : 0.5;
-        const scale = clamp14(sc.w / (base || 1), 0.5, 2);
-        out.flags.dynEvents.push({ kind: SCAR_TO_LEG[sc.kind], scale: round29(scale), key });
+        const scale = clamp15(sc.w / (base || 1), 0.5, 2);
+        out.flags.dynEvents.push({ kind: SCAR_TO_LEG[sc.kind], scale: round210(scale), key });
       }
       if (L.seen.length > 60) L.seen.splice(0, L.seen.length - 60);
     }
@@ -15938,12 +16672,12 @@
       out.mods.stability = STAB_FLOOR4;
     }
     for (const fid of Object.keys(out.mods.estates)) {
-      out.mods.estates[fid] = clamp14(round29(out.mods.estates[fid]), -ESTATE_STEP_CAP2, ESTATE_STEP_CAP2);
+      out.mods.estates[fid] = clamp15(round210(out.mods.estates[fid]), -ESTATE_STEP_CAP2, ESTATE_STEP_CAP2);
     }
-    out.mods.stability = round29(out.mods.stability);
-    out.mods.stabilityShock = round29(out.mods.stabilityShock);
+    out.mods.stability = round210(out.mods.stability);
+    out.mods.stabilityShock = round210(out.mods.stabilityShock);
     for (const fid of Object.keys(out.mods.estatesShock)) {
-      out.mods.estatesShock[fid] = round29(out.mods.estatesShock[fid]);
+      out.mods.estatesShock[fid] = round210(out.mods.estatesShock[fid]);
     }
     out.flags.memory = L;
     return out;
@@ -16000,7 +16734,7 @@
     const st = dynastyLinkState(sim2);
     const L = sim2 && sim2.linkDynasty ? sim2.linkDynasty : createDynastyLink();
     if (!st.hasDyn) return { rows: [], text: "Рода на троне нет.", plot: 0, stage: 0, stageRu: STAGE_RU[0] };
-    const stage = stageOf4(num12(L.plot, 0), num12(L.stage, 0));
+    const stage = stageOf4(num13(L.plot, 0), num13(L.stage, 0));
     const gate = coupGate(sim2, st);
     const step = plotDelta(st);
     const legPart = legitimacyEstates(st);
@@ -16010,19 +16744,19 @@
     for (const fid of Object.keys(SOCIAL_FACTIONS)) {
       const v = legPart.estates[fid] + traitPart.estates[fid] + courtPart.estates[fid];
       if (Math.abs(v) < 5e-3) continue;
-      rows.push({ fid, ru: SOCIAL_FACTIONS[fid].ru, v: round29(clamp14(v, -ESTATE_STEP_CAP2, ESTATE_STEP_CAP2)) });
+      rows.push({ fid, ru: SOCIAL_FACTIONS[fid].ru, v: round210(clamp15(v, -ESTATE_STEP_CAP2, ESTATE_STEP_CAP2)) });
     }
     rows.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
     const parts = [`Законность ${Math.round(st.legitimacy)}`];
-    if (stage > 0) parts.push(`заговор: ${STAGE_RU[stage]} (${Math.round(num12(L.plot, 0))}/100)`);
+    if (stage > 0) parts.push(`заговор: ${STAGE_RU[stage]} (${Math.round(num13(L.plot, 0))}/100)`);
     else parts.push("при дворе тихо");
     if (!gate.ok) parts.push(gate.reason);
     return {
       rows,
-      plot: round1(num12(L.plot, 0)),
+      plot: round1(num13(L.plot, 0)),
       stage,
       stageRu: STAGE_RU[stage],
-      plotRows: step.rows.map((r) => ({ ru: r.ru, v: round29(r.v) })),
+      plotRows: step.rows.map((r) => ({ ru: r.ru, v: round210(r.v) })),
       coupBlocked: gate.ok ? "" : gate.reason,
       wayOut: wayOut(st, gate),
       text: parts.join(". ") + "."
@@ -16041,7 +16775,7 @@
     for (const fid of Object.keys(SOCIAL_FACTIONS)) o[fid] = 0;
     return o;
   }
-  function aliveCount4(sim2) {
+  function aliveCount5(sim2) {
     const list = sim2 && sim2.villagers;
     if (!Array.isArray(list)) return 0;
     let n = 0;
@@ -16055,14 +16789,14 @@
     if (b === 1) return one;
     return many;
   }
-  function clamp14(v, lo, hi) {
+  function clamp15(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
   function clampInt2(v, lo, hi) {
-    const n = Math.round(num12(v, lo));
+    const n = Math.round(num13(v, lo));
     return n < lo ? lo : n > hi ? hi : n;
   }
-  function num12(v, def) {
+  function num13(v, def) {
     return Number.isFinite(v) ? v : def;
   }
   function str(v, def) {
@@ -16071,7 +16805,7 @@
   function round1(v) {
     return Math.round(v * 10) / 10;
   }
-  function round29(v) {
+  function round210(v) {
     return Math.round(v * 100) / 100;
   }
 
@@ -16113,8 +16847,8 @@
   function restoreBuild(data) {
     const s = createBuild();
     if (!data || typeof data !== "object") return s;
-    s.day = num13(data.day, -1);
-    s.nextKey = Math.max(1, num13(data.nextKey, 1));
+    s.day = num14(data.day, -1);
+    s.nextKey = Math.max(1, num14(data.nextKey, 1));
     if (data.reserved && typeof data.reserved === "object") {
       for (const [r, v] of Object.entries(data.reserved)) {
         if (Number.isFinite(v) && v > 0) s.reserved[r] = v;
@@ -16124,13 +16858,13 @@
       for (const q of data.queue) {
         if (!q || !BUILDINGS[q.id]) continue;
         s.queue.push({
-          key: num13(q.key, s.nextKey++),
+          key: num14(q.key, s.nextKey++),
           id: q.id,
-          x: num13(q.x, 0) | 0,
-          y: num13(q.y, 0) | 0,
-          size: Math.max(1, num13(q.size, BUILDINGS[q.id].size || 1)),
-          prio: num13(q.prio, 0),
-          planned: num13(q.planned, 0)
+          x: num14(q.x, 0) | 0,
+          y: num14(q.y, 0) | 0,
+          size: Math.max(1, num14(q.size, BUILDINGS[q.id].size || 1)),
+          prio: num14(q.prio, 0),
+          planned: num14(q.planned, 0)
         });
       }
       if (s.queue.length > QUEUE_MAX) s.queue.length = QUEUE_MAX;
@@ -16385,15 +17119,15 @@
       const def = BUILDINGS[b.id];
       if (!def) continue;
       const max = def.wall || 100;
-      const pct = Math.round((b.hp ?? max) / max * 100);
-      if (pct >= REPAIR_THRESHOLD) continue;
+      const pct2 = Math.round((b.hp ?? max) / max * 100);
+      if (pct2 >= REPAIR_THRESHOLD) continue;
       out.push({
         x: b.x,
         y: b.y,
         id: b.id,
         name: def.name,
-        pct,
-        critical: pct < REPAIR_CRITICAL,
+        pct: pct2,
+        critical: pct2 < REPAIR_CRITICAL,
         cost: repairCost(b)
       });
     }
@@ -16457,10 +17191,10 @@
     const def = BUILDINGS[b.id];
     if (!def) return 1;
     const max = def.wall || 100;
-    const pct = (b.hp ?? max) / max * 100;
-    if (pct >= REPAIR_THRESHOLD) return 1;
-    if (pct <= REPAIR_CRITICAL) return 0.5;
-    const t = (pct - REPAIR_CRITICAL) / (REPAIR_THRESHOLD - REPAIR_CRITICAL);
+    const pct2 = (b.hp ?? max) / max * 100;
+    if (pct2 >= REPAIR_THRESHOLD) return 1;
+    if (pct2 <= REPAIR_CRITICAL) return 0.5;
+    const t = (pct2 - REPAIR_CRITICAL) / (REPAIR_THRESHOLD - REPAIR_CRITICAL);
     return 0.5 + 0.5 * t;
   }
   function buildNewDay(state, sim2) {
@@ -16602,7 +17336,7 @@
     if (b === 1) return one;
     return many;
   }
-  function num13(v, def) {
+  function num14(v, def) {
     return Number.isFinite(v) ? v : def;
   }
   function round12(v) {
@@ -16618,7 +17352,7 @@
     if (clampInt3(seasonIdx, 0, 3) !== WINTER) return base;
     return 1 - (1 - base) * sp.winterBite;
   }
-  var SPECIES = {
+  var SPECIES2 = {
     deer: {
       id: "deer",
       ru: "Олень",
@@ -16710,7 +17444,7 @@
       // кандидат на приручение
     }
   };
-  var KINDS = Object.keys(SPECIES);
+  var KINDS = Object.keys(SPECIES2);
   var DOOM_DECAY = 0.02;
   var STARVE_MAX = 0.012;
   var PLOT_MIN_CAP = 1.8;
@@ -16723,7 +17457,7 @@
   var FLEE_DIST = 22;
   var FEAR_FLEE = 0.2;
   var FAR_WARN = 16;
-  var FEAR_YIELD = 0.45;
+  var FEAR_YIELD2 = 0.45;
   var HUNT_BASE = 0.9;
   var DRIVE_MAX = 0.9;
   var DRIVE_HALF = 8;
@@ -16735,6 +17469,8 @@
   var SPLIT_TAKE = 0.38;
   var SPLIT_MIN_DIST = 2.2;
   var SPLIT_MAX_DIST = 4.5;
+  var TAME_DIST = 14;
+  var TAME_MIN_EXTRA = 2;
   var SPAWN_MIN_R = 9;
   var SPAWN_MAX_R = 34;
   var SPREAD_BASE = 0.55;
@@ -16811,8 +17547,8 @@
   function restoreHerds(data) {
     const s = createHerds();
     if (!data || typeof data !== "object") return s;
-    s.day = num14(data.day, -1);
-    s.nextId = Math.max(1, Math.floor(num14(data.nextId, 1)));
+    s.day = num15(data.day, -1);
+    s.nextId = Math.max(1, Math.floor(num15(data.nextId, 1)));
     if (data.seen && typeof data.seen === "object") {
       for (const k of KINDS) if (data.seen[k]) s.seen[k] = true;
     }
@@ -16824,31 +17560,31 @@
     }
     if (Array.isArray(data.hunts)) {
       for (const r of data.hunts) {
-        if (!r || !SPECIES[r.kind]) continue;
-        s.hunts.push({ day: num14(r.day, 0), kind: r.kind, heads: Math.max(0, num14(r.heads, 0)) });
+        if (!r || !SPECIES2[r.kind]) continue;
+        s.hunts.push({ day: num15(r.day, 0), kind: r.kind, heads: Math.max(0, num15(r.heads, 0)) });
       }
     }
     if (Array.isArray(data.herds)) {
       for (const h of data.herds) {
-        if (!h || !SPECIES[h.kind]) continue;
-        const n = Math.max(0, num14(h.n, 0));
+        if (!h || !SPECIES2[h.kind]) continue;
+        const n = Math.max(0, num15(h.n, 0));
         if (n < EXTINCT_AT) continue;
-        const id = Math.floor(num14(h.id, s.nextId));
+        const id = Math.floor(num15(h.id, s.nextId));
         const g2 = makeHerd(
           id,
           h.kind,
-          num14(h.cx, 0),
-          num14(h.cy, 0),
+          num15(h.cx, 0),
+          num15(h.cy, 0),
           n,
           typeof h.leader === "string" ? h.leader : LEADER_NAMES[0],
-          num14(h.since, 0)
+          num15(h.since, 0)
         );
-        g2.tx = num14(h.tx, g2.cx);
-        g2.ty = num14(h.ty, g2.cy);
-        g2.fear = clamp15(num14(h.fear, 0), 0, FEAR_MAX);
-        g2.lastHunt = num14(h.lastHunt, -9999);
+        g2.tx = num15(h.tx, g2.cx);
+        g2.ty = num15(h.ty, g2.cy);
+        g2.fear = clamp16(num15(h.fear, 0), 0, FEAR_MAX);
+        g2.lastHunt = num15(h.lastHunt, -9999);
         g2.doomed = !!h.doomed;
-        g2.wander = Math.max(0, num14(h.wander, 0));
+        g2.wander = Math.max(0, num15(h.wander, 0));
         s.herds.push(g2);
         s.seen[g2.kind] = true;
         if (id >= s.nextId) s.nextId = id + 1;
@@ -16878,24 +17614,24 @@
   }
   var CLIMATE_FADE = 0.34;
   function climateMult(kind, eraIdx) {
-    const sp = SPECIES[kind];
+    const sp = SPECIES2[kind];
     if (!sp) return 0;
     const over = (Number.isFinite(eraIdx) ? eraIdx : 0) - sp.lastEra;
     if (over <= 0) return 1;
     return Math.max(0, 1 - over * CLIMATE_FADE);
   }
   function capacityAt(ctx, kind, cx, cy) {
-    const sp = SPECIES[kind];
+    const sp = SPECIES2[kind];
     if (!sp) return 0;
     const r = sp.radius, rr = r * r;
-    let sum = 0;
+    let sum2 = 0;
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (dx * dx + dy * dy > rr) continue;
-        sum += sp.feed[ctx.tile(cx + dx, cy + dy)] || 0;
+        sum2 += sp.feed[ctx.tile(cx + dx, cy + dy)] || 0;
       }
     }
-    return sum * sp.density * seasonFeed(sp, ctx.seasonIdx) * climateMult(kind, ctx.eraIdx);
+    return sum2 * sp.density * seasonFeed(sp, ctx.seasonIdx) * climateMult(kind, ctx.eraIdx);
   }
   function feedScore(ctx, sp, x, y) {
     let s = 0;
@@ -16962,7 +17698,7 @@
     const events = [];
     const taken = [];
     for (const kind of KINDS) {
-      const sp = SPECIES[kind];
+      const sp = SPECIES2[kind];
       if (ctx.eraIdx > sp.lastEra) continue;
       if (S.gone[kind] != null) continue;
       let placed = 0;
@@ -17012,11 +17748,11 @@
     }
     return { x: bx, y: by };
   }
-  function stepCenter(h, ctx, dist) {
+  function stepCenter(h, ctx, dist2) {
     const dx = h.tx - h.cx, dy = h.ty - h.cy;
     const len = Math.hypot(dx, dy);
     if (len < 1e-6) return;
-    const step = Math.min(dist, len);
+    const step = Math.min(dist2, len);
     const nx = h.cx + dx / len * step, ny = h.cy + dy / len * step;
     if (walkable(ctx, nx, ny)) {
       h.cx = nx;
@@ -17041,7 +17777,7 @@
     const lost = {};
     const newborns = [];
     for (const h of S.herds) {
-      const sp = SPECIES[h.kind];
+      const sp = SPECIES2[h.kind];
       const K = capacityAt(ctx, h.kind, h.cx, h.cy);
       const before = h.n;
       h.n = Math.max(0, h.n + dailyChange(h.n, K, sp));
@@ -17081,7 +17817,7 @@
       alive2.push(h);
     }
     for (const h of alive2.slice()) {
-      const sp = SPECIES[h.kind];
+      const sp = SPECIES2[h.kind];
       const count2 = alive2.reduce((a, g3) => a + (g3.kind === h.kind ? 1 : 0), 0);
       if (count2 >= sp.maxHerds) continue;
       const K = capacityAt(ctx, h.kind, h.cx, h.cy);
@@ -17119,7 +17855,7 @@
       if (S.herds.some((h) => h.kind === kind)) continue;
       S.gone[kind] = ctx.day;
       extinctNow.push(kind);
-      const sp = SPECIES[kind];
+      const sp = SPECIES2[kind];
       events.push({
         text: `${sp.icon} ${sp.ru} выбит подчистую. Последнее стадо угасло — этого зверя на земле больше нет.`,
         type: "bad",
@@ -17133,7 +17869,7 @@
     for (const kind of KINDS) {
       const list = S.herds.filter((h) => h.kind === kind);
       if (!list.length) continue;
-      const sp = SPECIES[kind];
+      const sp = SPECIES2[kind];
       const near = list.reduce((m, h) => Math.min(m, homeDist(h, ctx)), Infinity);
       const fear = list.reduce((m, h) => Math.max(m, h.fear), 0);
       if (near > FAR_WARN && fear > 0.5 && ctx.day - (S.lastSaid[kind] || -9999) >= SAY_GAP) {
@@ -17153,8 +17889,8 @@
     }
     const flags = summaryFlags2(S, ctx);
     flags.extinctNow = extinctNow;
-    flags.born = round210(Object.values(born).reduce((a, b) => a + b, 0));
-    flags.lost = round210(Object.values(lost).reduce((a, b) => a + b, 0));
+    flags.born = round211(Object.values(born).reduce((a, b) => a + b, 0));
+    flags.lost = round211(Object.values(lost).reduce((a, b) => a + b, 0));
     return { state: S, events, reasons, flags };
   }
   function nearestHerd(state, x, y, opts = {}) {
@@ -17210,10 +17946,10 @@
         flags: {}
       };
     }
-    const sp = SPECIES[h.kind];
-    const hunters = Math.max(1, Math.floor(num14(opts.hunters, 1)));
-    const skill = Math.max(0.1, num14(opts.skill, 1));
-    const wary = 1 - FEAR_YIELD * h.fear;
+    const sp = SPECIES2[h.kind];
+    const hunters = Math.max(1, Math.floor(num15(opts.hunters, 1)));
+    const skill = Math.max(0.1, num15(opts.skill, 1));
+    const wary = 1 - FEAR_YIELD2 * h.fear;
     let want = HUNT_BASE * driveBonus(h.n) * partyBonus(hunters) * skill * wary;
     const cap = Math.min(h.n, Math.max(HUNT_MIN_HEADS, h.n * HUNT_MAX_SHARE));
     want = Math.min(want, cap);
@@ -17282,13 +18018,41 @@
       leaderLost,
       events,
       reasons,
-      flags: { kind: h.kind, left: round210(h.n), fear: round210(h.fear), dist: round210(homeDist(h, ctx)) }
+      flags: { kind: h.kind, left: round211(h.n), fear: round211(h.fear), dist: round211(homeDist(h, ctx)) }
+    };
+  }
+  function tameHerd2(state, id, ctx) {
+    const S = cloneState(state);
+    const h = S.herds.find((g2) => g2.id === id);
+    const no = (ru) => ({ state, ok: false, heads: 0, events: [], reasons: [{ ru, v: 0 }], flags: {} });
+    if (!h) return no("Стадо не найдено");
+    const sp = SPECIES2[h.kind];
+    if (!sp.tameable) return no(`${sp.ru} не приручается: это дичь, а не скот`);
+    if (!ctx.hasTech("animal_husbandry")) return no("Нет скотоводства: приручать некому и негде");
+    if (homeDist(h, ctx) > TAME_DIST) return no(`Стадо слишком далеко (${Math.round(homeDist(h, ctx))} клеток): его не подвести к пастбищу`);
+    if (h.n < sp.minViable + TAME_MIN_EXTRA) return no(`В стаде всего ${Math.floor(h.n)} гол. — приручать нечего, оно само не выживет`);
+    const heads = Math.floor(h.n);
+    S.herds = S.herds.filter((g2) => g2.id !== id);
+    const lastWild = !S.herds.some((g2) => g2.kind === h.kind);
+    return {
+      state: S,
+      ok: true,
+      heads,
+      lastWild,
+      events: [{
+        text: `${sp.icon} ${sp.ru}: стадо ${h.leader} приручено — ${heads} гол. перешли на пастбище.` + (lastWild ? " Диких больше не осталось." : ""),
+        type: "good",
+        kind: h.kind,
+        cause: "tamed"
+      }],
+      reasons: [{ ru: `${sp.ru}: приручено ${heads} гол. — теперь это постоянный корм, а не разовая добыча`, v: heads }],
+      flags: { kind: h.kind, heads, lastWild }
     };
   }
   function summaryFlags2(S, ctx) {
     const heads = {}, count2 = {};
     for (const h of S.herds) {
-      heads[h.kind] = round210((heads[h.kind] || 0) + h.n);
+      heads[h.kind] = round211((heads[h.kind] || 0) + h.n);
       count2[h.kind] = (count2[h.kind] || 0) + 1;
     }
     let nearest = Infinity;
@@ -17296,8 +18060,8 @@
     return {
       heads,
       count: count2,
-      total: round210(Object.values(heads).reduce((a, b) => a + b, 0)),
-      nearest: Number.isFinite(nearest) ? round210(nearest) : null,
+      total: round211(Object.values(heads).reduce((a, b) => a + b, 0)),
+      nearest: Number.isFinite(nearest) ? round211(nearest) : null,
       gone: Object.keys(S.gone),
       extinctNow: []
     };
@@ -17306,7 +18070,7 @@
     const S = state || createHerds();
     const rows = [];
     for (const kind of KINDS) {
-      const sp = SPECIES[kind];
+      const sp = SPECIES2[kind];
       const list = S.herds.filter((h) => h.kind === kind);
       if (!list.length) {
         if (S.gone[kind] != null) {
@@ -17325,12 +18089,12 @@
         }
         continue;
       }
-      let heads = 0, cap = 0, fear = 0, dist = Infinity, doomed = 0;
+      let heads = 0, cap = 0, fear = 0, dist2 = Infinity, doomed = 0;
       for (const h of list) {
         heads += h.n;
         cap += capacityAt(ctx, kind, h.cx, h.cy);
         fear = Math.max(fear, h.fear);
-        dist = Math.min(dist, homeDist(h, ctx));
+        dist2 = Math.min(dist2, homeDist(h, ctx));
         if (h.doomed) doomed++;
       }
       let dn = 0;
@@ -17345,10 +18109,10 @@
         cap: Math.round(cap),
         trend,
         doomed,
-        perYear: round210(dn * YEAR7),
-        fear: round210(fear),
-        dist: round210(dist),
-        text: `${sp.icon} ${sp.ru}: ${Math.round(heads)} гол. в ${list.length} ст., земля прокормит ${Math.round(cap)}` + (trend === "down" ? ", поголовье падает" : trend === "up" ? ", прирастает" : ", держится") + (fear > 0.5 ? `, стада пуганы и держатся в ${Math.round(dist)} клетках` : "")
+        perYear: round211(dn * YEAR7),
+        fear: round211(fear),
+        dist: round211(dist2),
+        text: `${sp.icon} ${sp.ru}: ${Math.round(heads)} гол. в ${list.length} ст., земля прокормит ${Math.round(cap)}` + (trend === "down" ? ", поголовье падает" : trend === "up" ? ", прирастает" : ", держится") + (fear > 0.5 ? `, стада пуганы и держатся в ${Math.round(dist2)} клетках` : "")
       });
     }
     rows.sort((a, b) => b.heads - a.heads);
@@ -17357,18 +18121,18 @@
       rows,
       text: live.length ? live.map((r) => `${r.ru} ${r.heads}`).join(", ") : "Дичи в округе нет: охотиться не на кого",
       total: rows.reduce((a, r) => a + r.heads, 0),
-      gone: Object.keys(S.gone).map((k) => SPECIES[k] ? SPECIES[k].ru : k)
+      gone: Object.keys(S.gone).map((k) => SPECIES2[k] ? SPECIES2[k].ru : k)
     };
   }
   function sustainableFood(state, ctx) {
     const S = state || createHerds();
     let food = 0;
     for (const h of S.herds) {
-      const sp = SPECIES[h.kind];
+      const sp = SPECIES2[h.kind];
       const dn = dailyChange(h.n, capacityAt(ctx, h.kind, h.cx, h.cy), sp);
       if (dn > 0) food += dn * sp.meat;
     }
-    return round210(food * YEAR7);
+    return round211(food * YEAR7);
   }
   function homeDist(h, ctx) {
     return Math.hypot(h.cx - ctx.homeX, h.cy - ctx.homeY);
@@ -17377,8 +18141,8 @@
     const s = state && typeof state === "object" ? state : createHerds();
     return {
       v: 1,
-      day: num14(s.day, -1),
-      nextId: Math.max(1, Math.floor(num14(s.nextId, 1))),
+      day: num15(s.day, -1),
+      nextId: Math.max(1, Math.floor(num15(s.nextId, 1))),
       herds: Array.isArray(s.herds) ? s.herds.map((h) => ({ ...h })) : [],
       seen: { ...s.seen || {} },
       gone: { ...s.gone || {} },
@@ -17386,17 +18150,17 @@
       lastSaid: { ...s.lastSaid || {} }
     };
   }
-  function clamp15(v, lo, hi) {
+  function clamp16(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
   }
   function clampInt3(v, lo, hi) {
     const i = Math.floor(Number.isFinite(v) ? v : lo);
     return i < lo ? lo : i > hi ? hi : i;
   }
-  function num14(v, def) {
+  function num15(v, def) {
     return Number.isFinite(v) ? v : def;
   }
-  function round210(v) {
+  function round211(v) {
     return Math.round(v * 100) / 100;
   }
 
@@ -17430,6 +18194,8 @@
     sim2.linkMasters = createMasters();
     sim2.linkGhost = createGhost();
     sim2.linkGhost.seed = sim2.seed | 0;
+    sim2.linkHunt = createHuntMemory();
+    sim2.sys.huntKills = [];
     sim2.build = createBuild();
     sim2.dynasty = createDynasty(createRng((sim2.seed ^ 1146703360) >>> 0), { day: sim2.day });
     if (sim2.politics && sim2.politics.state) {
@@ -17455,6 +18221,7 @@
     applyDynasty(sim2);
     empireNewDay(sim2);
     applyEconomyLinks(sim2);
+    const huntOut = applyHuntLinks(sim2);
     const survOut = applySurvivalLinks(sim2);
     applyIndustryLinks(sim2);
     applyMasterLinks(sim2);
@@ -17465,7 +18232,7 @@
     applyIntelLinks(sim2);
     const warOut = applyWarLinks(sim2);
     applyHerds(sim2);
-    applyMemoryLinks(sim2, harvestScars(sim2, { war: warOut, surv: survOut }));
+    applyMemoryLinks(sim2, harvestScars(sim2, { war: warOut, surv: survOut }).concat(huntScars(huntOut)));
     applyDynastyLinks(sim2);
   }
   function systemsFactions(sim2) {
@@ -17529,13 +18296,13 @@
     };
   }
   function woodIncome(sim2) {
-    let sum = 0;
+    let sum2 = 0;
     for (const b of sim2.buildings) {
       if (!b.done || b.destroyed) continue;
       const def = BUILDINGS[b.id];
-      if (def && def.out && def.out.wood) sum += def.out.wood * (b.workers ? b.workers.length : 0);
+      if (def && def.out && def.out.wood) sum2 += def.out.wood * (b.workers ? b.workers.length : 0);
     }
-    return sum * sim2.globalMult("wood");
+    return sum2 * sim2.globalMult("wood");
   }
   function tickBordersFor(sim2) {
     const s = sim2.sys;
@@ -17553,7 +18320,7 @@
   }
   function systemsHappyMod(sim2) {
     if (!sim2.sys) return 0;
-    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + industryLinkHappyMod(sim2) + (sim2.sys.nbrLinks ? sim2.sys.nbrLinks.mods.happy : 0) + memoryHappyMod(sim2) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0);
+    return happyMod(sim2.sys.winter) + industryHappyMod(sim2) + politicsHappyMod(sim2) + (sim2.sys.ecoLinks ? sim2.sys.ecoLinks.mods.happy : 0) + survivalHappyMod(sim2) + industryLinkHappyMod(sim2) + (sim2.sys.nbrLinks ? sim2.sys.nbrLinks.mods.happy : 0) + memoryHappyMod(sim2) + territoryHappyMod(sim2) + (sim2.sys.warLinks ? sim2.sys.warLinks.mods.happy : 0) + huntHappyMod(sim2);
   }
   function systemsPopCapMod(sim2) {
     return sim2.linkTerritory ? territoryPopCap(sim2) : 0;
@@ -17585,6 +18352,7 @@
       intel: sim2.linkIntel || null,
       masters: sim2.linkMasters || null,
       ghost: sim2.linkGhost || null,
+      hunt: sim2.linkHunt || null,
       herds: serializeHerds(sim2.herds),
       build: serializeBuild(sim2.build)
     };
@@ -17609,6 +18377,7 @@
     sim2.linkIntel = restoreIntel(data.intel);
     sim2.linkMasters = restoreMasters(data.masters);
     sim2.linkGhost = restoreGhost(data.ghost);
+    sim2.linkHunt = restoreHuntMemory(data.hunt);
     sim2.herds = restoreHerds(data.herds);
     sim2.build = restoreBuild(data.build);
   }
@@ -18178,6 +18947,79 @@
     }
     for (const e of out.events) sim2.addLog(e.text, e.type);
     return out;
+  }
+  function applyHuntLinks(sim2) {
+    if (!sim2.linkHunt) sim2.linkHunt = createHuntMemory();
+    const out = huntLinks(sim2);
+    sim2.linkHunt = out.flags.memory;
+    sim2.sys.huntLinks = out;
+    if (out.mods.food > 0) {
+      sim2.res.food = Math.min(sim2.resCap.food, sim2.res.food + out.mods.food);
+    }
+    const herds = Array.isArray(sim2.herds) ? sim2.herds : sim2.herds && Array.isArray(sim2.herds.herds) ? sim2.herds.herds : sim2.herds && Array.isArray(sim2.herds.list) ? sim2.herds.list : null;
+    if (herds) {
+      for (const [id, d] of Object.entries(out.mods.herds)) {
+        const h = herds.find((x) => x && String(x.id) === id);
+        if (!h) continue;
+        h.fear = Math.max(0, Math.min(1, (h.fear || 0) + d.fear));
+        if (h.cx !== void 0) {
+          h.cx = Math.max(0, Math.min(sim2.world.w - 1, h.cx + d.dx));
+          h.cy = Math.max(0, Math.min(sim2.world.h - 1, h.cy + d.dy));
+        } else {
+          h.x = Math.max(0, Math.min(sim2.world.w - 1, (h.x || 0) + d.dx));
+          h.y = Math.max(0, Math.min(sim2.world.h - 1, (h.y || 0) + d.dy));
+        }
+      }
+    }
+    if (Array.isArray(sim2.sys.huntKills)) {
+      sim2.sys.huntKills = sim2.sys.huntKills.filter((k) => k && k.day >= sim2.day);
+    }
+    for (const e of out.events) sim2.addLog(e.text, e.type);
+    if (out.flags.extinctToday.length) {
+      sim2.sfx?.("alarm");
+      for (const s of out.flags.extinctToday) {
+        const sp = SPECIES[s] || SPECIES.wild;
+        sim2.addChronicle(`${sp.many} извели подчистую (день ${sim2.day}).`);
+      }
+    }
+    return out;
+  }
+  function huntTameList(sim2) {
+    return tameCandidates(sim2);
+  }
+  function huntTame(sim2, herdId) {
+    const check = tameHerd(sim2, herdId);
+    if (!check.ok) {
+      sim2.toast?.(check.reason, "warn");
+      return check;
+    }
+    if (sim2.herds && Array.isArray(sim2.herds.herds)) {
+      const ctx = herdsContext(sim2, (world, x, y) => tileAt(world, x, y));
+      const rep = tameHerd2(sim2.herds, Number(herdId), ctx);
+      if (!rep.ok) {
+        sim2.toast?.(rep.reasons[0]?.ru || "Нельзя", "warn");
+        return rep;
+      }
+      sim2.herds = rep.state;
+      sim2.linkHunt = withStock(sim2.linkHunt, rep.flags.kind, rep.flags.heads);
+      for (const e of rep.events) sim2.addLog(e.text, e.type);
+      return rep;
+    }
+    const list = Array.isArray(sim2.herds) ? sim2.herds : sim2.herds && Array.isArray(sim2.herds.list) ? sim2.herds.list : null;
+    if (list) {
+      for (const id of check.mods.tame) {
+        const h = list.find((x) => x && String(x.id) === id);
+        if (h) {
+          h.tame = true;
+          h.fear = 0;
+        }
+      }
+    }
+    for (const e of check.events) sim2.addLog(e.text, e.type);
+    return check;
+  }
+  function huntPanel(sim2) {
+    return huntBreakdown(sim2);
   }
   var PANELS = {
     people: { render: renderPopulationPanel, bind: bindPopulationPanel },
@@ -18799,6 +19641,7 @@
             }
           }
         } else if (this.seasonIdx === 3 && !def.winter) mult *= 0.6;
+        if (b.id === "hunter_lodge") mult *= huntLodgeMult(this, b);
       }
       if (out.knowledge && b.id === "datacenter" && this.dcPenaltyDays > 0) mult *= 0.5;
       if (def.consume) {
@@ -18908,7 +19751,10 @@
         return;
       }
       if (t.kind === "hunt") {
-        const rep = herdsHunt(this, t.herd, { hunters: 1, skill: 1 });
+        const rep = herdsHunt(this, t.herd, { hunters: huntParty(this, t.x, t.y), skill: 1 });
+        if (rep.heads > 0 && this.sys && Array.isArray(this.sys.huntKills)) {
+          this.sys.huntKills.push({ day: this.day, species: rep.flags.kind, head: rep.heads, food: rep.food, x: t.x, y: t.y, herdId: t.herd });
+        }
         if (rep.food > 0) this.res.food = Math.min(this.resCap.food, this.res.food + rep.food);
         if (rep.injured && v.hp !== void 0) v.hp = Math.max(1, v.hp - 3);
         for (const e of rep.events) this.addLog(e.text, e.type === "bad" ? "bad" : "info");
@@ -19459,8 +20305,8 @@
         }
         if (!actions.length) continue;
         const exps = actions.map((a) => Math.exp(a.U / T2));
-        const sum = exps.reduce((a, b) => a + b, 0);
-        let roll2 = this.rng.next() * sum;
+        const sum2 = exps.reduce((a, b) => a + b, 0);
+        let roll2 = this.rng.next() * sum2;
         let chosen = actions[0];
         for (let i = 0; i < actions.length; i++) {
           roll2 -= exps[i];
@@ -20260,12 +21106,12 @@ ${s}`, "console");
     WETLAND: 9,
     ALPINE: 10
   };
-  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
   function temperature(lat, rel, n) {
-    return clamp16(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
+    return clamp17(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
   }
   function moisture(distSea, n) {
-    return clamp16(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
+    return clamp17(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
   }
 
   // app/src/render/landmarks.js
@@ -20348,7 +21194,7 @@ ${s}`, "console");
     dirt: "#7a6242"
     // вытоптанная земля вокруг
   };
-  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
   var c255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
   function mul(hex, k) {
     const c = hex2rgb(hex);
@@ -20384,25 +21230,25 @@ ${s}`, "console");
   var isWater2 = (t) => t === TILE.WATER || t === TILE.DEEP;
   function seaDistance(tiles, W, H) {
     const N = W * H;
-    const dist = new Uint16Array(N).fill(65535);
+    const dist2 = new Uint16Array(N).fill(65535);
     const q = new Int32Array(N);
     let qh = 0, qt = 0;
     for (let i = 0; i < N; i++) if (isWater2(tiles[i])) {
-      dist[i] = 0;
+      dist2[i] = 0;
       q[qt++] = i;
     }
     while (qh < qt) {
-      const i = q[qh++], x = i % W, y = i / W | 0, d = dist[i] + 1;
+      const i = q[qh++], x = i % W, y = i / W | 0, d = dist2[i] + 1;
       for (let k = 0; k < 4; k++) {
         const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0), ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
         if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
         const ni = ny * W + nx;
-        if (dist[ni] <= d) continue;
-        dist[ni] = d;
+        if (dist2[ni] <= d) continue;
+        dist2[ni] = d;
         q[qt++] = ni;
       }
     }
-    return dist;
+    return dist2;
   }
   function classify(tile, t, m, rel, riv, dsea) {
     if (isWater2(tile)) return BIOME.OCEAN;
@@ -20776,7 +21622,7 @@ ${s}`, "console");
       const sp = Math.max(1e-4, hi - lo);
       for (let i = 0; i < N; i++) hgt[i] = (world.elev[i] - lo) / sp;
     } else if (height && height.length === N) {
-      for (let i = 0; i < N; i++) hgt[i] = clamp17((height[i] + 0.6) / 1.95, 0, 1);
+      for (let i = 0; i < N; i++) hgt[i] = clamp18((height[i] + 0.6) / 1.95, 0, 1);
     } else {
       for (let i = 0; i < N; i++) hgt[i] = H_BY_TILE[tiles[i]] ?? 0.2;
     }
@@ -20803,7 +21649,7 @@ ${s}`, "console");
           const i = y * W + x;
           const n1 = h3(x * 5, y * 5, 401) * 2 - 1;
           const n2 = h3(x * 3, y * 7, 909) * 2 - 1;
-          const rel = clamp17(hgt[i] - 0.2, 0, 1);
+          const rel = clamp18(hgt[i] - 0.2, 0, 1);
           const t = temperature(lat, rel, n1);
           const m = moisture(dsea[i], n2);
           biome[i] = classify(tiles[i], t, m, rel, river ? river[i] : 0, dsea[i]);
@@ -20834,8 +21680,8 @@ ${s}`, "console");
   }
   function count(f, name, x, y, r) {
     const W1 = f.W + 1;
-    const x0 = clamp17(x - r, 0, f.W), x1 = clamp17(x + r + 1, 0, f.W);
-    const y0 = clamp17(y - r, 0, f.H), y1 = clamp17(y + r + 1, 0, f.H);
+    const x0 = clamp18(x - r, 0, f.W), x1 = clamp18(x + r + 1, 0, f.W);
+    const y0 = clamp18(y - r, 0, f.H), y1 = clamp18(y + r + 1, 0, f.H);
     const T2 = f.sums[name];
     return T2[y1 * W1 + x1] - T2[y0 * W1 + x1] - T2[y1 * W1 + x0] + T2[y0 * W1 + x0];
   }
@@ -20915,7 +21761,7 @@ ${s}`, "console");
       if (f.slope[i] > 0.03) return 0;
       let around = 0, n = 0;
       for (let dy = -4; dy <= 4; dy += 2) for (let dx = -4; dx <= 4; dx += 2) {
-        const xx = clamp17(x + dx, 0, f.W - 1), yy = clamp17(y + dy, 0, f.H - 1);
+        const xx = clamp18(x + dx, 0, f.W - 1), yy = clamp18(y + dy, 0, f.H - 1);
         around += f.hgt[yy * f.W + xx];
         n++;
       }
@@ -22668,7 +23514,7 @@ ${s}`, "console");
         }
         return n / 5;
       };
-      const dist = (i, j) => Math.hypot(nx[i] - nx[j], ny[i] - ny[j]);
+      const dist2 = (i, j) => Math.hypot(nx[i] - nx[j], ny[i] - ny[j]);
       const inT = new Uint8Array(N), best = new Float64Array(N), par = new Int32Array(N);
       const order = new Int32Array(N);
       best.fill(Infinity);
@@ -22686,7 +23532,7 @@ ${s}`, "console");
         order[cnt++] = u;
         for (let v = 0; v < N; v++) {
           if (inT[v]) continue;
-          const cst = dist(u, v) * (1 + 7 * wet(u, v));
+          const cst = dist2(u, v) * (1 + 7 * wet(u, v));
           if (cst < best[v]) {
             best[v] = cst;
             par[v] = u;
@@ -22704,14 +23550,14 @@ ${s}`, "console");
         const u = order[k], p = par[u];
         if (p < 0) continue;
         seen.add(pairKey2(u, p));
-        if (dist(u, p) > 30 || wet(u, p) > 0.3) continue;
+        if (dist2(u, p) > 30 || wet(u, p) > 0.3) continue;
         raw.push({ a: p, b: u, traffic: size[u] });
       }
       for (let i = 0; i < N; i++) {
         let bj = -1, bd = Infinity;
         for (let j = 0; j < N; j++) {
           if (i === j || seen.has(pairKey2(i, j))) continue;
-          const d = dist(i, j);
+          const d = dist2(i, j);
           if (d < bd) {
             bd = d;
             bj = j;
@@ -27713,7 +28559,7 @@ ${s}`, "console");
     // испечённых спрайтов
     spriteMB: 8
   };
-  var SPECIES2 = [
+  var SPECIES3 = [
     { id: "spruce", ru: "ель", bark: "#3f3227", acc: ["#2c5a3e", "#24513a", "#25523c", "#2a5240"], sz: [1.5, 2.2], flex: 0.35, bare: false },
     { id: "pine", ru: "сосна", bark: "#7a5230", acc: ["#43703f", "#3a6a3c", "#3d6b3e", "#3c6440"], sz: [1.5, 2.1], flex: 0.55, bare: false },
     { id: "birch", ru: "берёза", bark: "#dfe0d6", acc: ["#9ccc5c", "#7fbb4e", "#e6bb46", "#8fb060"], sz: [1.3, 1.8], flex: 1, bare: true },
@@ -27728,7 +28574,7 @@ ${s}`, "console");
     { id: "dead", ru: "сухостой", bark: "#8a8073", acc: ["#8a8073", "#8a8073", "#8a8073", "#9aa0a4"], sz: [1.2, 1.8], flex: 0.6, bare: true }
   ];
   var SP = {};
-  for (let i = 0; i < SPECIES2.length; i++) SP[SPECIES2[i].id] = i;
+  for (let i = 0; i < SPECIES3.length; i++) SP[SPECIES3[i].id] = i;
   var U = { BUSH: 0, FERN: 1, REED: 2, FLOWER: 3, GRASS: 4, STUMP: 5, LOG: 6, SAPLING: 7, LITTER: 8 };
   var UNDER_SZ = [
     [0.5, 0.8],
@@ -27753,7 +28599,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp19 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -28484,9 +29330,9 @@ ${s}`, "console");
     return noise2(x * 0.07 + 77.3, y * 0.07 + 31.9);
   }
   function pick2(r, weights) {
-    let sum = 0;
-    for (let i = 1; i < weights.length; i += 2) sum += weights[i];
-    let t = r * sum;
+    let sum2 = 0;
+    for (let i = 1; i < weights.length; i += 2) sum2 += weights[i];
+    let t = r * sum2;
     for (let i = 0; i < weights.length; i += 2) {
       t -= weights[i + 1];
       if (t <= 0) return weights[i];
@@ -28590,7 +29436,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp18(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp19(sim2.eraIndex | 0, 0, 9)];
       const weightOf2 = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -28627,7 +29473,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp18(x >> 2, 0, this.pw - 1), gy = clamp18(y >> 2, 0, this.ph - 1);
+      const gx = clamp19(x >> 2, 0, this.pw - 1), gy = clamp19(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -28646,7 +29492,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp18(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp19(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -28764,7 +29610,7 @@ ${s}`, "console");
     }
     // ---- заведение растения ------------------------------------------------
     addTree(out, x, y, sp, season, era, p, ra, rb) {
-      const spec = SPECIES2[sp];
+      const spec = SPECIES3[sp];
       const sz = spec.sz[0] + (spec.sz[1] - spec.sz[0]) * ra;
       let tone = rb < 0.34 ? 0 : rb < 0.74 ? 1 : 2;
       if (era >= 6 && era <= 7 && p > 0.42) tone = 0;
@@ -28816,7 +29662,7 @@ ${s}`, "console");
       cv.width = S;
       cv.height = S;
       const c = cv.getContext("2d");
-      const spec = SPECIES2[sp];
+      const spec = SPECIES3[sp];
       PAINT[sp](c, S, foliage(spec, season, tone), spec, season, form);
       this.sprites.set(key, cv);
       prune(this.sprites, { maxEntries: VEG_LIMITS.sprites, maxBytes: VEG_LIMITS.spriteMB * 1048576, bytesOf: canvasBytes });
@@ -28834,7 +29680,7 @@ ${s}`, "console");
       cv.width = S;
       cv.height = S;
       const c = cv.getContext("2d");
-      const F = foliage(SPECIES2[SP.oak], season, tone);
+      const F = foliage(SPECIES3[SP.oak], season, tone);
       PAINT_U[kind](c, S, F, season, form);
       this.sprites.set(key, cv);
       prune(this.sprites, { maxEntries: VEG_LIMITS.sprites, maxBytes: VEG_LIMITS.spriteMB * 1048576, bytesOf: canvasBytes });
@@ -28877,7 +29723,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp18(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp19(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -29032,7 +29878,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp19 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp20 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -29197,37 +30043,37 @@ ${s}`, "console");
     buildDome(world, weight) {
       const w = world.w, h = world.h, N = w * h;
       const dome = new Float32Array(N);
-      const dist = new Int32Array(N);
+      const dist2 = new Int32Array(N);
       const q = new Int32Array(N);
       const rank = new Uint8Array(N);
       for (let i = 0; i < N; i++) rank[i] = rankOf(world.tiles[i]);
       const AMP = [0, 0.05, 0.05, 0.07, 0.16, 0.3];
       const REACH2 = [1, 3, 3, 5, 5, 7];
       for (let lvl = 1; lvl <= 5; lvl++) {
-        dist.fill(-1);
+        dist2.fill(-1);
         let qh = 0, qt = 0;
         for (let i = 0; i < N; i++) {
           if (rank[i] >= lvl) continue;
-          dist[i] = 0;
+          dist2[i] = 0;
           q[qt++] = i;
         }
         if (!qt) continue;
         while (qh < qt) {
-          const i = q[qh++], x = i % w, y = i / w | 0, d = dist[i] + 1;
+          const i = q[qh++], x = i % w, y = i / w | 0, d = dist2[i] + 1;
           for (let k = 0; k < 4; k++) {
             const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
             const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
             if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
             const ni = ny * w + nx;
-            if (dist[ni] >= 0 || rank[ni] < lvl) continue;
-            dist[ni] = d;
+            if (dist2[ni] >= 0 || rank[ni] < lvl) continue;
+            dist2[ni] = d;
             q[qt++] = ni;
           }
         }
         const amp = AMP[lvl] * weight, reach = REACH2[lvl];
         for (let i = 0; i < N; i++) {
-          if (dist[i] <= 0) continue;
-          dome[i] += amp * Math.sqrt(Math.min(dist[i], reach) / reach);
+          if (dist2[i] <= 0) continue;
+          dome[i] += amp * Math.sqrt(Math.min(dist2[i], reach) / reach);
         }
       }
       return dome;
@@ -29301,21 +30147,21 @@ ${s}`, "console");
       for (let p = 0; p < passes; p++) {
         for (let y = 0; y < h; y++) {
           const row = y * w;
-          let sum = a[row] * (r + 1);
-          for (let x = 1; x <= r; x++) sum += a[row + (x < w ? x : w - 1)];
+          let sum2 = a[row] * (r + 1);
+          for (let x = 1; x <= r; x++) sum2 += a[row + (x < w ? x : w - 1)];
           for (let x = 0; x < w; x++) {
-            tmp[row + x] = sum * inv;
+            tmp[row + x] = sum2 * inv;
             const add = x + r + 1, sub = x - r;
-            sum += a[row + (add < w ? add : w - 1)] - a[row + (sub > 0 ? sub : 0)];
+            sum2 += a[row + (add < w ? add : w - 1)] - a[row + (sub > 0 ? sub : 0)];
           }
         }
         for (let x = 0; x < w; x++) {
-          let sum = tmp[x] * (r + 1);
-          for (let y = 1; y <= r; y++) sum += tmp[(y < h ? y : h - 1) * w + x];
+          let sum2 = tmp[x] * (r + 1);
+          for (let y = 1; y <= r; y++) sum2 += tmp[(y < h ? y : h - 1) * w + x];
           for (let y = 0; y < h; y++) {
-            a[y * w + x] = sum * inv;
+            a[y * w + x] = sum2 * inv;
             const add = y + r + 1, sub = y - r;
-            sum += tmp[(add < h ? add : h - 1) * w + x] - tmp[(sub > 0 ? sub : 0) * w + x];
+            sum2 += tmp[(add < h ? add : h - 1) * w + x] - tmp[(sub > 0 ? sub : 0) * w + x];
           }
         }
       }
@@ -29369,7 +30215,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth4[i] > top) top = smooth4[i];
       for (let i = 0; i < N; i++) smooth4[i] /= top;
-      const R = clamp19(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp20(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth4), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -29386,10 +30232,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp19(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp19(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp20(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp20(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp19(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp20(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -29401,8 +30247,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp19(
-        nLand ? lapsArr[clamp19(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp20(
+        nLand ? lapsArr[clamp20(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -29413,8 +30259,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp19(i0, 0, w - 1);
-        this.txB[sx] = clamp19(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp20(i0, 0, w - 1);
+        this.txB[sx] = clamp20(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -29422,8 +30268,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp19(i0 - 1, 0, w - 1), b = row + clamp19(i0, 0, w - 1);
-          const c = row + clamp19(i0 + 1, 0, w - 1), d = row + clamp19(i0 + 2, 0, w - 1);
+          const a = row + clamp20(i0 - 1, 0, w - 1), b = row + clamp20(i0, 0, w - 1);
+          const c = row + clamp20(i0 + 1, 0, w - 1), d = row + clamp20(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth4[a] * tx.wt[o] + smooth4[b] * tx.wt[o + 1] + smooth4[c] * tx.wt[o + 2] + smooth4[d] * tx.wt[o + 3];
         }
       }
@@ -29464,12 +30310,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp19(j0 - 1, 0, h - 1) * SW, rb = clamp19(j0, 0, h - 1) * SW;
-        const rc = clamp19(j0 + 1, 0, h - 1) * SW, rd = clamp19(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp20(j0 - 1, 0, h - 1) * SW, rb = clamp20(j0, 0, h - 1) * SW;
+        const rc = clamp20(j0 + 1, 0, h - 1) * SW, rd = clamp20(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp19(jy, 0, h - 1) * w, jB = clamp19(jy + 1, 0, h - 1) * w;
+        const jA = clamp20(jy, 0, h - 1) * w, jB = clamp20(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -29519,9 +30365,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp19(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp19(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp20(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp20(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp19(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp20(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -29634,7 +30480,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp19(j0, 0, h - 1) * w, jB = clamp19(j0 + 1, 0, h - 1) * w;
+      const jA = clamp20(j0, 0, h - 1) * w, jB = clamp20(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -29677,7 +30523,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp19(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp20(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -29699,7 +30545,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp19(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp20(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -29775,28 +30621,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp19(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp19(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp19(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp19(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp20(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp20(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp20(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp20(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp19((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp19(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp20((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp20(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp19(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp20(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp19(k, 0, 1);
+        ctx.globalAlpha = clamp20(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -29918,7 +30764,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp20 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp21 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -30094,8 +30940,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp20(L.shadowLen, 0.45, 2.2);
-      const u = clamp20((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp21(L.shadowLen, 0.45, 2.2);
+      const u = clamp21((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -30155,7 +31001,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp20(0.78 / hf, 0.32, 0.6);
+      const band = clamp21(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul2 = this._checkMul(ctx);
@@ -30261,8 +31107,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp20(Math.round(dw), 12, 256);
-      const h = clamp20(Math.round(dh), 12, 384);
+      const w = clamp21(Math.round(dw), 12, 256);
+      const h = clamp21(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -30272,8 +31118,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp20(Math.round(dw), 12, 256);
-      const h = clamp20(Math.round(dh), 12, 384);
+      const w = clamp21(Math.round(dw), 12, 256);
+      const h = clamp21(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -30434,7 +31280,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp21 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp22 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -30713,10 +31559,10 @@ ${s}`, "console");
       const eff = def.effect || {};
       for (const r of RES) {
         if (eff[r.id]) this.resNumber(sim2, r.id, eff[r.id]);
-        const pct = eff[r.id + "Pct"];
-        if (pct) {
+        const pct2 = eff[r.id + "Pct"];
+        if (pct2) {
           const p = this._anchor(sim2, r.id);
-          const s = Math.round(pct * 100);
+          const s = Math.round(pct2 * 100);
           this.number(p.x, p.y, `${s > 0 ? "+" : "−"}${Math.abs(s)}%${r.icon}`, s > 0 ? "good" : "bad");
         }
       }
@@ -30950,7 +31796,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp21(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp22(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -31052,7 +31898,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp21(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp22(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -31425,7 +32271,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp21(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp22(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -31509,7 +32355,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp21(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp22(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -35190,13 +36036,13 @@ ${s}`, "console");
         const ph = chash(b.x + 5, b.y + 9, i + 3);
         const life = (this.time * 0.9 + ph) % 1;
         const dir = ph < 0.5 ? -1 : 1;
-        const dist = size * life * (0.22 + ph * 0.22);
+        const dist2 = size * life * (0.22 + ph * 0.22);
         const up = size * 0.3 * 4 * (life - life * life);
         const s = size * 0.09;
         const chip = this._chip(eraCls);
         if (!chip) break;
         ctx.globalAlpha = Math.min(1, (1 - life) * 2.2);
-        ctx.drawImage(chip, sx + size * 0.5 + dir * dist - s / 2, base - up - s / 2, s, s);
+        ctx.drawImage(chip, sx + size * 0.5 + dir * dist2 - s / 2, base - up - s / 2, s, s);
         ctx.globalAlpha = 1;
         this._stats.particles++;
       }
@@ -35413,15 +36259,15 @@ ${s}`, "console");
   var GRAZE_TILT = 0.17;
   var ALERT_TILT = 0.06;
   var ALERT_LIFT = 0.035;
-  var clamp22 = (v, a, b) => v < a ? a : v > b ? b : v;
-  var num15 = (v, d) => Number.isFinite(v) ? v : d;
+  var clamp23 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var num16 = (v, d) => Number.isFinite(v) ? v : d;
   function hash3(a, b, c) {
     let h = a * 374761393 + b * 668265263 + c * 2246822519 | 0;
     h = (h ^ h >>> 13) * 1274126177 | 0;
     h = (h ^ h >>> 16) >>> 0;
     return h / 4294967296;
   }
-  function readHerds(sim2) {
+  function readHerds2(sim2) {
     const out = [];
     if (!sim2 || typeof sim2 !== "object") return out;
     const viewById = /* @__PURE__ */ new Map();
@@ -35448,9 +36294,9 @@ ${s}`, "console");
   }
   function normalizeState(h, viewById) {
     if (!h || typeof h !== "object") return null;
-    const x = num15(h.cx, NaN), y = num15(h.cy, NaN);
+    const x = num16(h.cx, NaN), y = num16(h.cy, NaN);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const n = num15(h.n, 0);
+    const n = num16(h.n, 0);
     if (!(n > 0)) return null;
     const kind = typeof h.kind === "string" ? h.kind : "deer";
     const f = formOf(kind);
@@ -35461,10 +36307,10 @@ ${s}`, "console");
       form: f,
       x,
       y,
-      tx: num15(h.tx, x),
-      ty: num15(h.ty, y),
+      tx: num16(h.tx, x),
+      ty: num16(h.ty, y),
       n,
-      fear: clamp22(num15(h.fear, 0), 0, 1),
+      fear: clamp23(num16(h.fear, 0), 0, 1),
       r: v && Number.isFinite(v.r) && v.r > 0 ? v.r : f.radius,
       // Обречённость: слово модели весомее нашей таблицы. Флага нет — считаем
       // сами по запасному порогу.
@@ -35472,9 +36318,9 @@ ${s}`, "console");
     };
   }
   function normalizeView(r) {
-    const x = num15(r.x, NaN), y = num15(r.y, NaN);
+    const x = num16(r.x, NaN), y = num16(r.y, NaN);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const n = num15(r.head, 0);
+    const n = num16(r.head, 0);
     if (!(n > 0)) return null;
     const kind = typeof r.species === "string" ? r.species : "deer";
     const f = formOf(kind);
@@ -35487,7 +36333,7 @@ ${s}`, "console");
       tx: x,
       ty: y,
       n,
-      fear: clamp22(num15(r.fear, 0), 0, 1),
+      fear: clamp23(num16(r.fear, 0), 0, 1),
       r: Number.isFinite(r.r) && r.r > 0 ? r.r : f.radius,
       doomed: n < f.viable
     };
@@ -35557,11 +36403,11 @@ ${s}`, "console");
         this.clear();
         this.seed = seed;
       }
-      const day = Math.floor(num15(sim2.day, 0));
+      const day = Math.floor(num16(sim2.day, 0));
       if (day === this.day) return;
       if (day < this.day) this.trails.clear();
       this.day = day;
-      const list = readHerds(sim2);
+      const list = readHerds2(sim2);
       const alive2 = /* @__PURE__ */ new Set();
       for (const h of list) {
         alive2.add(h.id);
@@ -35592,12 +36438,12 @@ ${s}`, "console");
       if (!sim2 || !sim2.world) return;
       const zoom = z / TILE_PX7;
       if (zoom < ZONE_MIN_ZOOM) return;
-      const season = clamp22(Math.floor(num15(sim2.seasonIdx, 0)), 0, 3);
-      const herds = readHerds(sim2);
+      const season = clamp23(Math.floor(num16(sim2.seasonIdx, 0)), 0, 3);
+      const herds = readHerds2(sim2);
       this._drawZones(sim2, ctx, ox, oy, z, cw, ch, season, herds);
       const cap = HERD_LIMITS.trails[this.q.id] != null ? HERD_LIMITS.trails[this.q.id] : HERD_LIMITS.trails.high;
       if (!cap || zoom < TRAIL_MIN_ZOOM) return;
-      const now2 = this.day + clamp22(num15(sim2.dayTime, 0), 0, 1);
+      const now2 = this.day + clamp23(num16(sim2.dayTime, 0), 0, 1);
       const size = Math.max(2, z * 0.16);
       let drawn = 0;
       for (const t of this.trails.values()) {
@@ -35643,7 +36489,7 @@ ${s}`, "console");
       this.drawn = 0;
       this.blobs = 0;
       if (!sim2 || !sim2.world) return;
-      const herds = readHerds(sim2);
+      const herds = readHerds2(sim2);
       if (!herds.length) return;
       const zoom = z / TILE_PX7;
       const near = zoom >= (this.q.lod ? this.q.lod.beastMinZoom : 0.75);
@@ -35748,7 +36594,7 @@ ${s}`, "console");
       let rw = SPREAD_BASE2 * Math.sqrt(Math.max(1, h.n)) * 1.5 * z;
       if (alert) rw *= 1 - 0.3 * h.fear;
       if (h.doomed) rw *= DOOM_SPREAD;
-      rw = clamp22(rw, 5, 90);
+      rw = clamp23(rw, 5, 90);
       if (sx + rw < 0 || sy + rw < 0 || sx - rw > cw || sy - rw > ch) return;
       const cv = this.blobSprite(h.kind, alert);
       ctx.globalAlpha = h.doomed ? 0.34 : 0.72;
@@ -35760,7 +36606,7 @@ ${s}`, "console");
     flushLabels(ctx, z) {
       const list = this._labels;
       if (!list || !list.length) return;
-      const px = clamp22(Math.round(z * 0.42), 9, 17);
+      const px = clamp23(Math.round(z * 0.42), 9, 17);
       ctx.save();
       ctx.font = `600 ${px}px system-ui, sans-serif`;
       ctx.textAlign = "center";
@@ -38210,8 +39056,8 @@ ${s}`, "console");
     }
     const site = sim2.buildings.find((b) => b.id === "market" && !b.destroyed && !b.done);
     if (site) {
-      const pct = Math.round(site.progress / site.buildDays * 100);
-      return { kind: "building", progress: Math.max(0, Math.min(99, pct)), buildCost: def.cost };
+      const pct2 = Math.round(site.progress / site.buildDays * 100);
+      return { kind: "building", progress: Math.max(0, Math.min(99, pct2)), buildCost: def.cost };
     }
     return { kind: "place", lack: sim2.lackCost(def.cost), buildCost: def.cost };
   }
@@ -38707,8 +39553,8 @@ ${s}`, "console");
       if (!def) continue;
       const eff = [];
       for (const [kind, v] of Object.entries(def.mult || {})) {
-        const pct = Math.round((v - 1) * 100);
-        if (pct) eff.push(`${_kindRu(kind)} ${_sign4(pct)}%`);
+        const pct2 = Math.round((v - 1) * 100);
+        if (pct2) eff.push(`${_kindRu(kind)} ${_sign4(pct2)}%`);
       }
       if (def.happy) eff.push(`счастье ${_sign4(def.happy)}`);
       if (def.stabPerDay) eff.push(`стабильность ${_sign4(def.stabPerDay, 1)} в сутки`);
@@ -39992,11 +40838,11 @@ ${out}`;
       const rows = mastersPanel(this.sim);
       if (!rows.length) return PANELS.people.render(this.sim);
       const list = rows.map((r) => {
-        const pct = Math.round(r.level * 100);
+        const pct2 = Math.round(r.level * 100);
         const risk = Math.round(r.atRisk * 100);
         return `<div class="mem-row">
-        <div class="mem-head"><b>${r.ru}</b><span style="color:var(--dim)">умение ${pct}%</span></div>
-        <div class="mem-bar"><i style="width:${pct}%;background:${r.safe ? "var(--good)" : "var(--warn, #d9a06a)"}"></i></div>
+        <div class="mem-head"><b>${r.ru}</b><span style="color:var(--dim)">умение ${pct2}%</span></div>
+        <div class="mem-bar"><i style="width:${pct2}%;background:${r.safe ? "var(--good)" : "var(--warn, #d9a06a)"}"></i></div>
         <div class="mem-txt">Мастер: ${r.master || "—"}${r.years >= 1 ? ` · у дела ${Math.floor(r.years)} г.` : ""}<br>
           ${r.apprentice ? `Ученик: ${r.apprentice} — ремесло переживёт мастера (потеря ${risk}%).` : `<b style="color:var(--bad)">Ученика нет.</b> Если мастер погибнет, умение упадёт на ${risk}%.`}</div>
       </div>`;
@@ -41738,15 +42584,15 @@ ${out}`;
       flp.frequency.value = 260;
       const ftrim = c.createGain();
       ftrim.gain.value = 0.33;
-      const f13 = mk(47, "sawtooth"), f2 = mk(70.5, "sawtooth"), f3 = mk(23.5, "square");
-      f13.connect(flp);
-      f2.connect(flp);
+      const f14 = mk(47, "sawtooth"), f22 = mk(70.5, "sawtooth"), f3 = mk(23.5, "square");
+      f14.connect(flp);
+      f22.connect(flp);
       f3.connect(flp);
       flp.connect(ftrim);
       ftrim.connect(fg);
       fg.connect(this.ambBus);
-      f13.start(0);
-      f2.start(0);
+      f14.start(0);
+      f22.start(0);
       f3.start(0);
       A.factory = { g: fg };
       A.steam = this._loop("bandpass", 900, 0.8, 0);
