@@ -28,6 +28,7 @@ import * as MEM from './link_memory.js';
 import * as INT from './link_intel.js';
 import * as MAS from './link_masters.js';
 import * as GH from './link_ghost.js';
+import * as B2 from './build2.js';
 
 // С какого уровня отношений война считается ударом в спину. 20 — это уже не
 // «терпим друг друга», а сложившийся лад: договоры, караваны, общие войны.
@@ -76,6 +77,8 @@ export function installSystems(sim) {
   // Тень прошлой партии: слепки состояния через равные промежутки.
   sim.linkGhost = GH.createGhost();
   sim.linkGhost.seed = sim.seed | 0;
+  // Строительство: очередь чертежей, износ, ремонт, улучшение на месте.
+  sim.build = B2.createBuild();
 }
 
 // ---------- Раз в сутки ----------
@@ -103,6 +106,7 @@ export function systemsNewDay(sim) {
   // Мастера идут ПОСЛЕ хозяйства: они поднимают тот выпуск, который оно
   // уже посчитало, а не считают его заново.
   applyMasterLinks(sim);
+  applyBuild(sim);
   applyGhost(sim);
   // Соседи читают уже сложившийся день: казну после налогов и стабильность
   // после голода. Иначе охрана границ оплачивалась бы из вчерашних денег.
@@ -286,6 +290,7 @@ export function systemsSerialize(sim) {
     intel: sim.linkIntel || null,
     masters: sim.linkMasters || null,
     ghost: sim.linkGhost || null,
+    build: B2.serializeBuild(sim.build),
   };
 }
 
@@ -307,6 +312,7 @@ export function systemsRestore(sim, data) {
   sim.linkIntel = INT.restoreIntel(data.intel);
   sim.linkMasters = MAS.restoreMasters(data.masters);
   sim.linkGhost = GH.restoreGhost(data.ghost);
+  sim.build = B2.restoreBuild(data.build);
 }
 
 // ---------- Для HUD ----------
@@ -442,6 +448,36 @@ function applyMemoryLinks(sim, incoming) {
   for (const e of L.events) sim.addLog(e.text, e.type);
   return L;
 }
+
+// Строительство: чертежи превращаются в стройку, здания ветшают.
+function applyBuild(sim) {
+  if (!sim.build) sim.build = B2.createBuild();
+  const L = B2.buildNewDay(sim.build, sim);
+  sim.sys.buildLinks = L;
+
+  // Износ. Начисляем здесь, а не в модуле: модуль считает, мир меняет этот файл.
+  for (const { b, w } of L.mods.wear) {
+    const def = BUILDINGS[b.id];
+    const max = def ? (def.wall || 100) : 100;
+    b.hp = Math.max(1, Math.min(max, (b.hp ?? max) - w));
+  }
+  for (const e of L.events) sim.addLog(e.text, e.type);
+  return L;
+}
+
+// Для панели «Стройка»: очередь, подсказки, ремонт.
+export function buildQueue(sim) { return B2.queueReport(sim.build, sim); }
+export function buildPlan(sim, id, x, y) { return B2.plan(sim.build, sim, id, x, y); }
+export function buildPlanArea(sim, id, x0, y0, x1, y1) { return B2.planArea(sim.build, sim, id, x0, y0, x1, y1); }
+export function buildCancel(sim, key) { return B2.cancelPlan(sim.build, key); }
+export function buildMove(sim, key, dir) { return B2.movePlan(sim.build, key, dir); }
+export function buildScore(sim, id, x, y) { return B2.scoreSpot(sim, id, x, y); }
+export function buildBest(sim, id, n) { return B2.bestSpots(sim, id, n); }
+export function buildUpgrade(sim, b) { return B2.upgrade(sim, b); }
+export function buildCanUpgrade(sim, b) { return B2.canUpgrade(sim, b); }
+export function buildRepairList(sim) { return B2.repairList(sim); }
+export function buildRepair(sim, b) { return B2.repair(sim, b); }
+export function buildRepairAll(sim) { return B2.repairAll(sim); }
 
 // Тень прошлой партии: слепок раз в сезон и рассказ о расхождении.
 function applyGhost(sim) {

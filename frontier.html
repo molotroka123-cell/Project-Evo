@@ -1041,11 +1041,11 @@
     }
     return null;
   }
-  function findFactionSpawns(world, rng, count, playerX, playerY) {
+  function findFactionSpawns(world, rng, count2, playerX, playerY) {
     const spawns = [];
     const biomePref = { tide: TILE.WATER, grove: TILE.FOREST, horde: TILE.GRASS };
     let guard = 0;
-    while (spawns.length < count && guard++ < 4e3) {
+    while (spawns.length < count2 && guard++ < 4e3) {
       const x = rng.int(6, world.w - 7), y = rng.int(6, world.h - 7);
       if (Math.hypot(x - playerX, y - playerY) < 22) continue;
       if (spawns.some((s) => Math.hypot(s.x - x, s.y - y) < 22)) continue;
@@ -2259,12 +2259,12 @@
     }
     const day = ctx.day || 0;
     if (day % BUILD_CHECK !== 0) return;
-    const pick2 = chooseBuilding(c, f, ctx, rng);
-    if (!pick2) return;
-    const def = BUILDINGS[pick2];
+    const pick3 = chooseBuilding(c, f, ctx, rng);
+    if (!pick3) return;
+    const def = BUILDINGS[pick3];
     for (const k of Object.keys(def.cost || {})) c.res[k] -= def.cost[k];
     const days = Math.round(costWeight(def.cost || {}) / BUILD_RATE / (bonus(f).build || 1));
-    c.site = { id: pick2, daysLeft: Math.max(BUILD_MIN_DAYS, Math.min(BUILD_MAX_DAYS, days)) };
+    c.site = { id: pick3, daysLeft: Math.max(BUILD_MIN_DAYS, Math.min(BUILD_MAX_DAYS, days)) };
   }
   function chooseBuilding(c, f, ctx, rng) {
     const tr = c.tr, known = new Set(c.techs);
@@ -3862,9 +3862,9 @@
     const limit = maxRoutes(ctx);
     if (!limit) return { ok: false, reason: "Нужен Рынок: караванам нужна точка отправления" };
     if (state.routes.length >= limit) return { ok: false, reason: `Больше ${limit} маршрутов не потянуть — нужен рынок, верфь или вокзал` };
-    const plan = planRoute(state, ctx, opts);
-    if (!plan.ok) return plan;
-    const route = plan.route;
+    const plan2 = planRoute(state, ctx, opts);
+    if (!plan2.ok) return plan2;
+    const route = plan2.route;
     route.id = state.nextRouteId++;
     loadCargo(state, route);
     state.routes.push(route);
@@ -4609,13 +4609,13 @@
       if (S.prod.routes.some((r) => r.faction === f.id)) continue;
       const to = f.settlements && f.settlements[0];
       if (!to) continue;
-      let plan = S.planCache.map[f.id];
-      if (!plan) {
-        plan = planRoute(S.prod, ctx, { faction: f.id, from, to });
-        if (plan.ok) plan.info = routeInfo(plan.route, ctx);
-        S.planCache.map[f.id] = plan;
+      let plan2 = S.planCache.map[f.id];
+      if (!plan2) {
+        plan2 = planRoute(S.prod, ctx, { faction: f.id, from, to });
+        if (plan2.ok) plan2.info = routeInfo(plan2.route, ctx);
+        S.planCache.map[f.id] = plan2;
       }
-      out.push({ fid: f.id, name: f.def ? f.def.name : f.id, color: f.def ? f.def.color : "#c9a227", plan });
+      out.push({ fid: f.id, name: f.def ? f.def.name : f.id, color: f.def ? f.def.color : "#c9a227", plan: plan2 });
     }
     return out;
   }
@@ -5087,10 +5087,10 @@
     if (i < 0) return null;
     return state.squads.splice(i, 1)[0];
   }
-  function addEngine(state, squadId, engineId, count = 1) {
+  function addEngine(state, squadId, engineId, count2 = 1) {
     const sq = findSquad(state, squadId);
-    if (!sq || !SIEGE_ENGINES[engineId] || count <= 0) return false;
-    sq.engines[engineId] = (sq.engines[engineId] || 0) + Math.floor(count);
+    if (!sq || !SIEGE_ENGINES[engineId] || count2 <= 0) return false;
+    sq.engines[engineId] = (sq.engines[engineId] || 0) + Math.floor(count2);
     return true;
   }
   function squadSize(sq) {
@@ -5161,22 +5161,22 @@
     return UNIT_BY_ID[uid].power + bonus2;
   }
   function roleMix(force) {
-    const mix2 = { inf: 0, cav: 0, range: 0, siege: 0 };
+    const mix3 = { inf: 0, cav: 0, range: 0, siege: 0 };
     let total = 0;
     for (const [uid, n] of Object.entries(force.units || {})) {
       if (n <= 0) continue;
       const p = n * powerOf(uid, force.powerBonus || 0);
-      mix2[UNIT_BY_ID[uid].role] += p;
+      mix3[UNIT_BY_ID[uid].role] += p;
       total += p;
     }
     for (const [eid, n] of Object.entries(force.engines || {})) {
       if (n <= 0) continue;
       const p = n * SIEGE_ENGINES[eid].fieldPower;
-      mix2.siege += p;
+      mix3.siege += p;
       total += p;
     }
-    if (total > 0) for (const k of Object.keys(mix2)) mix2[k] /= total;
-    return mix2;
+    if (total > 0) for (const k of Object.keys(mix3)) mix3[k] /= total;
+    return mix3;
   }
   function counterMult(role, enemyMix) {
     const row = COUNTERS[role];
@@ -5265,26 +5265,26 @@
   }
   function resolveBattle(a, b, ctx = {}, rng) {
     if (!rng) throw new Error("resolveBattle: нужен rng");
-    const A = workForce(a, ctx.multA), B = workForce(b, ctx.multB);
+    const A = workForce(a, ctx.multA), B2 = workForce(b, ctx.multB);
     const tileA = ctx.tileA ?? TILE.GRASS, tileB = ctx.tileB ?? TILE.GRASS;
-    const startA = rawPower(A), startB = rawPower(B);
+    const startA = rawPower(A), startB = rawPower(B2);
     const beforeA = { units: intCounts(A.units), engines: intCounts(A.engines) };
-    const beforeB = { units: intCounts(B.units), engines: intCounts(B.engines) };
+    const beforeB = { units: intCounts(B2.units), engines: intCounts(B2.engines) };
     const routA = routThreshold(a, rng), routB = routThreshold(b, rng);
     let rounds = 0, routed = null, winner = null;
     while (rounds < MAX_ROUNDS) {
       rounds++;
-      const mixA = roleMix(A), mixB = roleMix(B);
+      const mixA = roleMix(A), mixB = roleMix(B2);
       const atkA = forcePower(A, mixB, tileA);
-      const atkB = forcePower(B, mixA, tileB);
+      const atkB = forcePower(B2, mixA, tileB);
       const dmgA = atkA * ROUND_RATE * rng.range(1 - ROUND_VAR, 1 + ROUND_VAR);
       const dmgB = atkB * ROUND_RATE * rng.range(1 - ROUND_VAR, 1 + ROUND_VAR);
-      applyDamage(B, dmgA);
+      applyDamage(B2, dmgA);
       applyDamage(A, dmgB);
       const lossA = startA > 0 ? 1 - rawPower(A) / startA : 1;
-      const lossB = startB > 0 ? 1 - rawPower(B) / startB : 1;
+      const lossB = startB > 0 ? 1 - rawPower(B2) / startB : 1;
       const brokeA = headcount(A) <= 1e-6 || lossA >= routA;
-      const brokeB = headcount(B) <= 1e-6 || lossB >= routB;
+      const brokeB = headcount(B2) <= 1e-6 || lossB >= routB;
       if (brokeA || brokeB) {
         if (brokeA && brokeB) {
           routed = lossA >= lossB ? "a" : "b";
@@ -5294,11 +5294,11 @@
       }
     }
     if (!winner) {
-      const pa = forcePower(A, roleMix(B), tileA), pb = forcePower(B, roleMix(A), tileB);
+      const pa = forcePower(A, roleMix(B2), tileA), pb = forcePower(B2, roleMix(A), tileB);
       winner = pa > pb ? "a" : "b";
     }
     const afterA = { units: intCounts(A.units), engines: { ...beforeA.engines } };
-    const afterB = { units: intCounts(B.units), engines: { ...beforeB.engines } };
+    const afterB = { units: intCounts(B2.units), engines: { ...beforeB.engines } };
     const loserAfter = winner === "a" ? afterB : afterA;
     const winnerAfter = winner === "a" ? afterA : afterB;
     const captured = {}, destroyed = {};
@@ -5309,7 +5309,7 @@
       }
     }
     loserAfter.engines = {};
-    const winnerLoss = winner === "a" ? startA > 0 ? 1 - rawPower(A) / startA : 0 : startB > 0 ? 1 - rawPower(B) / startB : 0;
+    const winnerLoss = winner === "a" ? startA > 0 ? 1 - rawPower(A) / startA : 0 : startB > 0 ? 1 - rawPower(B2) / startB : 0;
     for (const [eid, n] of Object.entries({ ...winnerAfter.engines })) {
       let left = n;
       for (let i = 0; i < n; i++) if (rng.chance(winnerLoss * 0.5)) left--;
@@ -5334,7 +5334,7 @@
         before: beforeB,
         after: afterB,
         losses: diffCounts(beforeB.units, afterB.units),
-        lossFrac: startB > 0 ? 1 - rawPower(B) / startB : 0
+        lossFrac: startB > 0 ? 1 - rawPower(B2) / startB : 0
       },
       captured,
       destroyedEngines: destroyed
@@ -5380,14 +5380,14 @@
       if (era <= (f.era || 0)) best = u;
     }
     const pts = (f.armyPts || 0) / n * cap;
-    const count = Math.max(2, Math.round(pts / best.power));
+    const count2 = Math.max(2, Math.round(pts / best.power));
     return {
       id: -1,
       side: f.id,
       name: `Гарнизон ${f.def ? f.def.name : f.id}`,
       x: settlement ? settlement.x : 0,
       y: settlement ? settlement.y : 0,
-      units: { [best.id]: count },
+      units: { [best.id]: count2 },
       engines: {},
       powerBonus: 0,
       mult: f.def && f.def.bonus && f.def.bonus.army || 1,
@@ -5799,12 +5799,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num12 = 1;
+    let num13 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num12++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num13++}`));
     }
     return out;
   }
@@ -6283,20 +6283,20 @@
     if (!spot) return null;
     const u = raidUnit(sim2);
     const power = Math.max(1, Math.round(sim2.threatPoints() / 10) + sim2.eraIndex * 2);
-    const count = Math.max(3, Math.round(power / u.power));
+    const count2 = Math.max(3, Math.round(power / u.power));
     const sq = formSquad(sim2.armyState, {
       side: f ? f.id : "raiders",
       name: `Набег: ${f ? f.def.name : "кочевники"}`,
       x: spot.x,
       y: spot.y,
-      units: { [u.id]: count },
+      units: { [u.id]: count2 },
       mult: f && f.def.bonus && f.def.bonus.army || 1
     });
     orderMove(sim2.armyState, sq.id, sim2.world.startX, sim2.world.startY, sim2.world);
     R.squadId = sq.id;
     R.from = sq.side;
     R.day = sim2.day;
-    sim2.addLog(`⚔ ${sq.name} вышел в поле (${spot.x},${spot.y}): ${u.name} ×${count}. Перехватите его — иначе он дойдёт до поселения.`, "warn");
+    sim2.addLog(`⚔ ${sq.name} вышел в поле (${spot.x},${spot.y}): ${u.name} ×${count2}. Перехватите его — иначе он дойдёт до поселения.`, "warn");
     return sq;
   }
   function mostAggressive(sim2) {
@@ -7803,10 +7803,10 @@
       finishChain(state, chainId);
       return null;
     }
-    const pick2 = weightedPick(next, rng);
-    const span = pick2.inDays || [30, 60];
+    const pick3 = weightedPick(next, rng);
+    const span = pick3.inDays || [30, 60];
     const delay = rng ? rng.int(span[0], span[1]) : Math.round((span[0] + span[1]) / 2);
-    const item = { chain: chainId, link: pick2.link, day: day + delay };
+    const item = { chain: chainId, link: pick3.link, day: day + delay };
     state.chains.pending.push(item);
     return item;
   }
@@ -8247,10 +8247,10 @@
     return Object.keys(state.factions).filter((id) => state.factions[id] < FACTION_ANGRY);
   }
   function createRuler(rng, day) {
-    const count = rng.chance(0.4) ? 3 : 2;
+    const count2 = rng.chance(0.4) ? 3 : 2;
     const traits2 = [];
     let guard = 0;
-    while (traits2.length < count && guard++ < 50) {
+    while (traits2.length < count2 && guard++ < 50) {
       const t = rng.pick(RULER_TRAITS).id;
       if (traits2.includes(t)) continue;
       if (TRAIT_CONFLICTS.some(([a, b]) => t === a && traits2.includes(b) || t === b && traits2.includes(a))) continue;
@@ -9781,9 +9781,9 @@
       const campCount = Math.max(2, Math.min(6, Math.round(land / 700)));
       const ruinDefs = Object.entries(SITE_DEFS).filter(([, d]) => d.kind === "ruin");
       const campDefs = Object.entries(SITE_DEFS).filter(([, d]) => d.kind === "camp");
-      const place = (defs, count, minFromStart) => {
+      const place = (defs, count2, minFromStart) => {
         let placed = 0, guard = 0;
-        while (placed < count && guard++ < 2e4) {
+        while (placed < count2 && guard++ < 2e4) {
           const x = rng.int(2, W - 3), y = rng.int(2, H - 3);
           if (Math.hypot(x - sx, y - sy) < minFromStart) continue;
           const t = this.world.tiles[y * W + x];
@@ -12073,20 +12073,20 @@
     const men = alive.reduce((n, s) => n + squadSize(s), 0);
     if (!men || total <= 0) return [];
     let left = Math.min(Math.floor(total), men);
-    const plan = alive.map((s) => ({ id: s.id, name: s.name, size: squadSize(s), take: 0 }));
-    for (const p of plan) {
+    const plan2 = alive.map((s) => ({ id: s.id, name: s.name, size: squadSize(s), take: 0 }));
+    for (const p of plan2) {
       if (left <= 0) break;
       const take2 = Math.min(p.size, Math.floor(Math.min(total, men) * p.size / men));
       p.take = take2;
       left -= take2;
     }
-    for (const p of plan) {
+    for (const p of plan2) {
       if (left <= 0) break;
       const add = Math.min(p.size - p.take, left);
       p.take += add;
       left -= add;
     }
-    return plan.filter((p) => p.take > 0);
+    return plan2.filter((p) => p.take > 0);
   }
   function warLinks(sim2, memo) {
     const M = restoreWarMemory(memo);
@@ -13191,20 +13191,20 @@
       const food = sim2.res && sim2.res.food || 0;
       const fed = food >= (pop + 1) * EAT3 * REFUGEE_FOOD_DAYS;
       const want = Math.min(REFUGEE_MAX, Math.floor(flow * REFUGEE_MAX));
-      let count = Math.min(want, room);
+      let count2 = Math.min(want, room);
       if (!fed) {
         if (want > 0) out.flags.refugeeBlocked = "нечем кормить";
-        count = 0;
+        count2 = 0;
       } else if (want > 0 && room <= 0) {
         out.flags.refugeeBlocked = "негде селить";
       }
-      if (count > 0) {
-        out.flags.refugees = count;
+      if (count2 > 0) {
+        out.flags.refugees = count2;
         out.flags.refugeeFrom = { fid: source.fid, name: source.name };
         const ourEra = sim2.eraIndex || 0;
-        if (source.era > ourEra) out.mods.knowledge += REFUGEE_KNOW * count;
+        if (source.era > ourEra) out.mods.knowledge += REFUGEE_KNOW * count2;
         out.events.push({
-          text: `Беженцы из земель ${source.name}: ${count} ${plural5(count, "человек", "человека", "человек")} просятся за наши стены — там война.` + (source.era > ourEra ? " Среди них мастера: они принесли чужие ремёсла." : ""),
+          text: `Беженцы из земель ${source.name}: ${count2} ${plural5(count2, "человек", "человека", "человек")} просятся за наши стены — там война.` + (source.era > ourEra ? " Среди них мастера: они принесли чужие ремёсла." : ""),
           type: "info"
         });
       } else if (out.flags.refugeeBlocked) {
@@ -13218,8 +13218,8 @@
     let knowFlow = 0;
     for (const n of nb) {
       const gap = ourTechs - n.techs;
-      const contact = n.treaty || n.rel >= COPY_REL || n.dist <= COPY_DIST;
-      if (gap >= COPY_GAP && contact && !n.atWarWithUs) {
+      const contact2 = n.treaty || n.rel >= COPY_REL || n.dist <= COPY_DIST;
+      if (gap >= COPY_GAP && contact2 && !n.atWarWithUs) {
         if (day > 0 && day % COPY_PERIOD === n.fid.length * 3 % COPY_PERIOD) {
           const why = n.treaty ? "договор открыл им наши мастерские" : n.rel >= COPY_REL ? "добрые отношения развязали языки" : "наша межа рядом, и всё видно";
           out.flags.copycats.push({ fid: n.fid, name: n.name, gap, why });
@@ -13228,7 +13228,7 @@
             type: "warn"
           });
         }
-      } else if (gap >= LAG_GAP && !contact) {
+      } else if (gap >= LAG_GAP && !contact2) {
         pushRel(out, n, LAG_REL, `отстали на ${gap} технологий и завидуют`);
       }
       if (gap <= -3 && n.treaty && !n.atWarWithUs) {
@@ -14230,6 +14230,153 @@
     return Number.isFinite(v) ? v : def;
   }
 
+  // app/src/core/systems/build2.js
+  var TECH_BY_ID4 = Object.fromEntries(TECHS.map((t) => [t.id, t]));
+  var QUEUE_MAX = 20;
+  var WEAR_DAYS_TO_HALF = 300;
+  var WEAR_WINTER = 1.6;
+  var WEAR_IDLE = 0.4;
+  var REPAIR_THRESHOLD = 70;
+  var REPAIR_CRITICAL = 30;
+  function createBuild() {
+    return {
+      v: 1,
+      day: -1,
+      queue: [],
+      // [{ id, x, y, size, prio, planned }] — чертежи
+      reserved: {},
+      // ресурс → сколько зарезервировано под начатые площадки
+      nextKey: 1
+    };
+  }
+  function restoreBuild(data) {
+    const s = createBuild();
+    if (!data || typeof data !== "object") return s;
+    s.day = num12(data.day, -1);
+    s.nextKey = Math.max(1, num12(data.nextKey, 1));
+    if (data.reserved && typeof data.reserved === "object") {
+      for (const [r, v] of Object.entries(data.reserved)) {
+        if (Number.isFinite(v) && v > 0) s.reserved[r] = v;
+      }
+    }
+    if (Array.isArray(data.queue)) {
+      for (const q of data.queue) {
+        if (!q || !BUILDINGS[q.id]) continue;
+        s.queue.push({
+          key: num12(q.key, s.nextKey++),
+          id: q.id,
+          x: num12(q.x, 0) | 0,
+          y: num12(q.y, 0) | 0,
+          size: Math.max(1, num12(q.size, BUILDINGS[q.id].size || 1)),
+          prio: num12(q.prio, 0),
+          planned: num12(q.planned, 0)
+        });
+      }
+      if (s.queue.length > QUEUE_MAX) s.queue.length = QUEUE_MAX;
+    }
+    return s;
+  }
+  function serializeBuild(state) {
+    if (!state) return null;
+    return {
+      v: 1,
+      day: state.day,
+      nextKey: state.nextKey,
+      reserved: { ...state.reserved },
+      queue: state.queue.map((q) => ({ ...q }))
+    };
+  }
+  function wearPerDay(sim2, b) {
+    const def = BUILDINGS[b.id];
+    if (!def) return 0;
+    const max = def.wall || 100;
+    let w = max * 0.5 / WEAR_DAYS_TO_HALF;
+    const working = countWorkersAt(sim2, b) > 0;
+    w *= working ? 1 : WEAR_IDLE;
+    if (sim2.seasonIdx === 3) w *= WEAR_WINTER;
+    const stone = def.cost && def.cost.stone || 0;
+    const wood = def.cost && def.cost.wood || 0;
+    if (stone > wood) w *= 0.6;
+    return w;
+  }
+  function wearWorkMult(sim2, b) {
+    const def = BUILDINGS[b.id];
+    if (!def) return 1;
+    const max = def.wall || 100;
+    const pct = (b.hp ?? max) / max * 100;
+    if (pct >= REPAIR_THRESHOLD) return 1;
+    if (pct <= REPAIR_CRITICAL) return 0.5;
+    const t = (pct - REPAIR_CRITICAL) / (REPAIR_THRESHOLD - REPAIR_CRITICAL);
+    return 0.5 + 0.5 * t;
+  }
+  function buildNewDay(state, sim2) {
+    const day = sim2.day | 0;
+    const out = {
+      mods: { wear: [] },
+      reasons: [],
+      events: [],
+      flags: { started: [], waiting: 0, needRepair: 0 }
+    };
+    if (!state || state.day === day) return out;
+    state.day = day;
+    const stillWaiting = [];
+    for (const q of state.queue) {
+      const chk = sim2.canPlace(q.id, q.x, q.y);
+      if (!chk.ok) {
+        if (!/^Не хватает:/.test(chk.reason)) {
+          out.events.push({
+            text: `📐 Чертёж «${BUILDINGS[q.id].name}» снят: ${chk.reason.toLowerCase()}.`,
+            type: "warn"
+          });
+          continue;
+        }
+        stillWaiting.push(q);
+        continue;
+      }
+      if (sim2.placeBuilding(q.id, q.x, q.y)) {
+        out.flags.started.push({ id: q.id, x: q.x, y: q.y });
+      } else {
+        stillWaiting.push(q);
+      }
+    }
+    state.queue = stillWaiting;
+    out.flags.waiting = stillWaiting.length;
+    if (out.flags.started.length) {
+      const names = out.flags.started.map((s) => BUILDINGS[s.id].name);
+      out.events.push({
+        text: `📐 Заложено по чертежам: ${names.join(", ")}.`,
+        type: "info"
+      });
+    }
+    let worn = 0;
+    for (const b of sim2.buildings) {
+      if (!b.done || b.destroyed) continue;
+      const w = wearPerDay(sim2, b);
+      if (w > 0) out.mods.wear.push({ b, w });
+      const def = BUILDINGS[b.id];
+      const max = def ? def.wall || 100 : 100;
+      if ((b.hp ?? max) / max * 100 < REPAIR_THRESHOLD) worn++;
+    }
+    out.flags.needRepair = worn;
+    if (worn >= 3 && day % 25 === 0) {
+      out.events.push({
+        text: `🔨 Требуют ремонта построек: ${worn}. Ветхое здание работает вполсилы.`,
+        type: "warn"
+      });
+    }
+    return out;
+  }
+  function countWorkersAt(sim2, b) {
+    let n = 0;
+    for (const v of sim2.villagers || []) {
+      if (v && v.target && v.target.b === b && v.target.kind === "work") n++;
+    }
+    return n;
+  }
+  function num12(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+
   // app/src/core/systems/integrate.js
   var BETRAYAL_REL_WAS = 20;
   function relValue2(sim2, fid) {
@@ -14259,6 +14406,7 @@
     sim2.linkMasters = createMasters();
     sim2.linkGhost = createGhost();
     sim2.linkGhost.seed = sim2.seed | 0;
+    sim2.build = createBuild();
   }
   function systemsNewDay(sim2) {
     if (!sim2.sys) return;
@@ -14273,6 +14421,7 @@
     const survOut = applySurvivalLinks(sim2);
     applyIndustryLinks(sim2);
     applyMasterLinks(sim2);
+    applyBuild(sim2);
     applyGhost(sim2);
     applyNeighborLinks(sim2);
     applyTerritoryLinks(sim2);
@@ -14390,7 +14539,8 @@
       mem: sim2.linkMemory || null,
       intel: sim2.linkIntel || null,
       masters: sim2.linkMasters || null,
-      ghost: sim2.linkGhost || null
+      ghost: sim2.linkGhost || null,
+      build: serializeBuild(sim2.build)
     };
   }
   function systemsRestore(sim2, data) {
@@ -14411,6 +14561,7 @@
     sim2.linkIntel = restoreIntel(data.intel);
     sim2.linkMasters = restoreMasters(data.masters);
     sim2.linkGhost = restoreGhost(data.ghost);
+    sim2.build = restoreBuild(data.build);
   }
   function applyEconomyLinks(sim2) {
     if (!sim2.politics || !sim2.industry) return null;
@@ -14477,6 +14628,18 @@
     }
     for (const [fid, d] of Object.entries(L.mods.relations)) {
       if (d && typeof sim2.adjustRel === "function") sim2.adjustRel(fid, d, "Старая обида");
+    }
+    for (const e of L.events) sim2.addLog(e.text, e.type);
+    return L;
+  }
+  function applyBuild(sim2) {
+    if (!sim2.build) sim2.build = createBuild();
+    const L = buildNewDay(sim2.build, sim2);
+    sim2.sys.buildLinks = L;
+    for (const { b, w } of L.mods.wear) {
+      const def = BUILDINGS[b.id];
+      const max = def ? def.wall || 100 : 100;
+      b.hp = Math.max(1, Math.min(max, (b.hp ?? max) - w));
     }
     for (const e of L.events) sim2.addLog(e.text, e.type);
     return L;
@@ -14731,7 +14894,7 @@
   var TRIBUTE_GAP_FACTION = 120;
   var TRIBUTE_POWER_RATIO = 1.5;
   var MOVE_SPEED = 7;
-  var TECH_BY_ID4 = Object.fromEntries(TECHS.map((t) => [t.id, t]));
+  var TECH_BY_ID5 = Object.fromEntries(TECHS.map((t) => [t.id, t]));
   var Simulation = class _Simulation {
     constructor(seed = 20260730, opts = {}) {
       this.seed = seed >>> 0;
@@ -14901,11 +15064,11 @@
     }
     // ---------- Фракции ----------
     spawnFactions() {
-      const count = Math.min(this.factionCount, FACTIONS.length);
+      const count2 = Math.min(this.factionCount, FACTIONS.length);
       const picks = [];
       const pool = [...FACTIONS];
-      while (picks.length < count) picks.push(pool.splice(this.rng.int(0, pool.length - 1), 1)[0]);
-      const spawns = findFactionSpawns(this.world, this.rng, count, this.world.startX, this.world.startY);
+      while (picks.length < count2) picks.push(pool.splice(this.rng.int(0, pool.length - 1), 1)[0]);
+      const spawns = findFactionSpawns(this.world, this.rng, count2, this.world.startX, this.world.startY);
       picks.forEach((f, i) => {
         const s = spawns[i] || this.randomLand(24, 40) || { x: 10 + i * 20, y: 10 };
         this.factions.push({
@@ -14943,7 +15106,7 @@
       const def = BUILDINGS[id];
       if (!def) return { ok: false, reason: "Неизвестное здание" };
       if (def.req && !this.techs.has(def.req)) {
-        return { ok: false, reason: `Нужна технология: ${TECH_BY_ID4[def.req].name}` };
+        return { ok: false, reason: `Нужна технология: ${TECH_BY_ID5[def.req].name}` };
       }
       if (def.unique && this.buildings.some((b) => b.id === id && !b.destroyed)) {
         return { ok: false, reason: `${def.name} уже построен — можно только один` };
@@ -15160,11 +15323,11 @@
       return cost;
     }
     research(id) {
-      const t = TECH_BY_ID4[id];
+      const t = TECH_BY_ID5[id];
       if (!t) return { ok: false, reason: "Нет такой технологии" };
       if (this.techs.has(id)) return { ok: false, reason: "Уже изучено" };
       const missing = t.prereq.filter((p) => !this.techs.has(p));
-      if (missing.length) return { ok: false, reason: `Требует: ${missing.map((m) => TECH_BY_ID4[m].name).join(", ")}` };
+      if (missing.length) return { ok: false, reason: `Требует: ${missing.map((m) => TECH_BY_ID5[m].name).join(", ")}` };
       const cost = this.techCost(t);
       if (this.res.knowledge < cost && !this.godmode) return { ok: false, reason: `Нужно 📜${cost}` };
       if (!this.godmode) this.res.knowledge -= cost;
@@ -15317,7 +15480,7 @@
       const def = BUILDINGS[b.id];
       const out = def.out || {};
       const gather = this.globalMult("gather") * WEATHER[this.weather].gather;
-      let mult = gather * happyMult;
+      let mult = gather * happyMult * wearWorkMult(this, b);
       if (out.knowledge) mult = this.globalMult("knowledge") * happyMult;
       if (out.gold) mult = this.globalMult("gold") * happyMult;
       if (out.steel) mult = this.globalMult("industry") * happyMult;
@@ -16784,6 +16947,1690 @@ ${s}`, "console");
     return noise2(x * 0.13, y * 0.13) * 0.64 + noise2(x * 0.42, y * 0.42) * 0.36;
   }
 
+  // app/src/core/systems/worldgen2.js
+  var BIOME = {
+    OCEAN: 0,
+    COAST: 1,
+    TUNDRA: 2,
+    TAIGA: 3,
+    STEPPE: 4,
+    TEMPERATE: 5,
+    DESERT: 6,
+    SAVANNA: 7,
+    TROPICS: 8,
+    WETLAND: 9,
+    ALPINE: 10
+  };
+  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
+  function temperature(lat, rel, n) {
+    return clamp13(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
+  }
+  function moisture(distSea, n) {
+    return clamp13(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
+  }
+
+  // app/src/render/landmarks.js
+  var LANDMARK = {
+    peak: { ru: "горный пик", noun: "Гора", span: [3.2, 2.6], rad: 3, weight: 1, live: false },
+    volcano: { ru: "вулкан", noun: "Вулкан", span: [3, 2.8], rad: 4, weight: 1, live: true },
+    canyon: { ru: "ущелье", noun: "Ущелье", span: [3.6, 3.6], rad: 3, weight: 0.95, live: false },
+    waterfall: { ru: "водопад", noun: "Водопад", span: [2, 2], rad: 2, weight: 0.92, live: true },
+    saltflat: { ru: "солончак", noun: "Солончак", span: [3.2, 2.6], rad: 3, weight: 0.9, live: false },
+    oasis: { ru: "оазис", noun: "Оазис", span: [2.4, 2.2], rad: 3, weight: 0.9, live: false },
+    arch: { ru: "каменная арка", noun: "Арка", span: [2.2, 2], rad: 2, weight: 0.86, live: false },
+    geyser: { ru: "гейзер", noun: "Гейзер", span: [1.8, 1.8], rad: 2, weight: 0.84, live: true },
+    elder: { ru: "древо-исполин", noun: "Древо", span: [2, 2.4], rad: 2, weight: 0.82, live: false },
+    ruins: { ru: "древние руины", noun: "Руины", span: [2.6, 1.8], rad: 3, weight: 0.8, live: false },
+    menhir: { ru: "кольцо менгиров", noun: "Круг", span: [2, 1.6], rad: 2, weight: 0.78, live: false }
+  };
+  var NAMES2 = [
+    "Ворона",
+    "Ветров",
+    "Трёх Братьев",
+    "Молчания",
+    "Старого Волка",
+    "Пепла",
+    "Рассвета",
+    "Последнего Костра",
+    "Соли",
+    "Грома",
+    "Сорока Дней",
+    "Тумана",
+    "Медведицы",
+    "Чёрной Воды",
+    "Кости",
+    "Утренней Звезды"
+  ];
+  var LANDMARK_MIN = 3;
+  var LANDMARK_MAX = 5;
+  var MIN_SEP = 13;
+  var START_KEEP = 9;
+  var MAT = {
+    basalt: "#4a443f",
+    basaltHi: "#6d655d",
+    basaltLo: "#332f2c",
+    // остывшая порода вулкана
+    ash: "#5c5751",
+    ashLo: "#413d39",
+    // пепловый шлейф у подножия
+    lava: "#e8762d",
+    lavaHot: "#ffd25a",
+    lavaDark: "#a8352c",
+    // акцент «огонь» из §2.3
+    ochre: "#b0885a",
+    ochreHi: "#cda87a",
+    ochreLo: "#8a6845",
+    // выветренный песчаник
+    band: "#a0704a",
+    // прослойка в породе
+    salt: "#dcd8cc",
+    saltHi: "#f0eee6",
+    saltLo: "#b3ac9c",
+    // соляная корка
+    brine: "#9fb0ac",
+    // рассол в мочажине
+    sinter: "#cfc7b4",
+    sinterHi: "#e6dfd0",
+    // гейзерит, натёчный камень
+    hot: "#8fb6ae",
+    // горячий источник, мутно-бирюзовый
+    ruin: "#a89f8c",
+    ruinHi: "#c6bda8",
+    ruinLo: "#6f6a5e",
+    // тёсаный камень, тронутый временем
+    menhir: "#8e8880",
+    menhirHi: "#a9a49b",
+    menhirLo: "#5d5952",
+    // необработанный валун
+    foam: "#e6f1f6",
+    // пена и водяная пыль
+    snow: "#eef4f8",
+    moss: "#5c6b45",
+    dirt: "#7a6242"
+    // вытоптанная земля вокруг
+  };
+  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var c255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+  function mul(hex, k) {
+    const c = hex2rgb(hex);
+    return `rgb(${c255(c[0] * k)},${c255(c[1] * k)},${c255(c[2] * k)})`;
+  }
+  function alpha(hex, a) {
+    const c = hex2rgb(hex);
+    return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+  }
+  function mix(h1, h2, k) {
+    const a = hex2rgb(h1), b = hex2rgb(h2);
+    return `rgb(${c255(a[0] + (b[0] - a[0]) * k)},${c255(a[1] + (b[1] - a[1]) * k)},${c255(a[2] + (b[2] - a[2]) * k)})`;
+  }
+  function h3(x, y, s) {
+    let v = x * 374761393 + y * 668265263 + s * 1442695041 | 0;
+    v = (v ^ v >>> 13) * 1274126177 | 0;
+    v = v ^ v >>> 16 | 0;
+    return ((v ^ v >>> 9) >>> 0) / 4294967296;
+  }
+  function stream(seed, n) {
+    let s = seed | 0 || 2654435769;
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      s ^= s << 13;
+      s |= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;
+      s |= 0;
+      out[i] = (s >>> 0) / 4294967296;
+    }
+    return out;
+  }
+  var isWater2 = (t) => t === TILE.WATER || t === TILE.DEEP;
+  function seaDistance(tiles, W, H) {
+    const N = W * H;
+    const dist = new Uint16Array(N).fill(65535);
+    const q = new Int32Array(N);
+    let qh = 0, qt = 0;
+    for (let i = 0; i < N; i++) if (isWater2(tiles[i])) {
+      dist[i] = 0;
+      q[qt++] = i;
+    }
+    while (qh < qt) {
+      const i = q[qh++], x = i % W, y = i / W | 0, d = dist[i] + 1;
+      for (let k = 0; k < 4; k++) {
+        const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0), ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (dist[ni] <= d) continue;
+        dist[ni] = d;
+        q[qt++] = ni;
+      }
+    }
+    return dist;
+  }
+  function classify(tile, t, m, rel, riv, dsea) {
+    if (isWater2(tile)) return BIOME.OCEAN;
+    if (tile === TILE.MOUNTAIN) return BIOME.ALPINE;
+    if (riv > 0 && rel < 0.3 && t > 0.3) return BIOME.WETLAND;
+    let b;
+    if (t < 0.22) b = BIOME.TUNDRA;
+    else if (t < 0.42) b = m > 0.32 ? BIOME.TAIGA : BIOME.TUNDRA;
+    else if (dsea <= 1 && rel < 0.08) b = BIOME.COAST;
+    else if (t > 0.72) b = m < 0.28 ? BIOME.DESERT : m < 0.5 ? BIOME.SAVANNA : BIOME.TROPICS;
+    else if (m < 0.26) b = BIOME.DESERT;
+    else if (m < 0.42) b = BIOME.STEPPE;
+    else b = BIOME.TEMPERATE;
+    if (tile === TILE.FOREST) {
+      if (b === BIOME.DESERT) b = t > 0.6 ? BIOME.SAVANNA : BIOME.STEPPE;
+      if (b === BIOME.TUNDRA) b = BIOME.TAIGA;
+    }
+    return b;
+  }
+  var H_BY_TILE = {
+    [TILE.DEEP]: 0,
+    [TILE.WATER]: 0.06,
+    [TILE.SAND]: 0.16,
+    [TILE.GRASS]: 0.26,
+    [TILE.FOREST]: 0.3,
+    [TILE.HILL]: 0.62,
+    [TILE.MOUNTAIN]: 1
+  };
+  var LandmarkLayer = class {
+    constructor(quality) {
+      this.q = quality;
+      this.key = null;
+      this.marks = [];
+      this.seed = 0;
+      this.W = 0;
+      this.H = 0;
+      this._soft = /* @__PURE__ */ new Map();
+      this._glow = null;
+    }
+    setQuality(q) {
+      this.q = q;
+    }
+    // Пересчёт по необходимости. Возвращает true, если состав ориентиров сменился
+    // и чанки надо перепечь: это позволяет подключить слой ОДНОЙ строкой.
+    ensure(sim2, quality, height) {
+      if (quality) this.q = quality;
+      const world = sim2 && sim2.world;
+      if (!world || !world.tiles) return false;
+      const key = (world.seed >>> 0) + ":" + world.w + "x" + world.h;
+      if (key === this.key) return false;
+      this.key = key;
+      this.seed = world.seed >>> 0;
+      this.W = world.w;
+      this.H = world.h;
+      this.marks = pick(world, this.seed, height);
+      return true;
+    }
+    // --- справка для интерфейса и ядра ---
+    list() {
+      return this.marks;
+    }
+    // Ближайший ориентир к клетке, если она в его радиусе влияния.
+    at(x, y) {
+      let best = null, bd = Infinity;
+      for (const m of this.marks) {
+        const d = Math.hypot(m.x - x, m.y - y);
+        if (d <= m.rad && d < bd) {
+          bd = d;
+          best = m;
+        }
+      }
+      return best;
+    }
+    // Готовая строка для тултипа клетки.
+    describe(x, y) {
+      const m = this.at(x, y);
+      return m ? `${m.name} — ${m.ru}` : "";
+    }
+    // =======================================================================
+    // СТАТИЧНАЯ ЧАСТЬ — идёт внутрь выпечки чанка, в кадре стоит ноль.
+    // x0,y0 — левый верхний угол чанка в клетках, TP — пикселей на клетку.
+    // =======================================================================
+    paint(c, sim2, x0, y0, TP, CH) {
+      if (!this.marks.length) return;
+      const season = sim2.seasonIdx | 0;
+      const P = palOf(season);
+      const D = this.q ? this.q.detail : 1;
+      for (const m of this.marks) {
+        const sp = LANDMARK[m.kind].span;
+        if (m.x + sp[0] < x0 - 1 || m.x - sp[0] > x0 + CH + 1) continue;
+        if (m.y + sp[1] < y0 - 1 || m.y - sp[1] * 2.2 > y0 + CH + 1) continue;
+        const X = (m.x + 0.5 - x0) * TP, Y = (m.y + 0.9 - y0) * TP;
+        c.save();
+        DRAW[m.kind](c, X, Y, TP, P, season, D, m.r, m);
+        c.restore();
+        c.globalAlpha = 1;
+      }
+    }
+    // =======================================================================
+    // ЖИВАЯ ЧАСТЬ — дым, пар, свечение. Только то, что физически движется.
+    // Вызывается раз в кадр; при пустом списке уходит на первой строке.
+    // =======================================================================
+    drawLive(sim2, ctx, ox, oy, z, cw, ch, time) {
+      if (!this.marks.length || !this.q || this.q.id === "eco") return;
+      if (z < 11) return;
+      if (!this.soft(MAT.foam)) return;
+      const L = lightAt(sim2.dayTime);
+      for (const m of this.marks) {
+        if (!LANDMARK[m.kind].live) continue;
+        const sx = ox + (m.x + 0.5) * z, sy = oy + (m.y + 0.9) * z;
+        if (sx < -4 * z || sy < -8 * z || sx > cw + 4 * z || sy > ch + 4 * z) continue;
+        if (m.kind === "volcano") this.livePlume(ctx, sx, sy - z * 2.6, z, time, m, L);
+        else if (m.kind === "geyser") this.liveGeyser(ctx, sx, sy - z * 0.35, z, time, m);
+        else if (m.kind === "waterfall") this.liveMist(ctx, sx, sy - z * 0.2, z, time, m);
+      }
+      ctx.globalAlpha = 1;
+    }
+    // Столб дыма: восемь пятен, поднимающихся по своей фазе. Ветер берём
+    // постоянным — модуль не лезет в atmosphere, а лишний параметр в подключении
+    // стоит дороже, чем польза от точного сноса.
+    livePlume(ctx, x, y, z, t, m, L) {
+      ctx.save();
+      const dark = this.soft(MAT.basaltLo), pale = this.soft(MAT.ash);
+      const N = 8;
+      for (let i = 0; i < N; i++) {
+        const ph = (t * 0.2 + i / N + m.r[6]) % 1;
+        const rise = ph * z * 4.2;
+        const drift = rise * 0.34 + Math.sin(ph * 5 + i) * z * 0.12;
+        const rad = z * (0.34 + ph * 1.15);
+        const a = (1 - ph) * (ph < 0.12 ? ph / 0.12 : 1) * 0.34;
+        if (a < 0.012) continue;
+        ctx.globalAlpha = a;
+        blot(ctx, ph < 0.35 ? dark : pale, x + drift, y - rise, rad);
+      }
+      const g2 = L.glow > 0.05 ? this.glowSprite() : null;
+      if (g2) {
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = 0.3 * L.glow * (0.82 + 0.18 * Math.sin(t * 1.7 + m.r[7] * 6));
+        ctx.drawImage(g2, x - z * 1.1, y - z * 1.1, z * 2.2, z * 2.2);
+      }
+      ctx.restore();
+    }
+    // Гейзер: тихий парок и раз в одиннадцать секунд — выброс.
+    liveGeyser(ctx, x, y, z, t, m) {
+      const PERIOD2 = 11;
+      const ph = (t + m.r[8] * PERIOD2) % PERIOD2 / PERIOD2;
+      const burst = ph < 0.06 ? ph / 0.06 : ph < 0.22 ? 1 - (ph - 0.06) / 0.16 : 0;
+      const steam = this.soft(MAT.foam);
+      ctx.save();
+      const N = burst > 0 ? 7 : 3;
+      for (let i = 0; i < N; i++) {
+        const k = i / N;
+        const rise = z * (0.25 + k * (0.7 + burst * 3));
+        const rad = z * (0.16 + k * (0.2 + burst * 0.42));
+        ctx.globalAlpha = (1 - k) * (0.14 + burst * 0.42);
+        blot(ctx, steam, x + Math.sin(t * 1.1 + i) * z * 0.06 + rise * 0.14, y - rise, rad);
+      }
+      if (burst > 0.35) {
+        ctx.globalAlpha = 0.5 * burst;
+        ctx.fillStyle = MAT.foam;
+        ctx.beginPath();
+        ctx.moveTo(x - z * 0.09, y);
+        ctx.quadraticCurveTo(x - z * 0.05, y - z * 1.6 * burst, x + z * 0.03, y - z * 3.2 * burst);
+        ctx.quadraticCurveTo(x + z * 0.12, y - z * 1.6 * burst, x + z * 0.11, y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    // Водяная пыль у подножия падуна: три дышащих пятна.
+    liveMist(ctx, x, y, z, t, m) {
+      const steam = this.soft(MAT.foam);
+      ctx.save();
+      for (let i = 0; i < 3; i++) {
+        const ph = (t * 0.35 + i / 3 + m.r[9]) % 1;
+        const a = Math.sin(ph * Math.PI) * 0.2;
+        if (a < 0.01) continue;
+        ctx.globalAlpha = a;
+        blot(ctx, steam, x + (i - 1) * z * 0.38, y - ph * z * 0.8, z * (0.3 + ph * 0.45));
+      }
+      ctx.restore();
+    }
+    // Мягкое пятно нужного цвета печётся один раз на цвет: ctx.filter='blur()'
+    // в проекте запрещён (замер −51 FPS), мягкость даёт только градиентный
+    // спрайт, а тонировать его в кадре нечем — drawImage не знает fillStyle.
+    // Цветов ровно три, так что кэш никогда не растёт.
+    soft(hex) {
+      let cv = this._soft.get(hex);
+      if (cv) return cv;
+      if (typeof document === "undefined") return null;
+      const S = 64;
+      cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g2.addColorStop(0, alpha(hex, 1));
+      g2.addColorStop(0.45, alpha(hex, 0.55));
+      g2.addColorStop(1, alpha(hex, 0));
+      c.fillStyle = g2;
+      c.fillRect(0, 0, S, S);
+      this._soft.set(hex, cv);
+      return cv;
+    }
+    glowSprite() {
+      if (this._glow) return this._glow;
+      if (typeof document === "undefined") return null;
+      const S = 96;
+      const cv = document.createElement("canvas");
+      cv.width = S;
+      cv.height = S;
+      const c = cv.getContext("2d");
+      const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g2.addColorStop(0, "rgba(255,168,72,0.85)");
+      g2.addColorStop(0.4, "rgba(232,118,45,0.28)");
+      g2.addColorStop(1, "rgba(232,118,45,0)");
+      c.fillStyle = g2;
+      c.fillRect(0, 0, S, S);
+      this._glow = cv;
+      return cv;
+    }
+  };
+  function blot(ctx, spr, x, y, r) {
+    ctx.drawImage(spr, x - r, y - r, r * 2, r * 2);
+  }
+  function palOf(season) {
+    const T2 = TERRAIN[season] || TERRAIN[1];
+    const winter = season === 3;
+    return {
+      rock: T2[TILE.MOUNTAIN].base,
+      rockHi: T2[TILE.MOUNTAIN].hi,
+      rockLo: T2[TILE.MOUNTAIN].lo,
+      rockDet: T2[TILE.MOUNTAIN].det2,
+      sand: T2[TILE.SAND].base,
+      sandHi: T2[TILE.SAND].hi,
+      sandLo: T2[TILE.SAND].lo,
+      grass: T2[TILE.GRASS].base,
+      grassLo: T2[TILE.GRASS].lo,
+      grassDet: T2[TILE.GRASS].det,
+      leaf: T2[TILE.FOREST].det,
+      leafHi: T2[TILE.FOREST].det2,
+      leafLo: T2[TILE.FOREST].lo,
+      water: T2[TILE.WATER].base,
+      waterHi: T2[TILE.WATER].hi,
+      deep: T2[TILE.DEEP].base,
+      winter,
+      // Зимой любой камень получает снежную кромку — это сезонный слой, а не
+      // свойство материала (docs/art-direction.md §2.1).
+      cap: winter ? MAT.snow : null
+    };
+  }
+  function pick(world, seed, height) {
+    const W = world.w, H = world.h;
+    const tiles = world.tiles;
+    const field = buildField(world, height);
+    const CAP = 30;
+    const cand = {};
+    for (const kind of KIND_LIST) cand[kind] = [];
+    const sx0 = world.startX != null ? world.startX : W / 2;
+    const sy0 = world.startY != null ? world.startY : H / 2;
+    for (let y = 2; y < H - 2; y++) {
+      for (let x = 2; x < W - 2; x++) {
+        const i = y * W + x;
+        const t = tiles[i];
+        if (t === TILE.DEEP) continue;
+        if (Math.hypot(x - sx0, y - sy0) < START_KEEP) continue;
+        for (let k = 0; k < KIND_LIST.length; k++) {
+          const kind = KIND_LIST[k];
+          const s = SCORE[kind](field, x, y, i);
+          if (s <= 0) continue;
+          const j = 0.75 + 0.5 * h3(x * 7 + k, y * 11 + k, seed ^ 20973);
+          pushTop(cand[kind], x, y, s * j, CAP);
+        }
+      }
+    }
+    const best = [];
+    for (const kind of KIND_LIST) {
+      const list = cand[kind];
+      if (!list.length) continue;
+      list.sort((a, b) => b.s - a.s || a.y - b.y || a.x - b.x);
+      const spread = [];
+      for (const p of list) {
+        let far = true;
+        for (const q of spread) if (Math.hypot(q.x - p.x, q.y - p.y) < 8) {
+          far = false;
+          break;
+        }
+        if (far) spread.push(p);
+        if (spread.length >= 6) break;
+      }
+      best.push({ kind, x: spread[0].x, y: spread[0].y, s: spread[0].s, alt: spread.slice(1) });
+    }
+    if (!best.length) return [];
+    const prio = {};
+    for (let k = 0; k < KIND_LIST.length; k++) {
+      prio[KIND_LIST[k]] = LANDMARK[KIND_LIST[k]].weight * (0.45 + 1.15 * h3(k * 131 + 7, 3, seed));
+    }
+    best.sort((a, b) => prio[b.kind] - prio[a.kind]);
+    const want = LANDMARK_MIN + Math.floor(h3(17, 29, seed) * (LANDMARK_MAX - LANDMARK_MIN + 1));
+    const out = [];
+    for (const sep of [MIN_SEP, MIN_SEP * 0.55]) {
+      for (const b of best) {
+        if (out.length >= want) break;
+        if (out.some((o) => o.kind === b.kind)) continue;
+        const tries = [{ x: b.x, y: b.y }, ...b.alt];
+        let placed = null;
+        for (const p of tries) {
+          let ok = true;
+          for (const o of out) if (Math.hypot(o.x - p.x, o.y - p.y) < sep) {
+            ok = false;
+            break;
+          }
+          if (ok) {
+            placed = p;
+            break;
+          }
+        }
+        if (!placed) continue;
+        out.push(make(b.kind, placed.x, placed.y, seed));
+      }
+      if (out.length >= LANDMARK_MIN) break;
+    }
+    out.sort((a, b) => a.y - b.y);
+    return out;
+  }
+  function pushTop(list, x, y, s, cap) {
+    if (list.length < cap) {
+      list.push({ x, y, s });
+      for (let i = list.length - 1; i > 0 && list[i].s > list[i - 1].s; i--) {
+        const t = list[i];
+        list[i] = list[i - 1];
+        list[i - 1] = t;
+      }
+      return;
+    }
+    if (s <= list[cap - 1].s) return;
+    list[cap - 1] = { x, y, s };
+    for (let i = cap - 1; i > 0 && list[i].s > list[i - 1].s; i--) {
+      const t = list[i];
+      list[i] = list[i - 1];
+      list[i - 1] = t;
+    }
+  }
+  function make(kind, x, y, seed) {
+    const def = LANDMARK[kind];
+    const r = stream(seed ^ x * 73856093 ^ y * 19349663 ^ kind.length * 83492791 | 0, 24);
+    const nameIdx = Math.floor(h3(x * 3 + 1, y * 5 + 2, seed) * NAMES2.length) % NAMES2.length;
+    return {
+      kind,
+      x,
+      y,
+      ru: def.ru,
+      name: `${def.noun} ${NAMES2[nameIdx]}`,
+      rad: def.rad,
+      span: def.span,
+      live: def.live,
+      r
+    };
+  }
+  function buildField(world, height) {
+    const W = world.w, H = world.h, N = W * H;
+    const tiles = world.tiles;
+    const hgt = new Float32Array(N);
+    if (world.elev && world.elev.length === N) {
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < N; i++) {
+        const e = world.elev[i];
+        if (e < lo) lo = e;
+        if (e > hi) hi = e;
+      }
+      const sp = Math.max(1e-4, hi - lo);
+      for (let i = 0; i < N; i++) hgt[i] = (world.elev[i] - lo) / sp;
+    } else if (height && height.length === N) {
+      for (let i = 0; i < N; i++) hgt[i] = clamp14((height[i] + 0.6) / 1.95, 0, 1);
+    } else {
+      for (let i = 0; i < N; i++) hgt[i] = H_BY_TILE[tiles[i]] ?? 0.2;
+    }
+    const slope = new Float32Array(N);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x, e = hgt[i];
+        let d = 0;
+        if (x > 0) d = Math.max(d, Math.abs(e - hgt[i - 1]));
+        if (x < W - 1) d = Math.max(d, Math.abs(e - hgt[i + 1]));
+        if (y > 0) d = Math.max(d, Math.abs(e - hgt[i - W]));
+        if (y < H - 1) d = Math.max(d, Math.abs(e - hgt[i + W]));
+        slope[i] = d;
+      }
+    }
+    const dsea = seaDistance(tiles, W, H);
+    const river = world.river && world.river.length === N ? world.river : null;
+    let biome = world.biome && world.biome.length === N ? world.biome : null;
+    if (!biome) {
+      biome = new Uint8Array(N);
+      for (let y = 0; y < H; y++) {
+        const lat = Math.abs((y + 0.5) / H * 2 - 1);
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const n1 = h3(x * 5, y * 5, 401) * 2 - 1;
+          const n2 = h3(x * 3, y * 7, 909) * 2 - 1;
+          const rel = clamp14(hgt[i] - 0.2, 0, 1);
+          const t = temperature(lat, rel, n1);
+          const m = moisture(dsea[i], n2);
+          biome[i] = classify(tiles[i], t, m, rel, river ? river[i] : 0, dsea[i]);
+        }
+      }
+    }
+    const sums = {
+      mtn: integral(tiles, W, H, (t) => t === TILE.MOUNTAIN),
+      high: integral(tiles, W, H, (t) => t === TILE.MOUNTAIN || t === TILE.HILL),
+      water: integral(tiles, W, H, isWater2),
+      forest: integral(tiles, W, H, (t) => t === TILE.FOREST),
+      sand: integral(tiles, W, H, (t) => t === TILE.SAND),
+      soft: integral(tiles, W, H, (t) => !isWater2(t) && t !== TILE.MOUNTAIN),
+      open: integral(tiles, W, H, (t) => t === TILE.GRASS || t === TILE.HILL)
+    };
+    return { W, H, N, tiles, hgt, slope, dsea, river, biome, sums, world };
+  }
+  function integral(tiles, W, H, pred) {
+    const T2 = new Int32Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) {
+      let row = 0;
+      for (let x = 0; x < W; x++) {
+        if (pred(tiles[y * W + x])) row++;
+        T2[(y + 1) * (W + 1) + (x + 1)] = T2[y * (W + 1) + (x + 1)] + row;
+      }
+    }
+    return T2;
+  }
+  function count(f, name, x, y, r) {
+    const W1 = f.W + 1;
+    const x0 = clamp14(x - r, 0, f.W), x1 = clamp14(x + r + 1, 0, f.W);
+    const y0 = clamp14(y - r, 0, f.H), y1 = clamp14(y + r + 1, 0, f.H);
+    const T2 = f.sums[name];
+    return T2[y1 * W1 + x1] - T2[y0 * W1 + x1] - T2[y1 * W1 + x0] + T2[y0 * W1 + x0];
+  }
+  var B = (...list) => list.reduce((m, b) => m | 1 << b, 0);
+  var B_DRY = B(BIOME.DESERT, BIOME.STEPPE, BIOME.SAVANNA, BIOME.ALPINE, BIOME.TUNDRA);
+  var B_DESERT = B(BIOME.DESERT);
+  var B_SALT = B(BIOME.DESERT, BIOME.STEPPE);
+  var B_ARCH = B(BIOME.DESERT, BIOME.SAVANNA, BIOME.STEPPE);
+  var B_COLD = B(BIOME.TUNDRA, BIOME.TAIGA, BIOME.STEPPE, BIOME.ALPINE);
+  var B_WOOD = B(BIOME.TROPICS, BIOME.TEMPERATE, BIOME.TAIGA, BIOME.WETLAND);
+  var B_LIVED = B(BIOME.TEMPERATE, BIOME.STEPPE, BIOME.SAVANNA, BIOME.COAST, BIOME.TROPICS, BIOME.DESERT);
+  function biomeIs(f, x, y, mask) {
+    return (1 << f.biome[y * f.W + x] & mask) !== 0;
+  }
+  var SCORE = {
+    // Пик: сердце крупного массива. Нужен и объём вокруг, и высота.
+    peak(f, x, y, i) {
+      if (f.tiles[i] !== TILE.MOUNTAIN) return 0;
+      const m = count(f, "mtn", x, y, 3);
+      if (m < 18) return 0;
+      return m * 0.06 + f.hgt[i] * 2.2;
+    },
+    // Вулкан: тоже горы, но на отшибе массива — конус стоит особняком, а не
+    // теряется в хребте.
+    volcano(f, x, y, i) {
+      if (f.tiles[i] !== TILE.MOUNTAIN && f.tiles[i] !== TILE.HILL) return 0;
+      const m3 = count(f, "high", x, y, 3), m6 = count(f, "high", x, y, 6);
+      if (m3 < 9 || m6 > 110) return 0;
+      if (f.dsea[i] < 3) return 0;
+      return 1.2 + m3 * 0.04 + f.hgt[i] * 1.4 - m6 * 6e-3;
+    },
+    // Ущелье: сухая земля со стенками. Ищем сильный уклон при отсутствии воды —
+    // такой рельеф режется руслом, которое давно пересохло.
+    canyon(f, x, y, i) {
+      const t = f.tiles[i];
+      if (isWater2(t) || t === TILE.FOREST) return 0;
+      if (count(f, "water", x, y, 2) > 0) return 0;
+      if (f.slope[i] < 0.055) return 0;
+      const dry = biomeIs(f, x, y, B_DRY);
+      if (!dry) return 0;
+      const hard = count(f, "high", x, y, 2);
+      return 0.8 + f.slope[i] * 6 + hard * 0.05;
+    },
+    // Водопад: русло (или озёрная кромка) на уступе. Без слоя рек берём воду,
+    // подпёртую горой, — падун с кручи в озеро.
+    waterfall(f, x, y, i) {
+      const riv = f.river ? f.river[i] : 0;
+      const t = f.tiles[i];
+      const onRiver = riv > 0;
+      const onShore = isWater2(t) && count(f, "high", x, y, 1) >= 3;
+      if (!onRiver && !onShore) return 0;
+      if (f.slope[i] < 0.07) return 0;
+      return 1 + f.slope[i] * 7 + (onRiver ? riv * 0.3 : 0);
+    },
+    // Оазис: глубина пустыни, вода далеко, русла нет. Ровно то место, где вода
+    // из-под земли — событие.
+    oasis(f, x, y, i) {
+      if (!biomeIs(f, x, y, B_DESERT)) return 0;
+      const t = f.tiles[i];
+      if (t !== TILE.SAND && t !== TILE.GRASS) return 0;
+      if (f.dsea[i] < 7) return 0;
+      if (count(f, "water", x, y, 3) > 0) return 0;
+      if (f.river) for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= f.W || yy >= f.H) continue;
+        if (f.river[yy * f.W + xx]) return 0;
+      }
+      const desert = count(f, "sand", x, y, 4);
+      return 1 + f.dsea[i] * 0.05 + desert * 0.03;
+    },
+    // Солончак: сухая котловина. Проверяем, что клетка ниже своей округи, —
+    // соль остаётся там, куда вода стекает и откуда не уходит.
+    saltflat(f, x, y, i) {
+      if (!biomeIs(f, x, y, B_SALT)) return 0;
+      if (isWater2(f.tiles[i]) || f.tiles[i] === TILE.FOREST) return 0;
+      if (count(f, "water", x, y, 3) > 0) return 0;
+      if (f.slope[i] > 0.03) return 0;
+      let around = 0, n = 0;
+      for (let dy = -4; dy <= 4; dy += 2) for (let dx = -4; dx <= 4; dx += 2) {
+        const xx = clamp14(x + dx, 0, f.W - 1), yy = clamp14(y + dy, 0, f.H - 1);
+        around += f.hgt[yy * f.W + xx];
+        n++;
+      }
+      const basin = around / n - f.hgt[i];
+      if (basin < 5e-3) return 0;
+      return 0.9 + basin * 26;
+    },
+    // Арка и столбы выветривания: открытая сухая земля с породой рядом.
+    arch(f, x, y, i) {
+      const t = f.tiles[i];
+      if (t !== TILE.SAND && t !== TILE.GRASS && t !== TILE.HILL) return 0;
+      if (!biomeIs(f, x, y, B_ARCH)) return 0;
+      if (count(f, "water", x, y, 2) > 0) return 0;
+      const hard = count(f, "high", x, y, 3);
+      if (hard < 3) return 0;
+      return 0.8 + hard * 0.07 + f.slope[i] * 3;
+    },
+    // Гейзер: ровное место у самых гор — тепло приходит снизу, а выброс должен
+    // быть виден, а не спрятан в скалах.
+    geyser(f, x, y, i) {
+      const t = f.tiles[i];
+      if (t !== TILE.GRASS && t !== TILE.SAND && t !== TILE.HILL) return 0;
+      if (f.slope[i] > 0.06) return 0;
+      const near = count(f, "mtn", x, y, 4);
+      if (near < 4) return 0;
+      const cold = biomeIs(f, x, y, B_COLD) ? 0.5 : 0;
+      return 0.7 + near * 0.05 + cold;
+    },
+    // Древо-исполин: сердце большого леса, вдали от кромки.
+    elder(f, x, y, i) {
+      if (f.tiles[i] !== TILE.FOREST) return 0;
+      const near = count(f, "forest", x, y, 2);
+      if (near < 20) return 0;
+      const good = biomeIs(f, x, y, B_WOOD) ? 0.6 : 0;
+      return 0.6 + near * 0.03 + good;
+    },
+    // Руины: ровное обжитое место — где могли жить до нас, там можно жить и нам.
+    // Оттого руины стоят на хорошей земле, а не в гольцах.
+    ruins(f, x, y, i) {
+      const t = f.tiles[i];
+      if (t !== TILE.GRASS && t !== TILE.HILL && t !== TILE.SAND) return 0;
+      if (f.slope[i] > 0.05) return 0;
+      if (!biomeIs(f, x, y, B_LIVED)) return 0;
+      const flat = count(f, "soft", x, y, 2);
+      if (flat < 20) return 0;
+      return 0.5 + flat * 0.02 + (f.dsea[i] < 6 ? 0.4 : 0);
+    },
+    // Менгиры: открытая возвышенность, откуда видно округу. Народ, который их
+    // ставил, выбирал место не за плодородие.
+    menhir(f, x, y, i) {
+      const t = f.tiles[i];
+      if (t !== TILE.GRASS && t !== TILE.HILL) return 0;
+      if (f.slope[i] > 0.05) return 0;
+      const open = count(f, "open", x, y, 2);
+      if (open < 16) return 0;
+      return 0.4 + open * 0.02 + f.hgt[i] * 0.8;
+    }
+  };
+  var KIND_LIST = Object.keys(SCORE);
+  function poly(c, p) {
+    c.beginPath();
+    c.moveTo(p[0], p[1]);
+    for (let i = 2; i < p.length; i += 2) c.lineTo(p[i], p[i + 1]);
+    c.closePath();
+  }
+  function fillPoly(c, p, style) {
+    poly(c, p);
+    c.fillStyle = style;
+    c.fill();
+  }
+  function contact(c, x, y, rx, ry, a) {
+    c.fillStyle = `rgba(38,34,44,${a})`;
+    c.beginPath();
+    c.ellipse(x, y, rx, ry, 0, 0, 7);
+    c.fill();
+  }
+  function ground(c, x, y, rx, ry, hex, a) {
+    c.fillStyle = alpha(hex, a);
+    c.beginPath();
+    c.ellipse(x, y, rx, ry, 0, 0, 7);
+    c.fill();
+  }
+  function cone(c, x, apexY, baseY, w, P, snow, D) {
+    const h = baseY - apexY;
+    fillPoly(c, [x, apexY, x + w * 1.75, baseY, x - w * 0.1, baseY], "rgba(30,26,32,0.22)");
+    fillPoly(c, [x, apexY, x + w * 0.44, apexY + h * 0.44, x + w, baseY, x - w * 0.14, baseY], P.rockLo);
+    fillPoly(c, [x, apexY, x - w * 0.14, baseY, x - w, baseY, x - w * 0.38, apexY + h * 0.38], P.rockHi);
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.basaltLo, 0.35);
+      c.lineWidth = Math.max(1, w * 0.03);
+      c.beginPath();
+      c.moveTo(x, apexY);
+      c.lineTo(x + w * 0.44, apexY + h * 0.44);
+      c.lineTo(x + w * 0.2, baseY);
+      c.stroke();
+    }
+    if (snow) {
+      const sy = apexY + h * 0.24;
+      fillPoly(c, [
+        x,
+        apexY,
+        x + w * 0.3,
+        sy,
+        x + w * 0.13,
+        sy - h * 0.05,
+        x - w * 0.1,
+        sy + h * 0.04,
+        x - w * 0.3,
+        sy
+      ], MAT.snow);
+    }
+  }
+  function drawPeak(c, X, Y, U2, P, season, D, r) {
+    const baseY = Y + U2 * 0.15;
+    const mainX = X - U2 * 0.55, mainY = baseY - U2 * (3.1 + r[0] * 0.7);
+    const sideX = X + U2 * 1.45, sideY = baseY - U2 * (1.9 + r[1] * 0.5);
+    const saddleY = baseY - U2 * (1.15 + r[2] * 0.25);
+    contact(c, X + U2 * 0.55, baseY + U2 * 0.12, U2 * 3, U2 * 0.62, 0.24);
+    fillPoly(c, [
+      X - U2 * 2.9,
+      baseY,
+      X - U2 * 2,
+      baseY - U2 * (0.7 + r[3] * 0.3),
+      mainX,
+      mainY + U2 * 0.9,
+      X + U2 * 0.5,
+      saddleY,
+      sideX,
+      sideY + U2 * 0.5,
+      X + U2 * 2.2,
+      baseY - U2 * (0.5 + r[4] * 0.3),
+      X + U2 * 2.9,
+      baseY
+    ], P.rock);
+    if (D >= 1) {
+      c.fillStyle = alpha(P.rockLo, 0.45);
+      for (let i = 0; i < 6; i++) {
+        const t = i / 5;
+        c.beginPath();
+        c.ellipse(
+          X - U2 * 2.6 + U2 * 5.2 * t,
+          baseY + U2 * (0.05 + r[5 + i] * 0.12),
+          U2 * (0.16 + r[8 + i] * 0.16),
+          U2 * 0.07,
+          0,
+          0,
+          7
+        );
+        c.fill();
+      }
+    }
+    cone(c, sideX, sideY, baseY, U2 * 1.05, P, true, D);
+    fillPoly(c, [
+      X + U2 * 0.15,
+      saddleY + U2 * 0.1,
+      X + U2 * 0.95,
+      saddleY + U2 * 0.1,
+      X + U2 * 0.75,
+      baseY,
+      X + U2 * 0.35,
+      baseY
+    ], alpha(P.rockLo, 0.55));
+    if (D >= 1) {
+      c.strokeStyle = alpha(P.rockDet, 0.5);
+      c.lineWidth = Math.max(1, U2 * 0.045);
+      c.beginPath();
+      c.moveTo(X - U2 * 0.1, baseY - U2 * 0.1);
+      c.quadraticCurveTo(X + U2 * 0.55, saddleY + U2 * 0.35, X + U2 * 1.25, baseY - U2 * 0.2);
+      c.stroke();
+    }
+    cone(c, mainX, mainY, baseY, U2 * 1.6, P, true, D);
+    if (D >= 2) smallTree(c, X - U2 * 2.35, baseY + U2 * 0.05, U2 * 0.32, P, season);
+  }
+  function drawVolcano(c, X, Y, U2, P, season, D, r) {
+    const baseY = Y + U2 * 0.15;
+    const topY = baseY - U2 * (2.5 + r[0] * 0.4);
+    const rimW = U2 * (0.62 + r[1] * 0.12);
+    const baseW = U2 * 2.5;
+    contact(c, X + U2 * 0.5, baseY + U2 * 0.12, U2 * 2.7, U2 * 0.6, 0.26);
+    ground(c, X, baseY - U2 * 0.05, U2 * 3.1, U2 * 0.85, MAT.ash, 0.4);
+    fillPoly(
+      c,
+      [X - rimW, topY, X + rimW, topY, X + baseW * 1.5, baseY, X + baseW * 0.1, baseY],
+      "rgba(28,24,28,0.25)"
+    );
+    fillPoly(c, [X - rimW, topY, X + rimW, topY, X + baseW, baseY, X - baseW * 0.15, baseY], MAT.basalt);
+    fillPoly(
+      c,
+      [X - rimW, topY, X - baseW * 0.15, baseY, X - baseW, baseY, X - rimW * 1.1, topY + U2 * 0.05],
+      MAT.basaltHi
+    );
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.basaltLo, 0.4);
+      c.lineWidth = Math.max(1, U2 * 0.04);
+      for (let i = 0; i < 4; i++) {
+        const k = -0.7 + i * 0.5 + r[2 + i] * 0.2;
+        c.beginPath();
+        c.moveTo(X + rimW * k, topY + U2 * 0.08);
+        c.quadraticCurveTo(X + baseW * k * 0.7, baseY - U2 * 0.9, X + baseW * k * 0.95, baseY);
+        c.stroke();
+      }
+    }
+    c.fillStyle = MAT.basaltLo;
+    c.beginPath();
+    c.ellipse(X, topY, rimW, rimW * 0.42, 0, 0, 7);
+    c.fill();
+    c.fillStyle = alpha(MAT.lavaDark, 0.9);
+    c.beginPath();
+    c.ellipse(X, topY + rimW * 0.06, rimW * 0.66, rimW * 0.26, 0, 0, 7);
+    c.fill();
+    c.fillStyle = MAT.lava;
+    c.beginPath();
+    c.ellipse(X, topY + rimW * 0.06, rimW * 0.4, rimW * 0.15, 0, 0, 7);
+    c.fill();
+    c.fillStyle = MAT.lavaHot;
+    c.beginPath();
+    c.ellipse(X - rimW * 0.08, topY + rimW * 0.04, rimW * 0.17, rimW * 0.07, 0, 0, 7);
+    c.fill();
+    c.strokeStyle = alpha(MAT.basaltHi, 0.7);
+    c.lineWidth = Math.max(1, U2 * 0.05);
+    c.beginPath();
+    c.ellipse(X, topY, rimW, rimW * 0.42, 0, Math.PI * 0.9, Math.PI * 2.1);
+    c.stroke();
+    if (D >= 1) {
+      const side = r[6] > 0.5 ? 1 : -1;
+      c.lineCap = "round";
+      for (let i = 0; i < 2; i++) {
+        const off = side * (0.25 + i * 0.3);
+        c.strokeStyle = i === 0 ? MAT.lava : alpha(MAT.lavaDark, 0.8);
+        c.lineWidth = Math.max(1, U2 * (0.075 - i * 0.025));
+        c.beginPath();
+        c.moveTo(X + rimW * off * 0.8, topY + rimW * 0.2);
+        c.quadraticCurveTo(
+          X + baseW * off * 0.6,
+          baseY - U2 * 1,
+          X + baseW * off * (0.8 + r[7] * 0.2),
+          baseY - U2 * 0.05
+        );
+        c.stroke();
+      }
+      c.strokeStyle = alpha(MAT.lavaHot, 0.75);
+      c.lineWidth = Math.max(1, U2 * 0.028);
+      c.beginPath();
+      c.moveTo(X + rimW * side * 0.2, topY + rimW * 0.2);
+      c.quadraticCurveTo(X + baseW * side * 0.48, baseY - U2 * 1.05, X + baseW * side * 0.64, baseY - U2 * 0.3);
+      c.stroke();
+    }
+    if (P.winter) {
+      c.fillStyle = alpha(MAT.snow, 0.7);
+      fillPoly(c, [
+        X - rimW * 1.05,
+        topY + U2 * 0.5,
+        X - baseW * 0.55,
+        baseY - U2 * 0.2,
+        X - baseW * 0.85,
+        baseY - U2 * 0.05,
+        X - rimW * 1.3,
+        topY + U2 * 0.75
+      ], alpha(MAT.snow, 0.7));
+    }
+  }
+  function drawCanyon(c, X, Y, U2, P, season, D, r) {
+    const ang = r[0] * Math.PI;
+    const dx = Math.cos(ang), dy = Math.sin(ang) * 0.7;
+    const nx = -dy, ny = dx;
+    const L = U2 * 3.4;
+    const N = 7;
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N - 0.5;
+      const wob = (r[1 + i] - 0.5) * U2 * 0.5;
+      pts.push({
+        x: X + dx * L * t * 2 + nx * wob,
+        y: Y + dy * L * t * 2 + ny * wob,
+        w: U2 * (0.42 + 0.26 * Math.cos(t * 3))
+      });
+    }
+    ground(c, X, Y, L * 1.05, L * 0.7, MAT.ochreLo, 0.22);
+    const edge = (k) => {
+      c.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const px = p.x + nx * p.w * k, py = p.y + ny * p.w * k;
+        if (i === 0) c.moveTo(px, py);
+        else c.lineTo(px, py);
+      }
+      for (let i = pts.length - 1; i >= 0; i--) {
+        const p = pts[i];
+        c.lineTo(p.x - nx * p.w * k, p.y - ny * p.w * k);
+      }
+      c.closePath();
+    };
+    edge(1.55);
+    c.fillStyle = alpha(MAT.ochre, 0.5);
+    c.fill();
+    const g2 = c.createLinearGradient(X - nx * U2 * 0.8, Y - ny * U2 * 0.8, X + nx * U2 * 0.8, Y + ny * U2 * 0.8);
+    g2.addColorStop(0, MAT.ochreHi);
+    g2.addColorStop(0.35, MAT.band);
+    g2.addColorStop(0.72, mul(MAT.ochreLo, 0.55));
+    g2.addColorStop(1, mul(MAT.ochreLo, 0.75));
+    edge(1);
+    c.fillStyle = g2;
+    c.fill();
+    edge(0.42);
+    c.fillStyle = mul(MAT.ochreLo, 0.28);
+    c.fill();
+    if (D >= 1) {
+      c.strokeStyle = alpha(P.sand, 0.35);
+      c.lineWidth = Math.max(1, U2 * 0.05);
+      c.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (i === 0) c.moveTo(p.x, p.y);
+        else c.lineTo(p.x, p.y);
+      }
+      c.stroke();
+      c.strokeStyle = alpha(MAT.band, 0.45);
+      c.lineWidth = Math.max(1, U2 * 0.035);
+      for (const k of [0.72, 1.2]) {
+        c.beginPath();
+        for (let i = 0; i < pts.length; i++) {
+          const p = pts[i];
+          const px = p.x - nx * p.w * k, py = p.y - ny * p.w * k;
+          if (i === 0) c.moveTo(px, py);
+          else c.lineTo(px, py);
+        }
+        c.stroke();
+      }
+    }
+    c.strokeStyle = alpha(MAT.ochreHi, 0.8);
+    c.lineWidth = Math.max(1, U2 * 0.05);
+    c.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const px = p.x - nx * p.w * 1.02, py = p.y - ny * p.w * 1.02;
+      if (i === 0) c.moveTo(px, py);
+      else c.lineTo(px, py);
+    }
+    c.stroke();
+  }
+  function drawWaterfall(c, X, Y, U2, P, season, D, r) {
+    const topY = Y - U2 * 1.35, botY = Y + U2 * 0.25;
+    const w = U2 * 1.5;
+    fillPoly(c, [X - w, topY, X + w, topY, X + w * 1.1, botY, X - w * 1.05, botY], P.rockLo);
+    fillPoly(c, [X - w, topY, X + w, topY, X + w * 0.96, topY + U2 * 0.18, X - w * 0.98, topY + U2 * 0.2], P.rockHi);
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.basaltLo, 0.4);
+      c.lineWidth = Math.max(1, U2 * 0.035);
+      for (let i = 1; i <= 2; i++) {
+        const yy = topY + (botY - topY) * (i / 3);
+        c.beginPath();
+        c.moveTo(X - w * (0.95 + r[i] * 0.1), yy);
+        c.lineTo(X + w * (0.9 + r[i + 2] * 0.15), yy + U2 * 0.06);
+        c.stroke();
+      }
+    }
+    c.fillStyle = P.water;
+    c.beginPath();
+    c.ellipse(X, topY - U2 * 0.02, w * 0.85, U2 * 0.18, 0, 0, 7);
+    c.fill();
+    const fw = U2 * 0.42;
+    fillPoly(
+      c,
+      [X - fw * 0.7, topY, X + fw * 0.7, topY, X + fw * 1.15, botY, X - fw * 1.1, botY],
+      alpha(MAT.foam, 0.9)
+    );
+    if (D >= 1) {
+      c.strokeStyle = alpha("#ffffff", 0.55);
+      c.lineWidth = Math.max(1, U2 * 0.045);
+      for (let i = 0; i < 3; i++) {
+        const k = (i - 1) * 0.42;
+        c.beginPath();
+        c.moveTo(X + fw * k * 0.7, topY + U2 * 0.05);
+        c.quadraticCurveTo(X + fw * k, (topY + botY) / 2, X + fw * k * 1.15, botY - U2 * 0.08);
+        c.stroke();
+      }
+    }
+    c.fillStyle = P.deep;
+    c.beginPath();
+    c.ellipse(X, botY + U2 * 0.05, U2 * 0.85, U2 * 0.4, 0, 0, 7);
+    c.fill();
+    c.strokeStyle = alpha(MAT.foam, 0.65);
+    c.lineWidth = Math.max(1, U2 * 0.06);
+    c.beginPath();
+    c.ellipse(X, botY + U2 * 0.05, U2 * 0.5, U2 * 0.22, 0, 0, 7);
+    c.stroke();
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.foam, 0.3);
+      c.lineWidth = Math.max(1, U2 * 0.035);
+      c.beginPath();
+      c.ellipse(X, botY + U2 * 0.08, U2 * 0.78, U2 * 0.34, 0, 0, 7);
+      c.stroke();
+    }
+    c.fillStyle = alpha(MAT.foam, 0.16);
+    c.beginPath();
+    c.ellipse(X, botY - U2 * 0.2, U2 * 1.1, U2 * 0.5, 0, 0, 7);
+    c.fill();
+  }
+  function drawOasis(c, X, Y, U2, P, season, D, r) {
+    ground(c, X, Y, U2 * 2, U2 * 1.35, mul(P.sandLo, 0.9), 0.5);
+    ground(c, X, Y, U2 * 1.5, U2 * 1, MAT.moss, 0.28);
+    const g2 = c.createRadialGradient(X - U2 * 0.2, Y - U2 * 0.12, U2 * 0.05, X, Y, U2 * 0.95);
+    g2.addColorStop(0, P.waterHi);
+    g2.addColorStop(0.55, P.water);
+    g2.addColorStop(1, P.deep);
+    c.fillStyle = g2;
+    c.beginPath();
+    c.ellipse(X, Y, U2 * 0.95, U2 * 0.6, 0, 0, 7);
+    c.fill();
+    c.strokeStyle = alpha(MAT.foam, 0.35);
+    c.lineWidth = Math.max(1, U2 * 0.04);
+    c.beginPath();
+    c.ellipse(X, Y, U2 * 0.95, U2 * 0.6, 0, Math.PI * 0.85, Math.PI * 1.95);
+    c.stroke();
+    if (D >= 1) {
+      c.strokeStyle = alpha(P.leafLo, 0.8);
+      c.lineWidth = Math.max(1, U2 * 0.03);
+      for (let i = 0; i < 7; i++) {
+        const a = r[i] * 6.28;
+        const bx = X + Math.cos(a) * U2 * 1, by = Y + Math.sin(a) * U2 * 0.66;
+        c.beginPath();
+        c.moveTo(bx, by);
+        c.quadraticCurveTo(bx + U2 * 0.03, by - U2 * 0.2, bx + U2 * 0.08, by - U2 * 0.34);
+        c.stroke();
+      }
+    }
+    const n = 3 + (r[10] > 0.5 ? 1 : 0);
+    const list = [];
+    for (let i = 0; i < n; i++) {
+      const a = i / n * 6.28 + r[11] * 6.28;
+      list.push({
+        x: X + Math.cos(a) * U2 * (1.05 + r[12 + i] * 0.35),
+        y: Y + Math.sin(a) * U2 * (0.68 + r[16 + i] * 0.24),
+        h: U2 * (1.25 + r[12 + i] * 0.5),
+        bend: (Math.cos(a) > 0 ? 1 : -1) * (0.14 + r[16 + i] * 0.12)
+      });
+    }
+    list.sort((a, b) => a.y - b.y);
+    for (const p of list) palm(c, p.x, p.y, p.h, p.bend, P, D);
+  }
+  function palm(c, x, y, h, bend, P, D) {
+    contact(c, x + h * 0.18, y + h * 0.03, h * 0.34, h * 0.1, 0.22);
+    const topX = x + h * bend, topY = y - h;
+    c.strokeStyle = mix("#7a5c3c", P.sandLo, 0.25);
+    c.lineWidth = Math.max(1.2, h * 0.085);
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(x, y);
+    c.quadraticCurveTo(x + h * bend * 0.3, y - h * 0.55, topX, topY);
+    c.stroke();
+    if (D >= 1) {
+      c.strokeStyle = alpha("#5a422a", 0.5);
+      c.lineWidth = Math.max(1, h * 0.03);
+      for (let i = 1; i <= 3; i++) {
+        const t = i / 4;
+        const px = x + (topX - x) * t + h * bend * 0.1, py = y - h * t;
+        c.beginPath();
+        c.moveTo(px - h * 0.05, py);
+        c.lineTo(px + h * 0.05, py - h * 0.015);
+        c.stroke();
+      }
+    }
+    const F = 6;
+    for (let i = 0; i < F; i++) {
+      const a = Math.PI * (0.12 + i / (F - 1) * 0.76);
+      const lx = topX - Math.cos(a) * h * 0.62, ly = topY - Math.sin(a) * h * 0.34;
+      c.strokeStyle = i < 2 ? P.leafHi : i < 4 ? P.leaf : P.leafLo;
+      c.lineWidth = Math.max(1.2, h * 0.075);
+      c.beginPath();
+      c.moveTo(topX, topY);
+      c.quadraticCurveTo((topX + lx) / 2, ly - h * 0.16, lx, ly + h * 0.08);
+      c.stroke();
+    }
+    if (D >= 2) {
+      c.fillStyle = alpha("#8a5a2a", 0.85);
+      c.beginPath();
+      c.ellipse(topX + h * 0.06, topY + h * 0.08, h * 0.06, h * 0.05, 0, 0, 7);
+      c.fill();
+    }
+  }
+  function drawSaltflat(c, X, Y, U2, P, season, D, r) {
+    const R = U2 * 2.4;
+    const pts = [];
+    for (let i = 0; i < 12; i++) {
+      const a = i / 12 * 6.28;
+      const k = 0.72 + r[i] * 0.45;
+      pts.push(X + Math.cos(a) * R * k, Y + Math.sin(a) * R * k * 0.66);
+    }
+    c.fillStyle = alpha(MAT.saltLo, 0.5);
+    poly(c, pts.map((v, i) => i % 2 ? v + U2 * 0.06 : v + U2 * 0.05));
+    c.fill();
+    fillPoly(c, pts, MAT.salt);
+    const g2 = c.createRadialGradient(X - R * 0.15, Y - R * 0.1, 0, X, Y, R);
+    g2.addColorStop(0, alpha(MAT.saltHi, 0.9));
+    g2.addColorStop(1, alpha(MAT.saltHi, 0));
+    c.fillStyle = g2;
+    poly(c, pts);
+    c.fill();
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.saltLo, 0.65);
+      c.lineWidth = Math.max(1, U2 * 0.03);
+      const ring = (rad, n, ph) => {
+        const o = [];
+        for (let i = 0; i < n; i++) {
+          const a = i / n * 6.28 + ph;
+          const k = 0.85 + r[i * 3 % 24] * 0.3;
+          o.push({ x: X + Math.cos(a) * rad * k, y: Y + Math.sin(a) * rad * k * 0.66 });
+        }
+        return o;
+      };
+      const r1 = ring(R * 0.34, 6, r[0] * 3), r23 = ring(R * 0.74, 10, r[1] * 3);
+      c.beginPath();
+      for (let i = 0; i < r1.length; i++) {
+        const a = r1[i], b = r1[(i + 1) % r1.length];
+        c.moveTo(a.x, a.y);
+        c.lineTo(b.x, b.y);
+      }
+      for (let i = 0; i < r23.length; i++) {
+        const a = r23[i], b = r23[(i + 1) % r23.length];
+        c.moveTo(a.x, a.y);
+        c.lineTo(b.x, b.y);
+        const m = r1[i % r1.length];
+        c.moveTo(a.x, a.y);
+        c.lineTo(m.x, m.y);
+      }
+      c.stroke();
+    }
+    c.fillStyle = alpha(MAT.brine, 0.75);
+    c.beginPath();
+    c.ellipse(X + R * (r[2] - 0.5) * 0.5, Y + R * (r[3] - 0.5) * 0.4, R * 0.26, R * 0.14, r[4] * 3, 0, 7);
+    c.fill();
+    c.strokeStyle = alpha(MAT.saltHi, 0.8);
+    c.lineWidth = Math.max(1, U2 * 0.035);
+    c.stroke();
+    if (D >= 2) {
+      c.fillStyle = alpha("#ffffff", 0.5);
+      for (let i = 0; i < 5; i++) {
+        const a = Math.PI * (0.9 + r[5 + i] * 0.9);
+        c.beginPath();
+        c.ellipse(X + Math.cos(a) * R * 0.8, Y + Math.sin(a) * R * 0.55, U2 * 0.16, U2 * 0.06, a, 0, 7);
+        c.fill();
+      }
+    }
+  }
+  function drawArch(c, X, Y, U2, P, season, D, r) {
+    const baseY = Y + U2 * 0.1;
+    const topY = baseY - U2 * (1.7 + r[0] * 0.4);
+    const legW = U2 * 0.34;
+    const span = U2 * 1.05;
+    ground(c, X, baseY, U2 * 2.2, U2 * 0.7, MAT.ochreLo, 0.3);
+    contact(c, X + U2 * 0.5, baseY + U2 * 0.08, U2 * 1.7, U2 * 0.34, 0.2);
+    c.beginPath();
+    c.moveTo(X - span - legW, baseY);
+    c.lineTo(X - span - legW * 0.75, topY + U2 * 0.35);
+    c.quadraticCurveTo(X, topY - U2 * 0.35, X + span + legW * 0.75, topY + U2 * 0.35);
+    c.lineTo(X + span + legW, baseY);
+    c.lineTo(X + span - legW * 0.35, baseY);
+    c.lineTo(X + span - legW * 0.5, topY + U2 * 0.62);
+    c.quadraticCurveTo(X, topY + U2 * 0.28, X - span + legW * 0.5, topY + U2 * 0.62);
+    c.lineTo(X - span + legW * 0.3, baseY);
+    c.closePath();
+    c.fillStyle = MAT.ochre;
+    c.fill();
+    c.save();
+    c.clip();
+    c.fillStyle = alpha(MAT.ochreLo, 0.75);
+    c.fillRect(X + span - legW * 0.6, topY - U2, U2 * 2.2, U2 * 4);
+    c.fillRect(X - span + legW * 0.05, topY - U2, legW * 0.45, U2 * 4);
+    if (D >= 1) {
+      c.fillStyle = alpha(MAT.band, 0.35);
+      for (let i = 0; i < 4; i++) {
+        const yy = topY + U2 * (0.15 + i * 0.45 + r[1 + i] * 0.1);
+        c.fillRect(X - span - legW * 1.4, yy, span * 2 + legW * 3, U2 * 0.09);
+      }
+    }
+    c.restore();
+    c.strokeStyle = alpha(MAT.ochreHi, 0.85);
+    c.lineWidth = Math.max(1, U2 * 0.055);
+    c.beginPath();
+    c.moveTo(X - span - legW, baseY);
+    c.lineTo(X - span - legW * 0.75, topY + U2 * 0.35);
+    c.quadraticCurveTo(X - span * 0.4, topY - U2 * 0.2, X - span * 0.05, topY - U2 * 0.28);
+    c.stroke();
+    c.fillStyle = "rgba(38,34,44,0.16)";
+    c.beginPath();
+    c.ellipse(X + U2 * 0.35, baseY + U2 * 0.02, span * 0.9, U2 * 0.16, 0, 0, 7);
+    c.fill();
+    const hood = (hx, hy, hh, hw) => {
+      contact(c, hx + hh * 0.2, hy + hh * 0.03, hw * 1.4, hh * 0.09, 0.2);
+      fillPoly(c, [
+        hx - hw * 0.3,
+        hy,
+        hx + hw * 0.3,
+        hy,
+        hx + hw * 0.22,
+        hy - hh * 0.75,
+        hx - hw * 0.22,
+        hy - hh * 0.75
+      ], MAT.ochre);
+      fillPoly(c, [
+        hx - hw * 0.3,
+        hy,
+        hx - hw * 0.06,
+        hy,
+        hx - hw * 0.05,
+        hy - hh * 0.75,
+        hx - hw * 0.22,
+        hy - hh * 0.75
+      ], MAT.ochreHi);
+      fillPoly(c, [
+        hx - hw * 0.55,
+        hy - hh * 0.75,
+        hx + hw * 0.55,
+        hy - hh * 0.75,
+        hx + hw * 0.42,
+        hy - hh,
+        hx - hw * 0.42,
+        hy - hh
+      ], MAT.ochreLo);
+      fillPoly(c, [
+        hx - hw * 0.55,
+        hy - hh * 0.75,
+        hx - hw * 0.15,
+        hy - hh * 0.75,
+        hx - hw * 0.2,
+        hy - hh,
+        hx - hw * 0.42,
+        hy - hh
+      ], MAT.ochreHi);
+    };
+    hood(X - U2 * (1.9 + r[6] * 0.3), baseY + U2 * 0.12, U2 * (1 + r[7] * 0.4), U2 * 0.38);
+    if (D >= 1) hood(X + U2 * (2 + r[8] * 0.3), baseY - U2 * 0.05, U2 * (0.7 + r[9] * 0.3), U2 * 0.3);
+  }
+  function drawGeyser(c, X, Y, U2, P, season, D, r) {
+    ground(c, X, Y, U2 * 1.5, U2 * 0.9, MAT.sinter, 0.55);
+    for (let i = 2; i >= 0; i--) {
+      const rr = U2 * (0.5 + i * 0.34);
+      c.fillStyle = i % 2 ? MAT.sinter : MAT.sinterHi;
+      c.beginPath();
+      c.ellipse(X, Y - i * U2 * 0.06, rr, rr * 0.6, 0, 0, 7);
+      c.fill();
+      c.strokeStyle = alpha(mul(MAT.sinter, 0.7), 0.6);
+      c.lineWidth = Math.max(1, U2 * 0.03);
+      c.stroke();
+    }
+    c.fillStyle = MAT.hot;
+    c.beginPath();
+    c.ellipse(X, Y - U2 * 0.14, U2 * 0.36, U2 * 0.2, 0, 0, 7);
+    c.fill();
+    c.fillStyle = alpha(mul(MAT.hot, 0.45), 0.9);
+    c.beginPath();
+    c.ellipse(X, Y - U2 * 0.15, U2 * 0.16, U2 * 0.09, 0, 0, 7);
+    c.fill();
+    c.strokeStyle = alpha("#ffffff", 0.5);
+    c.lineWidth = Math.max(1, U2 * 0.03);
+    c.beginPath();
+    c.ellipse(X, Y - U2 * 0.14, U2 * 0.36, U2 * 0.2, 0, Math.PI * 0.9, Math.PI * 2);
+    c.stroke();
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.sinterHi, 0.7);
+      c.lineWidth = Math.max(1, U2 * 0.045);
+      for (let i = 0; i < 3; i++) {
+        const a = Math.PI * (0.1 + r[i] * 0.8);
+        c.beginPath();
+        c.moveTo(X + Math.cos(a) * U2 * 0.3, Y + Math.sin(a) * U2 * 0.16);
+        c.lineTo(X + Math.cos(a) * U2 * 1.1, Y + Math.sin(a) * U2 * 0.62);
+        c.stroke();
+      }
+    }
+    c.fillStyle = alpha("#ffffff", 0.14);
+    for (let i = 0; i < 3; i++) {
+      c.beginPath();
+      c.ellipse(
+        X + (r[4 + i] - 0.5) * U2 * 0.3,
+        Y - U2 * (0.4 + i * 0.42),
+        U2 * (0.22 + i * 0.1),
+        U2 * (0.16 + i * 0.08),
+        0,
+        0,
+        7
+      );
+      c.fill();
+    }
+  }
+  function drawElder(c, X, Y, U2, P, season, D, r) {
+    const baseY = Y + U2 * 0.1;
+    const trunkH = U2 * 1.5, trunkW = U2 * 0.3;
+    const crownY = baseY - trunkH - U2 * 0.9;
+    contact(c, X + U2 * 0.7, baseY + U2 * 0.05, U2 * 1.9, U2 * 0.5, 0.26);
+    ground(c, X, baseY, U2 * 1.7, U2 * 0.8, mul(P.leafLo, 0.8), 0.3);
+    const bark = P.winter ? "#4a4038" : "#5a4432";
+    c.fillStyle = mul(bark, 0.85);
+    for (let i = 0; i < 3; i++) {
+      const k = (i - 1) * 1;
+      fillPoly(c, [
+        X + trunkW * k * 0.7,
+        baseY - trunkH * 0.35,
+        X + trunkW * (k * 1.9 + 0.5),
+        baseY,
+        X + trunkW * (k * 1.9 - 0.5),
+        baseY
+      ], mul(bark, i === 0 ? 1.15 : 0.8));
+    }
+    fillPoly(c, [
+      X - trunkW,
+      baseY,
+      X - trunkW * 0.62,
+      baseY - trunkH,
+      X + trunkW * 0.62,
+      baseY - trunkH,
+      X + trunkW,
+      baseY
+    ], bark);
+    fillPoly(c, [
+      X - trunkW,
+      baseY,
+      X - trunkW * 0.62,
+      baseY - trunkH,
+      X - trunkW * 0.2,
+      baseY - trunkH,
+      X - trunkW * 0.35,
+      baseY
+    ], mul(bark, 1.3));
+    c.strokeStyle = bark;
+    c.lineWidth = Math.max(1.5, U2 * 0.09);
+    c.lineCap = "round";
+    c.beginPath();
+    c.moveTo(X - trunkW * 0.3, baseY - trunkH * 0.8);
+    c.quadraticCurveTo(X - U2 * 0.9, baseY - trunkH * 1.1, X - U2 * 1.25, crownY + U2 * 0.75);
+    c.moveTo(X + trunkW * 0.3, baseY - trunkH * 0.85);
+    c.quadraticCurveTo(X + U2 * 0.9, baseY - trunkH * 1.15, X + U2 * 1.2, crownY + U2 * 0.8);
+    c.stroke();
+    if (P.winter) {
+      c.strokeStyle = bark;
+      for (let i = 0; i < 9; i++) {
+        const a = Math.PI * (1.05 + i / 8 * 0.9);
+        c.lineWidth = Math.max(1, U2 * 0.05);
+        c.beginPath();
+        c.moveTo(X, baseY - trunkH);
+        c.quadraticCurveTo(
+          X + Math.cos(a) * U2 * 0.6,
+          baseY - trunkH + Math.sin(a) * U2 * 0.7,
+          X + Math.cos(a) * U2 * 1.3,
+          baseY - trunkH + Math.sin(a) * U2 * 1.25
+        );
+        c.stroke();
+      }
+      c.strokeStyle = alpha(MAT.snow, 0.75);
+      c.lineWidth = Math.max(1, U2 * 0.03);
+      c.beginPath();
+      c.moveTo(X - U2 * 1.1, crownY + U2 * 1);
+      c.quadraticCurveTo(X, crownY + U2 * 0.45, X + U2 * 1.1, crownY + U2 * 1.05);
+      c.stroke();
+      return;
+    }
+    const autumn = season === 2;
+    const lo = autumn ? "#8a5a24" : P.leafLo;
+    const mid = autumn ? "#b07a2c" : P.leaf;
+    const hi = autumn ? "#d8a44a" : P.leafHi;
+    const blobs = [
+      [0.55, 0.55, 0.95, lo],
+      [-0.6, 0.5, 0.9, lo],
+      [0.05, 0.85, 0.85, lo],
+      [0.3, 0.05, 0.85, mid],
+      [-0.35, -0.05, 0.8, mid],
+      [-0.15, -0.5, 0.62, hi],
+      [-0.55, -0.25, 0.5, hi]
+    ];
+    for (const [bx, by, br, col] of blobs) {
+      c.fillStyle = col;
+      c.beginPath();
+      c.ellipse(X + bx * U2 * 1.25, crownY + by * U2 * 0.85, br * U2 * 0.85, br * U2 * 0.72, 0, 0, 7);
+      c.fill();
+    }
+    c.fillStyle = "rgba(255,255,235,0.16)";
+    c.beginPath();
+    c.ellipse(X - U2 * 0.7, crownY - U2 * 0.45, U2 * 0.42, U2 * 0.28, -0.5, 0, 7);
+    c.fill();
+    if (D >= 1) {
+      smallTree(c, X - U2 * 1.75, baseY + U2 * 0.16, U2 * 0.3, P, season);
+      smallTree(c, X + U2 * 1.7, baseY + U2 * 0.1, U2 * 0.26, P, season);
+    }
+  }
+  function smallTree(c, x, y, r, P, season) {
+    c.fillStyle = "rgba(16,26,12,0.28)";
+    c.beginPath();
+    c.ellipse(x + r * 0.5, y + r * 0.25, r * 0.8, r * 0.28, 0, 0, 7);
+    c.fill();
+    c.fillStyle = "#4d3a28";
+    c.fillRect(x - r * 0.1, y - r * 0.5, r * 0.2, r * 0.75);
+    for (let i = 0; i < 3; i++) {
+      const w = r * (1 - i * 0.26), top = y - r * (0.5 + i * 0.5), base = y - r * (0.05 + i * 0.48);
+      fillPoly(c, [x, top, x + w, base, x - w, base], i === 2 ? P.leafHi : P.leaf);
+    }
+  }
+  function drawRuins(c, X, Y, U2, P, season, D, r) {
+    const baseY = Y + U2 * 0.1;
+    const W = U2 * 2.3;
+    ground(c, X, baseY, W * 1.15, U2 * 0.75, MAT.dirt, 0.28);
+    contact(c, X + U2 * 0.4, baseY + U2 * 0.08, W * 1, U2 * 0.3, 0.2);
+    fillPoly(
+      c,
+      [X - W, baseY, X + W, baseY, X + W * 0.92, baseY - U2 * 0.22, X - W * 0.92, baseY - U2 * 0.22],
+      MAT.ruinLo
+    );
+    fillPoly(c, [
+      X - W * 0.92,
+      baseY - U2 * 0.22,
+      X + W * 0.92,
+      baseY - U2 * 0.22,
+      X + W * 0.84,
+      baseY - U2 * 0.4,
+      X - W * 0.84,
+      baseY - U2 * 0.4
+    ], MAT.ruin);
+    c.fillStyle = alpha(MAT.ruinHi, 0.7);
+    c.fillRect(X - W * 0.84, baseY - U2 * 0.42, W * 1.68, U2 * 0.05);
+    const top = baseY - U2 * 0.4;
+    const cols = 6;
+    const cw = U2 * 0.19;
+    const heights = [];
+    for (let i = 0; i < cols; i++) {
+      const full = r[i] > 0.55;
+      heights.push(full ? U2 * (1.35 + r[i + 6] * 0.2) : U2 * (0.3 + r[i + 6] * 0.75));
+    }
+    if (heights[0] > U2 * 1.2 && heights[1] > U2 * 1.2) {
+      const hh = Math.min(heights[0], heights[1]);
+      c.fillStyle = MAT.ruinLo;
+      c.fillRect(X - W * 0.82, top - hh - U2 * 0.2, cw * 5.2, U2 * 0.19);
+      c.fillStyle = alpha(MAT.ruinHi, 0.8);
+      c.fillRect(X - W * 0.82, top - hh - U2 * 0.2, cw * 5.2, U2 * 0.05);
+    }
+    for (let i = 0; i < cols; i++) {
+      const cx = X - W * 0.78 + i / (cols - 1) * W * 1.56;
+      const hh = heights[i];
+      fillPoly(c, [
+        cx + cw * 0.5,
+        top,
+        cx + cw * 0.5 + hh * 0.55,
+        top + U2 * 0.16,
+        cx + cw * 1.3 + hh * 0.55,
+        top + U2 * 0.2,
+        cx + cw * 1.1,
+        top
+      ], "rgba(38,34,44,0.14)");
+      c.fillStyle = MAT.ruin;
+      c.fillRect(cx - cw * 0.5, top - hh, cw, hh);
+      c.fillStyle = MAT.ruinHi;
+      c.fillRect(cx - cw * 0.5, top - hh, cw * 0.34, hh);
+      c.fillStyle = alpha(MAT.ruinLo, 0.7);
+      c.fillRect(cx + cw * 0.18, top - hh, cw * 0.32, hh);
+      if (hh > U2 * 1.2) {
+        c.fillStyle = MAT.ruinHi;
+        c.fillRect(cx - cw * 0.72, top - hh - U2 * 0.1, cw * 1.44, U2 * 0.1);
+      } else {
+        c.fillStyle = MAT.ruinLo;
+        fillPoly(c, [
+          cx - cw * 0.5,
+          top - hh,
+          cx - cw * 0.1,
+          top - hh - U2 * 0.06,
+          cx + cw * 0.5,
+          top - hh + U2 * 0.03,
+          cx + cw * 0.5,
+          top - hh + U2 * 0.08,
+          cx - cw * 0.5,
+          top - hh + U2 * 0.06
+        ], MAT.ruinLo);
+      }
+      if (D >= 1 && hh > U2 * 0.5) {
+        c.strokeStyle = alpha(MAT.ruinLo, 0.5);
+        c.lineWidth = Math.max(1, U2 * 0.02);
+        for (let k = 1; k * U2 * 0.4 < hh; k++) {
+          c.beginPath();
+          c.moveTo(cx - cw * 0.5, top - k * U2 * 0.4);
+          c.lineTo(cx + cw * 0.5, top - k * U2 * 0.4);
+          c.stroke();
+        }
+      }
+    }
+    const fy = baseY + U2 * 0.22;
+    for (let i = 0; i < 4; i++) {
+      const fx = X - W * 0.5 + i * cw * 1.25 + r[12 + i] * U2 * 0.08;
+      c.fillStyle = MAT.ruin;
+      c.beginPath();
+      c.ellipse(fx, fy, cw * 0.62, cw * 0.5, r[16 + i] * 3, 0, 7);
+      c.fill();
+      c.fillStyle = alpha(MAT.ruinHi, 0.75);
+      c.beginPath();
+      c.ellipse(fx - cw * 0.12, fy - cw * 0.12, cw * 0.34, cw * 0.26, 0, 0, 7);
+      c.fill();
+    }
+    if (D >= 1 && !P.winter) {
+      c.strokeStyle = alpha(P.grassDet, 0.75);
+      c.lineWidth = Math.max(1, U2 * 0.03);
+      for (let i = 0; i < 8; i++) {
+        const gx = X - W * 0.9 + r[i] * W * 1.8, gy = baseY - U2 * (r[i + 8] > 0.5 ? 0.4 : 0.02);
+        c.beginPath();
+        c.moveTo(gx, gy);
+        c.quadraticCurveTo(gx + U2 * 0.03, gy - U2 * 0.09, gx + U2 * 0.07, gy - U2 * 0.16);
+        c.stroke();
+      }
+    }
+    if (P.winter) {
+      c.fillStyle = alpha(MAT.snow, 0.6);
+      c.fillRect(X - W * 0.86, top - U2 * 0.03, W * 1.72, U2 * 0.06);
+    }
+  }
+  function drawMenhir(c, X, Y, U2, P, season, D, r) {
+    const rx = U2 * 1.5, ry = U2 * 0.86;
+    ground(c, X, Y, rx * 1.3, ry * 1.35, MAT.dirt, 0.26);
+    if (D >= 1) {
+      c.strokeStyle = alpha(MAT.dirt, 0.4);
+      c.lineWidth = Math.max(1, U2 * 0.06);
+      c.beginPath();
+      c.ellipse(X, Y, rx * 1.05, ry * 1.05, 0, 0, 7);
+      c.stroke();
+    }
+    const N = 8;
+    const stones = [];
+    for (let i = 0; i < N; i++) {
+      const a = i / N * 6.28 + r[0] * 1.5;
+      stones.push({
+        x: X + Math.cos(a) * rx,
+        y: Y + Math.sin(a) * ry,
+        h: U2 * (0.75 + r[i + 1] * 0.45),
+        w: U2 * (0.16 + r[i + 9] * 0.09),
+        fallen: i === (r[17] * N | 0)
+      });
+    }
+    stones.sort((a, b) => a.y - b.y);
+    c.fillStyle = MAT.menhirLo;
+    c.beginPath();
+    c.ellipse(X, Y, U2 * 0.42, U2 * 0.2, 0, 0, 7);
+    c.fill();
+    c.fillStyle = MAT.menhirHi;
+    c.beginPath();
+    c.ellipse(X - U2 * 0.05, Y - U2 * 0.04, U2 * 0.34, U2 * 0.15, 0, 0, 7);
+    c.fill();
+    for (const s of stones) {
+      contact(c, s.x + s.h * 0.2, s.y + U2 * 0.03, s.w * 1.5, U2 * 0.09, 0.24);
+      if (s.fallen) {
+        c.fillStyle = MAT.menhir;
+        c.beginPath();
+        c.ellipse(s.x, s.y, s.h * 0.5, s.w * 0.7, 0.5, 0, 7);
+        c.fill();
+        c.fillStyle = alpha(MAT.menhirHi, 0.8);
+        c.beginPath();
+        c.ellipse(s.x - s.h * 0.1, s.y - s.w * 0.2, s.h * 0.34, s.w * 0.36, 0.5, 0, 7);
+        c.fill();
+        continue;
+      }
+      const tilt = (s.x - X) * 0.04;
+      fillPoly(c, [
+        s.x - s.w,
+        s.y,
+        s.x + s.w,
+        s.y,
+        s.x + s.w * 0.66 + tilt,
+        s.y - s.h,
+        s.x - s.w * 0.72 + tilt,
+        s.y - s.h * 0.95
+      ], MAT.menhir);
+      fillPoly(c, [
+        s.x - s.w,
+        s.y,
+        s.x - s.w * 0.2,
+        s.y,
+        s.x - s.w * 0.3 + tilt,
+        s.y - s.h * 0.97,
+        s.x - s.w * 0.72 + tilt,
+        s.y - s.h * 0.95
+      ], MAT.menhirHi);
+      if (D >= 1) {
+        c.strokeStyle = alpha(MAT.menhirLo, 0.55);
+        c.lineWidth = Math.max(1, U2 * 0.025);
+        c.beginPath();
+        c.moveTo(s.x - s.w * 0.5, s.y - s.h * 0.35);
+        c.lineTo(s.x + s.w * 0.3, s.y - s.h * 0.55);
+        c.stroke();
+      }
+      if (P.winter) {
+        c.fillStyle = alpha(MAT.snow, 0.8);
+        fillPoly(
+          c,
+          [
+            s.x - s.w * 0.72 + tilt,
+            s.y - s.h * 0.95,
+            s.x + s.w * 0.66 + tilt,
+            s.y - s.h,
+            s.x + s.w * 0.6 + tilt,
+            s.y - s.h * 0.88,
+            s.x - s.w * 0.66 + tilt,
+            s.y - s.h * 0.84
+          ],
+          alpha(MAT.snow, 0.8)
+        );
+      }
+    }
+  }
+  var DRAW = {
+    peak: drawPeak,
+    volcano: drawVolcano,
+    canyon: drawCanyon,
+    waterfall: drawWaterfall,
+    oasis: drawOasis,
+    saltflat: drawSaltflat,
+    arch: drawArch,
+    geyser: drawGeyser,
+    elder: drawElder,
+    ruins: drawRuins,
+    menhir: drawMenhir
+  };
+
   // app/src/render/terrain.js
   var CHUNK = 16;
   var Terrain = class {
@@ -16798,6 +18645,7 @@ ${s}`, "console");
       this.w = 0;
       this.h = 0;
       this.road = null;
+      this.landmarks = new LandmarkLayer(quality);
       this.roadKey = null;
     }
     setQuality(q) {
@@ -16894,6 +18742,7 @@ ${s}`, "console");
         this.season = sim2.seasonIdx;
       }
       if (!this.low) this.buildLow(sim2);
+      if (this.landmarks.ensure(sim2, this.q, this.height)) this.chunks.clear();
       const key = roadKeyOf(sim2);
       if (key !== this.roadKey) {
         this.roadKey = key;
@@ -16977,6 +18826,7 @@ ${s}`, "console");
           this.edges(c, world, pal, x, y, (x - x0) * TP, (y - y0) * TP, TP);
         }
       }
+      this.landmarks.paint(c, sim2, x0, y0, TP, CHUNK);
       return cv;
     }
     // ---- размывание границ биомов ----
@@ -17428,9 +19278,9 @@ ${s}`, "console");
     edges(c, world, pal, x, y, px, py, TP) {
       const W = world.w, H = world.h;
       const t = world.tiles[y * W + x];
-      const isWater2 = t === TILE.WATER || t === TILE.DEEP;
+      const isWater3 = t === TILE.WATER || t === TILE.DEEP;
       const at = (xx, yy) => xx < 0 || yy < 0 || xx >= W || yy >= H ? TILE.DEEP : world.tiles[yy * W + xx];
-      if (isWater2 && this.q.shoreFoam) {
+      if (isWater3 && this.q.shoreFoam) {
         const sides = [[0, -1, 0, 0, 1, 0], [0, 1, 0, 1, 1, 1], [-1, 0, 0, 0, 0, 1], [1, 0, 1, 0, 1, 1]];
         for (const [dx, dy, ax, ay, bx, by] of sides) {
           const n = at(x + dx, y + dy);
@@ -17939,9 +19789,9 @@ ${s}`, "console");
           if (t !== TILE.WATER && t !== TILE.DEEP) continue;
           const ph = hash2(x, y) * 6.28;
           const a = 0.5 + 0.5 * Math.sin(time * 1.6 + ph + x * 0.4 + y * 0.25);
-          const alpha = (t === TILE.DEEP ? 0.05 : 0.11) * a;
-          if (alpha < 0.02) continue;
-          ctx.globalAlpha = alpha;
+          const alpha2 = (t === TILE.DEEP ? 0.05 : 0.11) * a;
+          if (alpha2 < 0.02) continue;
+          ctx.globalAlpha = alpha2;
           const sx = ox + x * z, sy = oy + y * z + z * (0.36 + 0.12 * Math.sin(time + ph));
           ctx.drawImage(this._glint, sx + z * 0.14, sy - z * 0.13, z * 0.72, z * 0.26);
         }
@@ -18205,7 +20055,7 @@ ${s}`, "console");
     const fc = soft.getContext("2d");
     const ctx = { c: bc, gc, soft: fc, W, H, groundY, pal, era, id, detail, seed: hash2(id.length * 7 + era, W) };
     plate({ c, W, groundY });
-    (DRAW[arch] || DRAW.house)(ctx);
+    (DRAW2[arch] || DRAW2.house)(ctx);
     strokeOutline(c, body, Math.max(1, Math.round(W / 100)));
     c.drawImage(body, 0, 0);
     c.drawImage(soft, 0, 0);
@@ -18404,11 +20254,11 @@ ${s}`, "console");
     c.fillStyle = "rgba(20,16,14,0.6)";
     c.fillRect(x + w * 0.12, y - w * 0.1, w * 0.76, w * 0.18);
   }
-  var DRAW = {
+  var DRAW2 = {
     // Каменный век: шатёр из шкур на жердях.
     hut(ctx) {
       const { c, W, groundY, pal, era } = ctx;
-      if (era >= 3) return DRAW.house(ctx);
+      if (era >= 3) return DRAW2.house(ctx);
       const r = W * 0.36, apex = groundY - W * 0.78;
       c.fillStyle = shade(pal.wall, -0.12);
       c.beginPath();
@@ -19387,7 +21237,7 @@ ${s}`, "console");
         c.ellipse(sx, sy, W * 0.07, W * 0.035, 0, 0, 7);
         c.fill();
       }
-      DRAW.campfire(ctx);
+      DRAW2.campfire(ctx);
       c.strokeStyle = shade(pal.trim, -0.3);
       c.lineWidth = Math.max(2, W * 0.035);
       c.beginPath();
@@ -19928,9 +21778,9 @@ ${s}`, "console");
   }
   function drawBeast(c, W, H, mammoth, frame2, detail) {
     const body = mammoth ? "#6b4f35" : "#a9825a";
-    const dark = mix(body, "#000000", 0.3);
-    const light = mix(body, "#ffffff", 0.18);
-    const ground = H * 0.93;
+    const dark = mix2(body, "#000000", 0.3);
+    const light = mix2(body, "#ffffff", 0.18);
+    const ground2 = H * 0.93;
     const swing = frame2 ? 0.34 : -0.34;
     const bodyY = mammoth ? H * 0.44 : H * 0.5;
     const bodyW = W * (mammoth ? 0.56 : 0.58), bodyH = H * (mammoth ? 0.38 : 0.3);
@@ -19943,7 +21793,7 @@ ${s}`, "console");
       c.lineCap = "round";
       c.beginPath();
       c.moveTo(hx2, bodyY + bodyH * 0.3);
-      c.lineTo(hx2 + Math.sin(s) * H * 0.16, ground);
+      c.lineTo(hx2 + Math.sin(s) * H * 0.16, ground2);
       c.stroke();
     }
     const g2 = c.createLinearGradient(0, bodyY - bodyH / 2, 0, bodyY + bodyH / 2);
@@ -19970,7 +21820,7 @@ ${s}`, "console");
       c.lineWidth = H * 0.07;
       c.beginPath();
       c.moveTo(hx + W * 0.09, hy + H * 0.06);
-      c.quadraticCurveTo(hx + W * 0.2, hy + H * 0.2, hx + W * 0.14, ground - H * 0.06);
+      c.quadraticCurveTo(hx + W * 0.2, hy + H * 0.2, hx + W * 0.14, ground2 - H * 0.06);
       c.stroke();
       c.strokeStyle = "#e6ddc6";
       c.lineWidth = H * 0.045;
@@ -20080,7 +21930,7 @@ ${s}`, "console");
       c.scale(-1, 1);
     }
     const cx = W / 2;
-    const ground = H * 0.955;
+    const ground2 = H * 0.955;
     const bob = -H * 0.014 * (0.5 + 0.5 * Math.cos(2 * t));
     const hipY = H * 0.615 + bob;
     const shoY = H * 0.345 + bob;
@@ -20091,9 +21941,9 @@ ${s}`, "console");
     const armSpread = side ? H * 0.01 : H * 0.086;
     const skin = lk.skin, skinDark = lk.shade;
     const cloth = pr.col;
-    const clothDark = mix(cloth, "#000000", 0.32);
+    const clothDark = mix2(cloth, "#000000", 0.32);
     const era = wear;
-    const pants = wear.kind === "toga" ? mix(era.base, "#ffffff", 0.1) : mix(era.base, "#000000", 0.18);
+    const pants = wear.kind === "toga" ? mix2(era.base, "#ffffff", 0.1) : mix2(era.base, "#000000", 0.18);
     const legW = H * 0.062, armW = H * 0.05;
     const legPose = (ph) => {
       const th = 0.44 * Math.sin(ph);
@@ -20109,12 +21959,12 @@ ${s}`, "console");
       const kx = hx + Math.sin(p.th) * thigh * fore, ky = hy + Math.cos(p.th) * thigh;
       const a2 = p.th + p.kn;
       const fx = kx + Math.sin(a2) * shin * fore, fy = ky + Math.cos(a2) * shin;
-      const col = dark ? mix(pants, "#000000", 0.3) : pants;
+      const col = dark ? mix2(pants, "#000000", 0.3) : pants;
       capsule(c, hx, hy, kx, ky, legW, col);
       capsule(c, kx, ky, fx, fy, legW * 0.88, col);
-      c.fillStyle = dark ? mix(era.trim, "#000000", 0.35) : mix(era.trim, "#000000", 0.12);
+      c.fillStyle = dark ? mix2(era.trim, "#000000", 0.35) : mix2(era.trim, "#000000", 0.12);
       c.beginPath();
-      c.ellipse(fx + (side ? legW * 0.35 : 0), Math.min(fy + legW * 0.1, ground), legW * (side ? 0.78 : 0.6), legW * 0.42, 0, 0, 7);
+      c.ellipse(fx + (side ? legW * 0.35 : 0), Math.min(fy + legW * 0.1, ground2), legW * (side ? 0.78 : 0.6), legW * 0.42, 0, 0, 7);
       c.fill();
     };
     drawLeg(L[0], true);
@@ -20126,7 +21976,7 @@ ${s}`, "console");
       const ex = hx + Math.sin(p.up) * H * 0.15 * fore, ey = hy + Math.cos(p.up) * H * 0.15;
       const a2 = p.up + p.el;
       const wx = ex + Math.sin(a2) * H * 0.14 * fore, wy = ey + Math.cos(a2) * H * 0.14;
-      const sl = mix(sleeve, "#000000", dark ? 0.34 : 0.13);
+      const sl = mix2(sleeve, "#000000", dark ? 0.34 : 0.13);
       capsule(c, hx, hy, ex, ey, armW, sl);
       const bare = era.skinArms;
       capsule(c, ex, ey, wx, wy, armW * 0.86, bare ? dark ? skinDark : skin : sl);
@@ -20149,14 +21999,14 @@ ${s}`, "console");
     const h = hipY - shoY;
     const x = cx - w / 2;
     const g2 = c.createLinearGradient(x, 0, x + w, 0);
-    g2.addColorStop(0, mix(cloth, "#ffffff", 0.16));
+    g2.addColorStop(0, mix2(cloth, "#ffffff", 0.16));
     g2.addColorStop(0.55, cloth);
     g2.addColorStop(1, clothDark);
     c.fillStyle = g2;
     roundRect(c, x, shoY, w, h * 1.06, w * 0.32);
     c.fill();
     if (era.kind === "fur") {
-      c.fillStyle = mix(era.base, "#000000", 0.12);
+      c.fillStyle = mix2(era.base, "#000000", 0.12);
       c.beginPath();
       c.moveTo(x, hipY - h * 0.18);
       for (let i = 0; i <= 4; i++) {
@@ -20166,7 +22016,7 @@ ${s}`, "console");
       c.lineTo(x + w, hipY - h * 0.18);
       c.closePath();
       c.fill();
-      c.fillStyle = mix(era.base, "#ffffff", 0.3);
+      c.fillStyle = mix2(era.base, "#ffffff", 0.3);
       c.beginPath();
       c.ellipse(cx, shoY + h * 0.06, w * 0.6, h * 0.13, 0, 0, 7);
       c.fill();
@@ -20176,7 +22026,7 @@ ${s}`, "console");
       c.fillStyle = "rgba(255,255,255,0.16)";
       c.fillRect(cx - w * 0.05, shoY + h * 0.08, w * 0.1, h * 0.5);
     } else if (era.kind === "toga") {
-      c.fillStyle = mix(era.base, "#ffffff", 0.25);
+      c.fillStyle = mix2(era.base, "#ffffff", 0.25);
       c.beginPath();
       c.moveTo(x, shoY + h * 0.08);
       c.lineTo(x + w, shoY + h * 0.42);
@@ -20219,12 +22069,12 @@ ${s}`, "console");
       c.ellipse(cx, shoY + h * 0.05, w * 0.42, h * 0.1, 0, 0, 7);
       c.fill();
     } else if (era.kind === "robe") {
-      c.fillStyle = mix(era.base, "#ffffff", 0.08);
+      c.fillStyle = mix2(era.base, "#ffffff", 0.08);
       c.fillRect(cx - w * 0.34, shoY + h * 0.3, w * 0.68, h * 0.8);
       c.fillStyle = era.trim;
       c.fillRect(x, shoY + h * 0.58, w, h * 0.1);
     } else if (era.kind === "overall") {
-      c.fillStyle = mix(era.base, "#000000", 0.05);
+      c.fillStyle = mix2(era.base, "#000000", 0.05);
       c.fillRect(x, shoY + h * 0.45, w, h * 0.61);
       c.fillStyle = cloth;
       c.fillRect(cx - w * 0.34, shoY + h * 0.05, w * 0.14, h * 0.45);
@@ -20232,7 +22082,7 @@ ${s}`, "console");
       c.fillStyle = era.trim;
       c.fillRect(x, shoY + h * 0.42, w, H * 0.012);
     } else if (era.kind === "suit") {
-      c.fillStyle = mix(era.base, "#ffffff", 0.2);
+      c.fillStyle = mix2(era.base, "#ffffff", 0.2);
       roundRect(c, x, shoY, w, h * 1.02, w * 0.36);
       c.fill();
       c.fillStyle = cloth;
@@ -20241,7 +22091,7 @@ ${s}`, "console");
       c.beginPath();
       c.arc(cx + w * 0.2, shoY + h * 0.32, w * 0.1, 0, 7);
       c.fill();
-      c.fillStyle = mix(era.base, "#000000", 0.25);
+      c.fillStyle = mix2(era.base, "#000000", 0.25);
       roundRect(c, cx - w * 0.62, shoY + h * 0.1, w * 0.24, h * 0.6, w * 0.1);
       c.fill();
     }
@@ -20252,7 +22102,7 @@ ${s}`, "console");
     c.fillStyle = skinDark;
     c.fillRect(cx - r * 0.28, cy + r * 0.5, r * 0.56, r * 0.6);
     const g2 = c.createRadialGradient(cx - r * 0.3, cy - r * 0.35, r * 0.1, cx, cy, r * 1.15);
-    g2.addColorStop(0, mix(skin, "#ffffff", 0.22));
+    g2.addColorStop(0, mix2(skin, "#ffffff", 0.22));
     g2.addColorStop(1, skinDark);
     c.fillStyle = g2;
     c.beginPath();
@@ -20294,21 +22144,21 @@ ${s}`, "console");
       c.fillStyle = era.trim;
       c.fillRect(cx - r, cy - r * 0.5, r * 2, r * 0.28);
     } else if (hd === "cap") {
-      c.fillStyle = mix(era.base, "#000000", 0.25);
+      c.fillStyle = mix2(era.base, "#000000", 0.25);
       c.beginPath();
       c.ellipse(cx, cy - r * 0.35, r * 1.02, r * 0.72, 0, Math.PI, 0);
       c.fill();
       c.fillRect(cx - r * 1.02, cy - r * 0.4, r * 2.04, r * 0.2);
     } else if (hd === "helm") {
-      c.fillStyle = mix(era.base, "#ffffff", 0.15);
+      c.fillStyle = mix2(era.base, "#ffffff", 0.15);
       c.beginPath();
       c.ellipse(cx, cy - r * 0.2, r * 1.08, r * 0.98, 0, Math.PI, 0);
       c.fill();
       c.fillRect(cx - r * 1.08, cy - r * 0.24, r * 2.16, r * 0.24);
-      c.fillStyle = mix(era.base, "#000000", 0.3);
+      c.fillStyle = mix2(era.base, "#000000", 0.3);
       if (!side) c.fillRect(cx - r * 0.1, cy - r * 0.3, r * 0.2, r * 0.9);
     } else if (hd === "hat") {
-      c.fillStyle = mix(era.base, "#000000", 0.35);
+      c.fillStyle = mix2(era.base, "#000000", 0.35);
       c.beginPath();
       c.ellipse(cx, cy - r * 0.42, r * 1.5, r * 0.3, 0, 0, 7);
       c.fill();
@@ -20409,7 +22259,7 @@ ${s}`, "console");
       c.lineTo(tx - u * 0.035, ty + u * 0.02);
       c.closePath();
       c.fill();
-      c.fillStyle = mix(era.trim, "#000000", 0.1);
+      c.fillStyle = mix2(era.trim, "#000000", 0.1);
       c.beginPath();
       c.ellipse(backHand.x, backHand.y - u * 0.04, u * 0.075, u * 0.1, 0, 0, 7);
       c.fill();
@@ -20475,7 +22325,7 @@ ${s}`, "console");
     const m = col.match(/-?\d+/g);
     return [+m[0], +m[1], +m[2]];
   }
-  function mix(c1, c2, k) {
+  function mix2(c1, c2, k) {
     const a = rgb(c1), b = rgb(c2);
     return `rgb(${Math.round(a[0] * (1 - k) + b[0] * k)},${Math.round(a[1] * (1 - k) + b[1] * k)},${Math.round(a[2] * (1 - k) + b[2] * k)})`;
   }
@@ -21986,11 +23836,11 @@ ${s}`, "console");
             }
           }
           const edge = clamp012(d / (0.9 * inv + 1e-3));
-          const alpha = (0.6 + 0.4 * sstep(d / 1)) * Math.min(1, edge);
+          const alpha2 = (0.6 + 0.4 * sstep(d / 1)) * Math.min(1, edge);
           pB[o] = r;
           pB[o + 1] = g2;
           pB[o + 2] = b;
-          pB[o + 3] = alpha * 255;
+          pB[o + 3] = alpha2 * 255;
           if (d < 1.25) {
             const scal = this._grid(wob, gw, gh, wx * 2 + 61, wy * 2 + 29);
             const aA = foamBand(d, 0.1 + scal * 0.1, 0.3);
@@ -22156,10 +24006,10 @@ ${s}`, "console");
     // поэтому между ними нет ни щели, ни двойного наложения полупрозрачной воды.
     // sox/soy — начало источника в пикселях выпечки. Для карты воды (base, ice)
     // это ноль, для буфера сборки — левый верхний угол собранной области.
-    _blit(ctx, src, ox, oy, z, S, alpha, cw, ch, sox = 0, soy = 0) {
-      if (!src || alpha <= 4e-3) return;
+    _blit(ctx, src, ox, oy, z, S, alpha2, cw, ch, sox = 0, soy = 0) {
+      if (!src || alpha2 <= 4e-3) return;
       const prev = ctx.globalAlpha;
-      ctx.globalAlpha = prev * Math.min(1, alpha);
+      ctx.globalAlpha = prev * Math.min(1, alpha2);
       for (let i = 0; i < this._nRuns; i++) {
         const r = this._runs[i];
         let t0x = r.x0, t1x = r.x1 + 1, t0y = r.y0, t1y = r.y1 + 1;
@@ -22301,11 +24151,11 @@ ${s}`, "console");
     }
     // Заливка паттерном со смещением. Паттерн привязан к координатам буфера, то
     // есть к миру: волна не «плывёт» при панораме и не дёргается при зуме.
-    _pattern(c, pat, rx, ry, rw, rh, offx, offy, alpha) {
-      if (!pat || alpha <= 4e-3) return;
+    _pattern(c, pat, rx, ry, rw, rh, offx, offy, alpha2) {
+      if (!pat || alpha2 <= 4e-3) return;
       const N = WAVE_TEX;
       const dx = (Math.round(offx) % N + N) % N, dy = (Math.round(offy) % N + N) % N;
-      c.globalAlpha = Math.min(1, alpha);
+      c.globalAlpha = Math.min(1, alpha2);
       c.translate(dx, dy);
       c.fillStyle = pat;
       c.fillRect(rx - dx, ry - dy, rw, rh);
@@ -22577,7 +24427,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -23307,7 +25157,7 @@ ${s}`, "console");
   function moistAt(x, y) {
     return noise2(x * 0.07 + 77.3, y * 0.07 + 31.9);
   }
-  function pick(r, weights) {
+  function pick2(r, weights) {
     let sum = 0;
     for (let i = 1; i < weights.length; i += 2) sum += weights[i];
     let t = r * sum;
@@ -23414,7 +25264,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp13(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp15(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -23451,7 +25301,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp13(x >> 2, 0, this.pw - 1), gy = clamp13(y >> 2, 0, this.ph - 1);
+      const gx = clamp15(x >> 2, 0, this.pw - 1), gy = clamp15(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -23470,7 +25320,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp13(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp15(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -23574,17 +25424,17 @@ ${s}`, "console");
     forestSpecies(r, warm, wet, water, era, p) {
       if (water && wet > 0.5) return r < 0.6 ? SP.willow : SP.poplar;
       if (era >= 6 && era <= 7 && p > 0.55 && r > 0.88) return SP.dead;
-      if (warm < 0.3) return pick(r, [SP.spruce, 0.62, SP.pine, 0.38]);
-      if (warm < 0.54) return pick(r, [SP.spruce, 0.26, SP.birch, 0.3, SP.pine, 0.16, SP.oak, 0.16, SP.maple, 0.12]);
-      if (warm < 0.78) return pick(r, [SP.oak, 0.34, SP.maple, 0.24, SP.birch, 0.16, SP.poplar, 0.16, SP.pine, 0.1]);
-      return pick(r, [SP.acacia, 0.46, SP.oak, 0.26, SP.palm, wet > 0.55 ? 0.18 : 0.06, SP.maple, 0.12]);
+      if (warm < 0.3) return pick2(r, [SP.spruce, 0.62, SP.pine, 0.38]);
+      if (warm < 0.54) return pick2(r, [SP.spruce, 0.26, SP.birch, 0.3, SP.pine, 0.16, SP.oak, 0.16, SP.maple, 0.12]);
+      if (warm < 0.78) return pick2(r, [SP.oak, 0.34, SP.maple, 0.24, SP.birch, 0.16, SP.poplar, 0.16, SP.pine, 0.1]);
+      return pick2(r, [SP.acacia, 0.46, SP.oak, 0.26, SP.palm, wet > 0.55 ? 0.18 : 0.06, SP.maple, 0.12]);
     }
     openSpecies(r, warm, wet, water, era, p) {
       if (era >= 3 && p > 0.34 && r < 0.42) return SP.fruit;
       if (water) return r < 0.55 ? SP.willow : SP.poplar;
       if (warm < 0.32) return r < 0.6 ? SP.spruce : SP.birch;
-      if (warm < 0.6) return pick(r, [SP.oak, 0.34, SP.birch, 0.28, SP.maple, 0.2, SP.poplar, 0.18]);
-      return pick(r, [SP.acacia, 0.44, SP.oak, 0.28, SP.poplar, 0.16, SP.palm, warm > 0.82 ? 0.12 : 0.02]);
+      if (warm < 0.6) return pick2(r, [SP.oak, 0.34, SP.birch, 0.28, SP.maple, 0.2, SP.poplar, 0.18]);
+      return pick2(r, [SP.acacia, 0.44, SP.oak, 0.28, SP.poplar, 0.16, SP.palm, warm > 0.82 ? 0.12 : 0.02]);
     }
     // ---- заведение растения ------------------------------------------------
     addTree(out, x, y, sp, season, era, p, ra, rb) {
@@ -23701,7 +25551,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp13(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp15(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -23856,7 +25706,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -24193,7 +26043,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp14(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp16(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -24210,10 +26060,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp14(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp14(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp16(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp16(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp14(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp16(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -24225,8 +26075,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp14(
-        nLand ? lapsArr[clamp14(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp16(
+        nLand ? lapsArr[clamp16(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -24237,8 +26087,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp14(i0, 0, w - 1);
-        this.txB[sx] = clamp14(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp16(i0, 0, w - 1);
+        this.txB[sx] = clamp16(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -24246,8 +26096,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp14(i0 - 1, 0, w - 1), b = row + clamp14(i0, 0, w - 1);
-          const c = row + clamp14(i0 + 1, 0, w - 1), d = row + clamp14(i0 + 2, 0, w - 1);
+          const a = row + clamp16(i0 - 1, 0, w - 1), b = row + clamp16(i0, 0, w - 1);
+          const c = row + clamp16(i0 + 1, 0, w - 1), d = row + clamp16(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -24288,12 +26138,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp14(j0 - 1, 0, h - 1) * SW, rb = clamp14(j0, 0, h - 1) * SW;
-        const rc = clamp14(j0 + 1, 0, h - 1) * SW, rd = clamp14(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp16(j0 - 1, 0, h - 1) * SW, rb = clamp16(j0, 0, h - 1) * SW;
+        const rc = clamp16(j0 + 1, 0, h - 1) * SW, rd = clamp16(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp14(jy, 0, h - 1) * w, jB = clamp14(jy + 1, 0, h - 1) * w;
+        const jA = clamp16(jy, 0, h - 1) * w, jB = clamp16(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -24343,9 +26193,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp14(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp14(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp16(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp16(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp14(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp16(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -24458,7 +26308,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp14(j0, 0, h - 1) * w, jB = clamp14(j0 + 1, 0, h - 1) * w;
+      const jA = clamp16(j0, 0, h - 1) * w, jB = clamp16(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -24501,7 +26351,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp14(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp16(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -24523,7 +26373,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp14(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp16(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -24599,28 +26449,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp14(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp14(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp14(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp14(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp16(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp16(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp16(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp16(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp14((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp14(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp16((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp16(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp14(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp16(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp14(k, 0, 1);
+        ctx.globalAlpha = clamp16(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -24742,7 +26592,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -24773,7 +26623,7 @@ ${s}`, "console");
     cv.height = Math.max(1, h | 0);
     return cv;
   }
-  function bakeSoft(src, sw, sh, alpha) {
+  function bakeSoft(src, sw, sh, alpha2) {
     const w = Math.max(8, Math.round(sw * 0.5));
     const h = Math.max(8, Math.round(sh * 0.5));
     const padX = Math.max(2, Math.round(w * PAD));
@@ -24799,10 +26649,10 @@ ${s}`, "console");
       uc.drawImage(small, 0, 0, W, H);
       cur = up;
     }
-    if (alpha < 0.999) {
+    if (alpha2 < 0.999) {
       const out = makeCanvas(W, H);
       const oc = out.getContext("2d");
-      oc.globalAlpha = alpha;
+      oc.globalAlpha = alpha2;
       oc.drawImage(cur, 0, 0);
       cur = out;
     }
@@ -24918,8 +26768,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp15(L.shadowLen, 0.45, 2.2);
-      const u = clamp15((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp17(L.shadowLen, 0.45, 2.2);
+      const u = clamp17((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -24979,16 +26829,16 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp15(0.78 / hf, 0.32, 0.6);
+      const band = clamp17(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
-      const mul = this._checkMul(ctx);
+      const mul2 = this._checkMul(ctx);
       const prevOp = ctx.globalCompositeOperation;
-      if (mul) ctx.globalCompositeOperation = "multiply";
-      ctx.globalAlpha = mul ? this.selfA : this.selfA * 0.45;
+      if (mul2) ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = mul2 ? this.selfA : this.selfA * 0.45;
       ctx.drawImage(a.cv, dx, dy + dh * (1 - a.band), dw, dh * a.band);
       ctx.globalAlpha = 1;
-      if (mul) ctx.globalCompositeOperation = prevOp;
+      if (mul2) ctx.globalCompositeOperation = prevOp;
       this.selfs++;
       this.drawn++;
     }
@@ -25085,8 +26935,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp15(Math.round(dw), 12, 256);
-      const h = clamp15(Math.round(dh), 12, 384);
+      const w = clamp17(Math.round(dw), 12, 256);
+      const h = clamp17(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -25096,8 +26946,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp15(Math.round(dw), 12, 256);
-      const h = clamp15(Math.round(dh), 12, 384);
+      const w = clamp17(Math.round(dw), 12, 256);
+      const h = clamp17(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -25110,19 +26960,19 @@ ${s}`, "console");
     // k·h и поднимается к горизонту на m·h. Композиция с базовой матрицей M
     // считается вручную: ctx.transform() умножал бы то же самое, но потребовал
     // бы save/restore, а это две лишние операции со стеком состояний на объект.
-    _cast(ctx, soft, dx, dy, dw, dh, by, alpha, softMul) {
+    _cast(ctx, soft, dx, dy, dw, dh, by, alpha2, softMul) {
       const M = this._base(ctx);
-      if (!M || alpha <= 0) return;
+      if (!M || alpha2 <= 0) return;
       const k = this.k, m = this.m;
       const M0 = M[0], M1 = M[1], M2 = M[2], M3 = M[3], M4 = M[4], M5 = M[5];
       const e = -k * by, f = by * (1 - m);
       const p = soft.pad * (1 + SPREAD_PAD * (this.spread - 1)) * (softMul || 1);
       const rx = dx - dw * p, ry = dy - dh * p;
       const rw = dw * (1 + 2 * p), rh = dh * (1 + 2 * p);
-      const mul = this._checkMul(ctx);
+      const mul2 = this._checkMul(ctx);
       const prevOp = ctx.globalCompositeOperation;
-      if (mul) ctx.globalCompositeOperation = "multiply";
-      ctx.globalAlpha = mul ? alpha : alpha * 0.55;
+      if (mul2) ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = mul2 ? alpha2 : alpha2 * 0.55;
       ctx.setTransform(
         M0,
         M1,
@@ -25134,23 +26984,23 @@ ${s}`, "console");
       ctx.drawImage(soft.cv, rx, ry, rw, rh);
       ctx.setTransform(M0, M1, M2, M3, M4, M5);
       ctx.globalAlpha = 1;
-      if (mul) ctx.globalCompositeOperation = prevOp;
+      if (mul2) ctx.globalCompositeOperation = prevOp;
       this.drawn++;
     }
     // Контактная тень: мягкий эллипс, прижатый к основанию. Он есть всегда,
     // даже ночью и в дождь, — это не тень от солнца, а стык объекта с землёй.
-    _contact(ctx, cx, by, r, alpha) {
-      if (alpha <= 6e-3 || r < 2.5) return;
+    _contact(ctx, cx, by, r, alpha2) {
+      if (alpha2 <= 6e-3 || r < 2.5) return;
       const blob2 = this._blobCv();
       const rw = r * (1 + 0.16 * (this.spread - 1));
       const rh = rw * 0.34;
-      const mul = this._checkMul(ctx);
+      const mul2 = this._checkMul(ctx);
       const prevOp = ctx.globalCompositeOperation;
-      if (mul) ctx.globalCompositeOperation = "multiply";
-      ctx.globalAlpha = mul ? alpha : alpha * 0.55;
+      if (mul2) ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = mul2 ? alpha2 : alpha2 * 0.55;
       ctx.drawImage(blob2, cx - rw, by - rh, rw * 2, rh * 2);
       ctx.globalAlpha = 1;
-      if (mul) ctx.globalCompositeOperation = prevOp;
+      if (mul2) ctx.globalCompositeOperation = prevOp;
       this.drawn++;
     }
   };
@@ -25258,7 +27108,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -25271,9 +27121,9 @@ ${s}`, "console");
       return (s >>> 0) / 4294967296;
     };
   }
-  function mkPool(cap, make) {
+  function mkPool(cap, make2) {
     const a = new Array(cap);
-    for (let i = 0; i < cap; i++) a[i] = make();
+    for (let i = 0; i < cap; i++) a[i] = make2();
     return { a, n: 0, cap };
   }
   function take(p) {
@@ -25774,7 +27624,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp16(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp18(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -25876,7 +27726,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp16(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp18(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -26249,7 +28099,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp16(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp18(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -26333,7 +28183,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp16(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp18(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;
@@ -26478,6 +28328,7 @@ ${s}`, "console");
       this.shadows.begin(sim2, dtReal, z, { fog: this.atmo.fogK });
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.richVeg) this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
+      this.terrain.landmarks.drawLive(sim2, ctx, ox, oy, z, cw, ch, this.time);
       if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
       if (sim2.showTerritory) this.drawTerritory(sim2, ctx, ox, oy, z);
       for (const f of sim2.factions) {
@@ -28376,12 +30227,12 @@ ${out}`;
     }
     // кто в поселении даёт этот ресурс — по построенным зданиям, без выдумок
     sourcesOf(id) {
-      const count = /* @__PURE__ */ new Map();
+      const count2 = /* @__PURE__ */ new Map();
       for (const b of this.sim.doneBuildings()) {
         const def = BUILDINGS[b.id];
-        if (def.out && def.out[id]) count.set(def.name, (count.get(def.name) || 0) + 1);
+        if (def.out && def.out[id]) count2.set(def.name, (count2.get(def.name) || 0) + 1);
       }
-      return [...count].map(([n, c]) => `${n}${c > 1 ? " ×" + c : ""}`).join(", ");
+      return [...count2].map(([n, c]) => `${n}${c > 1 ? " ×" + c : ""}`).join(", ");
     }
     tipRes(id) {
       const s = this.sim, meta = RES.find((r) => r.id === id);

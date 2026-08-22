@@ -6,6 +6,7 @@ import { generateWorld, tileAt, isWater, stepToward, findNearestTile, hasNeighbo
 import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, NICKNAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
 import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
 import { memoryEatMult } from './systems/link_memory.js';
+import { wearWorkMult } from './systems/build2.js';
 
 export const DAY_SECONDS = 6;
 const EAT_PER_DAY = 0.7;
@@ -602,7 +603,10 @@ export class Simulation {
     const def = BUILDINGS[b.id];
     const out = def.out || {};
     const gather = this.globalMult('gather') * WEATHER[this.weather].gather;
-    let mult = gather * happyMult;
+    // Ветхое здание работает хуже целого: ниже трети прочности — вполсилы.
+    // Это единственное место, где износ виден игроку числом, а не картинкой,
+    // и именно оно делает ремонт осмысленным, а не украшением.
+    let mult = gather * happyMult * wearWorkMult(this, b);
     if (out.knowledge) mult = this.globalMult('knowledge') * happyMult;
     if (out.gold) mult = this.globalMult('gold') * happyMult;
     if (out.steel) mult = this.globalMult('industry') * happyMult;
