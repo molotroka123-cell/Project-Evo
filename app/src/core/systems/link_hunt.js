@@ -18,33 +18,41 @@
 //   ОБРАТНО: перестали бить ──▶ пугливость тает ──▶ стада возвращаются
 //   ОБРАТНО: вид выбит подчистую ──▶ шрам в летописи (link_memory)
 //
-// ═══ ЧЕГО МЫ ЖДЁМ ОТ herds.js (интерфейс согласуется, файл пишет другой агент) ═══
+// ═══ ЧТО МЫ ЧИТАЕМ ИЗ herds.js (модель стад пишет другой агент) ═══
+//
+// Связь читает состояние ПО ФОРМЕ и понимает обе раскладки полей — ту, что
+// сложилась в herds.js, и ту, о которой договаривались изначально. Ни одно поле
+// не обязательно: чего нет, то заменяется разумной оценкой.
 //
 //   sim.herds = {
-//     v: 1,
-//     day: number,
-//     list: [ herd, ... ],          // допускается и просто массив стад
+//     herds:  [ herd, ... ],        // (или list, или просто массив)
+//     gone:   { kind: day },        // виды, выбитые НАВСЕГДА (herds.js их считает сам)
 //   }
 //   herd = {
-//     id:      string,              // устойчивый между сейвами
-//     species: 'deer' | 'mammoth' | 'boar' | 'aurochs',
-//     head:    number,              // поголовье
-//     x, y:    number,              // центр участка обитания
-//     r:       number,              // радиус участка (клетки)
-//     cap:     number,              // ёмкость участка в головах
-//     fear:    0..1,                // пугливость: 0 спокойно, 1 сторонится людей
-//     tame:    boolean,             // приручено — это уже скот, а не дичь
+//     id:            number|string, // устойчивый между сейвами
+//     kind|species:  'deer' | 'mammoth' | 'boar' | 'aurochs',
+//     n|head:        number,        // поголовье (у herds.js дробное — приплод по долям)
+//     cx,cy | x,y:   number,        // центр участка обитания
+//     fear:          0..1,          // пугливость: 0 спокойно, 1 сторонится людей
+//     r:             number,        // радиус участка; нет — берём из таблицы вида
+//     tame:          boolean,       // необязательное: herds.js прирученное стадо
+//                                   // из списка УБИРАЕТ, поэтому скот считается
+//                                   // по своему счётчику (см. withStock ниже)
 //   }
 //
-// ПОЧЕМУ ЗДЕСЬ НЕТ `import * as HERDS from './herds.js'`. Статический импорт
-// несуществующего модуля роняет не эту связь, а ВЕСЬ integrate.js вместе с
-// партией: ES-модули разрешаются до первой строки кода. Пока herds.js не в
-// дереве, такой импорт означал бы, что игра не запускается ни у кого. Поэтому
-// связь читает стада ПО ФОРМЕ (см. readHerds) — ей достаточно полей выше, и
-// добавлять импорт после появления herds.js не понадобится.
-// Единственное, что стоит заменить на импорт, когда herds.js будет готов, —
-// две наши оценки его модели: REGROW_PER_HEAD (ожидаемый приплод) и таблица
-// SPECIES. Обе помечены словом СОГЛАСОВАТЬ.
+// ЧТО ДЕЛАЕТ herds.js САМ, А МЫ НЕ ПОВТОРЯЕМ: приплод, ёмкость участка, порог
+// живучести, кочёвку по своему участку и объявление вымершего вида (state.gone).
+// Мы читаем его gone и о тех же видах молчим — иначе игрок получил бы две
+// записи об одной беде, ровно как когда-то с мором в летописи.
+//
+// ПОЧЕМУ ЗДЕСЬ НЕТ `import * as HERDS from './herds.js'`. Модель стад пишется
+// параллельно с этой связью, и статический импорт файла, которого в дереве
+// может не оказаться, роняет не эту связь, а ВЕСЬ integrate.js вместе с
+// партией: ES-модули разрешаются до первой строки кода. Поэтому связь читает
+// стада ПО ФОРМЕ (см. readHerds) и переживает и отсутствие модели, и
+// переименование её полей. Числа, которые всё же продублированы (мясо, радиус,
+// приручаемость видов), выровнены по herds.js и помечены СОГЛАСОВАТЬ — если
+// главный разработчик сведёт их в один экспорт, здесь меняются три строки.
 //
 // ЕСЛИ МОДЕЛИ СТАД ЕЩЁ НЕТ, связь всё равно работает: при отсутствии sim.herds
 // каждый зверь из sim.animals считается ОДИНОЧКОЙ — стада в один рог. Бонуса
@@ -64,18 +72,19 @@ import { DAYS_PER_SEASON } from '../data.js';
 import { EAT } from './link_survival.js';
 
 // ---------- Виды ----------
-// СОГЛАСОВАТЬ с herds.js: когда он появится, таблица переезжает туда, а здесь
-// остаётся только battue (это чисто охотничье число, модели стад оно не нужно).
-// battue — насколько вид выгоден в облаве: мамонт кормит долго, но добить его
-// стадом почти нельзя, кабан огрызается и часть добычи уходит на раненых.
+// СОГЛАСОВАТЬ с herds.js: tame, r и meat выровнены по его SPECIES (.tameable,
+// .radius, .meat) — две разные таблицы на одну и ту же дичь означали бы две
+// разные игры в одной партии. Своё здесь только battue: насколько вид выгоден
+// именно в облаве. Мамонт кормит долго, но гнать его стадом почти нельзя;
+// кабан огрызается, и часть добычи уходит на возню с ранеными.
 export const SPECIES = {
-  deer:    { ru: 'олень',     many: 'оленьи стада',  tame: true,  battue: 1.00 },
-  mammoth: { ru: 'мамонт',    many: 'мамонты',       tame: false, battue: 1.25 },
-  boar:    { ru: 'кабан',     many: 'кабаньи стада', tame: false, battue: 0.85 },
-  aurochs: { ru: 'дикий бык', many: 'стада быков',   tame: true,  battue: 1.15 },
+  deer:    { ru: 'олень',     many: 'оленьи стада',  tame: false, battue: 1.00, r: 7, meat: 9 },
+  mammoth: { ru: 'мамонт',    many: 'мамонты',       tame: false, battue: 1.25, r: 9, meat: 55 },
+  boar:    { ru: 'кабан',     many: 'кабаньи стада', tame: false, battue: 0.85, r: 6, meat: 13 },
+  aurochs: { ru: 'дикий бык', many: 'стада быков',   tame: true,  battue: 1.15, r: 8, meat: 24 },
   // Запасной вид для зверя, про которого модель ничего не сказала: без него
   // любая опечатка в species выбрасывала бы голову из всех подсчётов молча.
-  wild:    { ru: 'дичь',      many: 'дичь',          tame: false, battue: 1.00 },
+  wild:    { ru: 'дичь',      many: 'дичь',          tame: false, battue: 1.00, r: 6, meat: 12 },
 };
 
 // ---------- Окно наблюдения ----------
@@ -116,10 +125,12 @@ export const LODGE_MAX = 1.6;                    // потолок: больше
 export const LODGE_FEAR_CUT = 0.35;              // пуганое стадо отодвигается от стоянки
 
 // ---------- Истощение ----------
-// СОГЛАСОВАТЬ с herds.js: сколько голов в день приносит одна голова. 0.012 —
-// это удвоение стада примерно за 60 суток при полном корме. Мы этим числом
-// НИЧЕГО не начисляем, оно нужно только чтобы сказать игроку словами, поспевает
-// ли приплод за добычей. Когда herds.js экспортирует свой прирост — брать его.
+// Сколько голов в день можно брать со стада, не проедая его. Это НЕ приплод из
+// herds.js (там growth 0.014…0.055 на голову): стадо у ёмкости почти не
+// растёт, и наибольшая безопасная добыча у логистического стада — около
+// growth×K/4, то есть при K≈40 и growth 0.03 это ~0.3 головы в сутки, ~0.012 на
+// голову нынешнего поголовья. Мы этим числом НИЧЕГО не начисляем: оно нужно
+// ровно затем, чтобы честно сказать словами, поспевает ли приплод за добычей.
 export const REGROW_PER_HEAD = 0.012;
 // Давление = выбито за окно / сколько за то же окно родится. Единица — ровно на
 // грани, дальше стадо тает.
@@ -206,6 +217,12 @@ export function createHuntMemory() {
     seen: {},         // вид → последний день, когда он ещё водился
     extinct: {},      // вид → день, когда его извели (пишется ОДИН раз)
     tamed: {},        // id стада → день приручения
+    // Скот. herds.js прирученное стадо из своего списка УБИРАЕТ (оно перестало
+    // быть дичью и его модели больше не касается) — и головам нужен хозяин,
+    // иначе приручение означало бы «стадо исчезло». Хозяин здесь: вид → голов.
+    // Это не состояние-которое-переписывается, а итог events приручения: число
+    // меняется только приказом игрока, см. withStock.
+    stock: {},
     said: {},         // ключ рассказа → день (чтобы не бубнить)
     headSeen: 0,      // общее поголовье вчера — запасной способ поймать добычу
     failDays: 0,      // сколько суток подряд охота не кормит того, кто на ней живёт
@@ -232,6 +249,21 @@ export function restoreHuntMemory(data) {
   m.extinct = numMap(data.extinct);
   m.tamed = numMap(data.tamed);
   m.said = numMap(data.said);
+  for (const [k, v] of Object.entries(numMap(data.stock))) {
+    if (v > 0) m.stock[speciesId(k)] = Math.floor(v);
+  }
+  return m;
+}
+
+// Скот прибавился: игрок приручил стадо. Возвращает НОВУЮ память — сама связь
+// в sim по-прежнему не пишет. Зовётся из integrate.js сразу после успешного
+// приручения (хоть нашего, хоть через herds.tameHerd), см. ПОДКЛЮЧЕНИЕ.
+export function withStock(mem, species, heads) {
+  const m = cloneMem(mem && typeof mem === 'object' ? { ...createHuntMemory(), ...mem } : createHuntMemory());
+  const n = Math.floor(numOf(heads, 0));
+  if (!(n > 0)) return m;
+  const s = speciesId(species);
+  m.stock[s] = Math.max(0, (m.stock[s] || 0) + n);
   return m;
 }
 
@@ -276,6 +308,7 @@ export function huntState(sim) {
     hasHunting: hasTech(sim, 'hunting'),
     hasHusbandry: hasTech(sim, 'animal_husbandry'),
     bySpecies: headBySpecies(herds),
+    gone: goneByModel(sim),
   };
 }
 
@@ -293,6 +326,14 @@ export function huntYieldMult(sim, x, y) {
   const h = herdAt(herds, x, y);
   if (!h || h.tame || h.head <= 0) return 1;     // одиночка или скот — бонуса нет
   return round2(battueMult(h, countHunters(sim, x, y, PARTY_RADIUS)));
+}
+
+// Сколько рук у стада прямо сейчас. Отдельная функция, потому что это число
+// нужно не только нам: модель стад считает добычу по числу охотников, а ядро
+// звало её с жёсткой единицей — то есть артельного бонуса в игре не было
+// вовсе, сколько бы народу ни собралось. См. ПОДКЛЮЧЕНИЕ, правка 9.
+export function huntParty(sim, x, y) {
+  return Math.max(1, countHunters(sim, x, y, PARTY_RADIUS));
 }
 
 // Тот же расчёт, но по уже известному числу охотников: им пользуется и сама
@@ -461,20 +502,25 @@ export function huntLinks(sim) {
   }
 
   // ── Скот: постоянный корм вместо разовой добычи ───────────────────────────
+  // Голов две породы: те, что модель ещё держит у себя с пометкой tame, и те,
+  // что она отдала нам при приручении (mem.stock). Складываем, но не дважды:
+  // помеченных tame herds.js у себя не оставляет.
+  const stockHead = sum(Object.values(mem.stock));
+  const tameHead = st.tameHead + stockHead;
   const roomForHead = st.pastures.length * TAME_PER_PASTURE;
-  const fedHead = Math.min(st.tameHead, roomForHead);
-  if (st.tameHead > 0) {
+  const fedHead = Math.min(tameHead, roomForHead);
+  if (tameHead > 0) {
     if (!sameDay) mods.food = round2(fedHead * TAME_FOOD_PER_HEAD);
     if (fedHead > 0) {
       reasons.push({ ru: `Скот у пастбища: ${fedHead} гол. дают ${f2(fedHead * TAME_FOOD_PER_HEAD)} еды в день`, v: round2(fedHead * TAME_FOOD_PER_HEAD) });
     }
-    if (st.tameHead > roomForHead) {
+    if (tameHead > roomForHead) {
       // Потолок приручения: без пастбищ скот кормить негде, и бесконечно
       // приручать стада нельзя — иначе мясо снова стало бы бесплатным.
       reasons.push({
         ru: roomForHead > 0
-          ? `Скота больше, чем прокормит пастбище: ${st.tameHead - roomForHead} гол. впроголодь`
-          : `Скот без пастбища: ${st.tameHead} гол. кормить негде`,
+          ? `Скота больше, чем прокормит пастбище: ${tameHead - roomForHead} гол. впроголодь`
+          : `Скот без пастбища: ${tameHead} гол. кормить негде`,
         v: 0,
       });
     }
@@ -558,6 +604,10 @@ export function huntLinks(sim) {
       if (mem.extinct[species] != null) continue;          // уже записано — ОДИН раз
       if (st.day - mem.seen[species] > EXTINCT_GAP) continue;
       mem.extinct[species] = st.day;
+      // Про этот вид уже сказала модель стад — второй записи не будет ни в
+      // журнале, ни в летописи. Отметку у себя всё равно ставим, иначе завтра
+      // мы попробуем рассказать о нём снова.
+      if (st.gone[species] != null) continue;
       extinctToday.push(species);
       const sp = SPECIES[species] || SPECIES.wild;
       events.push({
@@ -639,7 +689,7 @@ export function huntLinks(sim) {
   const flags = {
     kills30, killsToday: killsToday_, wasHead,
     pressure: round2(pressure),
-    wildHead: st.wildHead, tameHead: st.tameHead, nearHead: st.nearHead,
+    wildHead: st.wildHead, tameHead, stockHead, nearHead: st.nearHead,
     fedHead, roomForHead,
     huntShare: round2(huntShare), availability: round2(availability),
     starveRisk, failDays: mem.failDays,
@@ -750,17 +800,15 @@ function addKill(mem, day, species, n) {
   else mem.kills.push({ d: day, s: species, n });
 }
 
-// Сколько еды в среднем приносит голова. Разброс между видами велик (олень 10,
-// мамонт 40), поэтому берём средневзвешенное по журналу, а не общее число.
-// Числа взяты из makeAnimal (world.js). Это ОЦЕНКА и только для строки «охота
-// кормила N ртов из M»: ни одна крошка еды по этой таблице не начисляется, так
-// что расхождение с моделью стад испортит фразу, но не баланс. Когда herds.js
-// начнёт присылать в отметке о добыче поле food — считать по нему.
+// Сколько еды в среднем приносит голова. Разброс между видами велик (олень 9,
+// мамонт 55), поэтому берём средневзвешенное по журналу, а не общее число.
+// Мясо взято из таблицы SPECIES, выровненной по herds.js. Это ОЦЕНКА и только
+// для строки «охота кормила N ртов из M»: ни одна крошка еды по ней не
+// начисляется, так что расхождение с моделью испортит фразу, но не баланс.
 function meanMeat(mem) {
-  const MEAT = { deer: 10, mammoth: 40, boar: 12, aurochs: 18, wild: 12 };
   let n = 0, food = 0;
-  for (const k of mem.kills) { n += k.n; food += k.n * (MEAT[k.s] || MEAT.wild); }
-  return n > 0 ? food / n : MEAT.wild;
+  for (const k of mem.kills) { n += k.n; food += k.n * (SPECIES[k.s] || SPECIES.wild).meat; }
+  return n > 0 ? food / n : SPECIES.wild.meat;
 }
 
 // Куда шагнёт стадо за сутки. Никакого броска: от поселения по прямой, и не
@@ -794,26 +842,46 @@ function herdAt(herds, x, y) {
   return best;
 }
 
+// Читаем обе раскладки полей (см. шапку). Единственное место, которое придётся
+// тронуть, если herds.js ещё раз переименует поля.
 function readHerds(sim) {
   const raw = sim && sim.herds;
-  const list = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.list) ? raw.list : null);
+  const list = Array.isArray(raw) ? raw
+    : (raw && Array.isArray(raw.herds)) ? raw.herds
+    : (raw && Array.isArray(raw.list)) ? raw.list
+    : null;
   if (!list) return null;
   const out = [];
   for (let i = 0; i < list.length; i++) {
     const h = list[i];
     if (!h || typeof h !== 'object') continue;
-    const head = Math.max(0, Math.floor(numOf(h.head, 0)));
+    const species = speciesId(h.species != null ? h.species : h.kind);
+    // Поголовье у herds.js дробное: приплод копится по долям головы. Для охоты
+    // важны целые туши, поэтому дробь отбрасываем — но ТОЛЬКО в нашем чтении,
+    // модель у себя считает как считает.
+    const head = Math.max(0, Math.floor(numOf(h.head != null ? h.head : h.n, 0)));
     out.push({
       id: String(h.id != null ? h.id : 'h' + i),
-      species: speciesId(h.species),
+      species,
       head,
-      x: numOf(h.x, 0), y: numOf(h.y, 0),
-      r: Math.max(1, numOf(h.r, DEFAULT_RANGE)),
+      x: numOf(h.x != null ? h.x : h.cx, 0),
+      y: numOf(h.y != null ? h.y : h.cy, 0),
+      r: Math.max(1, numOf(h.r, (SPECIES[species] || SPECIES.wild).r || DEFAULT_RANGE)),
       cap: Math.max(0, numOf(h.cap, head)),
       fear: clamp(numOf(h.fear, 0), 0, 1),
       tame: !!h.tame,
     });
   }
+  return out;
+}
+
+// Виды, которые модель стад уже объявила выбитыми. О них мы молчим: herds.js
+// сказал это игроку сам, и его же отчёт уходит шрамом в летопись.
+function goneByModel(sim) {
+  const g = sim && sim.herds && sim.herds.gone;
+  const out = {};
+  if (!g || typeof g !== 'object') return out;
+  for (const k of Object.keys(g)) if (Number.isFinite(g[k])) out[speciesId(k)] = g[k];
   return out;
 }
 
@@ -897,6 +965,11 @@ function cloneMem(m) {
     seen: { ...(m.seen || {}) },
     extinct: { ...(m.extinct || {}) },
     tamed: { ...(m.tamed || {}) },
+    // stock копируется вместе с остальными: без этой строки withStock правил
+    // счётчик скота ПРЯМО в памяти, лежащей в sim, — то самое запрещённое
+    // «модуль мутирует состояние», только через недокопированную ссылку.
+    // Ловится тестом «withStock не трогает переданную память».
+    stock: { ...(m.stock || {}) },
     said: { ...(m.said || {}) },
   };
 }
@@ -969,6 +1042,13 @@ function cap1(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
    пастбище «сработает» только на следующие сутки.
 
      const huntOut = applyHuntLinks(sim);
+
+   ПРО ПОРЯДОК С applyHerds(sim). Модель стад ходит последней, перед памятью,
+   поэтому связь читает поголовье и испуг НА НАЧАЛО суток, а добычу — за эти
+   сутки (её приносят отметки из ядра). Для предупреждений это ровно то, что
+   нужно: «выбито 14 из 40» считается от того стада, которое игрок застал утром.
+   Если главный разработчик поднимет applyHerds выше applyHuntLinks, ничего не
+   сломается — числа станут на сутки свежее, только и всего.
 
 4) ЛЕТОПИСЬ. Якорь — последняя строка systemsNewDay() (1 совпадение):
 
@@ -1056,21 +1136,37 @@ function cap1(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
      }
 
      // Приручение — приказ игрока, а не автоматика. Панель зовёт huntTameList,
-     // кнопка — huntTame.
+     // кнопка — huntTame. Здесь же сходятся два модуля: условия проверяет
+     // link_hunt (он один знает про пастбище), само стадо снимает с карты
+     // herds.js, а головы забирает себе счётчик скота link_hunt — иначе после
+     // приручения стадо просто исчезло бы, ведь herds.js его у себя удаляет.
      export function huntTameList(sim) { return HUNT.tameCandidates(sim); }
      export function huntTame(sim, herdId) {
-       const r = HUNT.tameHerd(sim, herdId);
-       if (!r.ok) { sim.toast?.(r.reason, 'warn'); return r; }
-       const herds = Array.isArray(sim.herds) ? sim.herds
+       const check = HUNT.tameHerd(sim, herdId);
+       if (!check.ok) { sim.toast?.(check.reason, 'warn'); return check; }
+
+       // Есть модель стад — приручает она (у неё свой отчёт и своё состояние).
+       if (sim.herds && Array.isArray(sim.herds.herds)) {
+         const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
+         const rep = HERD.tameHerd(sim.herds, Number(herdId), ctx);
+         if (!rep.ok) { sim.toast?.(rep.reasons[0]?.ru || 'Нельзя', 'warn'); return rep; }
+         sim.herds = rep.state;
+         sim.linkHunt = HUNT.withStock(sim.linkHunt, rep.flags.kind, rep.flags.heads);
+         for (const e of rep.events) sim.addLog(e.text, e.type);
+         return rep;
+       }
+
+       // Модели стад нет (старый мир на sim.animals) — работаем по своей форме.
+       const list = Array.isArray(sim.herds) ? sim.herds
          : (sim.herds && Array.isArray(sim.herds.list) ? sim.herds.list : null);
-       if (herds) {
-         for (const id of r.mods.tame) {
-           const h = herds.find(x => x && String(x.id) === id);
+       if (list) {
+         for (const id of check.mods.tame) {
+           const h = list.find(x => x && String(x.id) === id);
            if (h) { h.tame = true; h.fear = 0; }
          }
        }
-       for (const e of r.events) sim.addLog(e.text, e.type);
-       return r;
+       for (const e of check.events) sim.addLog(e.text, e.type);
+       return check;
      }
 
      // Готовая строка для HUD: «Стада редеют: за месяц выбито 14 гол. из 40…».
@@ -1079,29 +1175,38 @@ function cap1(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
 ═══ simulation.js ═══
 
-8) ИМПОРТ. Якорь — строка 7, импорт интеграции (1 совпадение):
+ВАЖНО ПРО ДВОЙНОЙ СЧЁТ. Модель стад уже подключена, и добычу считает её
+huntHerd: там свои driveBonus (за поголовье), partyBonus (за артель) и скидка
+за испуг. Поэтому huntYieldMult к rep.food применять НЕЛЬЗЯ — прибавка ушла бы
+дважды. В подключённом мире huntYieldMult остаётся показометром для панели
+(«что даст ходка прямо сейчас») и рабочим множителем только там, где модели
+стад нет. А вот чего в ядре действительно нет — это самой артели: см. правку 9.
 
-     import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
+8) ИМПОРТ. Якорь — строка 7 (1 совпадение):
+
+     import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore, herdsNearest, herdsHunt } from './systems/integrate.js';
 
    ДОБАВИТЬ строкой ниже (отдельной строкой, а не в тот же список: связь берётся
    напрямую из своего файла — integrate.js её не переэкспортирует):
 
-     import { huntYieldMult, huntLodgeMult } from './systems/link_hunt.js';
+     import { huntParty, huntLodgeMult } from './systems/link_hunt.js';
 
-9) БОНУС ЗА ОБЛАВУ. Якорь в onArrive, ветка 'hunt' (1 совпадение):
+9) АРТЕЛЬ. Ради этого пункта половина файла и написана. Якорь в onArrive,
+   ветка 'hunt' (1 совпадение):
 
-          this.res.food = Math.min(this.resCap.food, this.res.food + a.food);
+      const rep = herdsHunt(this, t.herd, { hunters: 1, skill: 1 });
 
    ЗАМЕНИТЬ на:
 
-          // Облава на стаде даёт кратно больше одиночного гона: множитель
-          // считает link_hunt по поголовью, числу охотников рядом и пугливости.
-          const meat = a.food * huntYieldMult(this, a.x, a.y);
-          this.res.food = Math.min(this.resCap.food, this.res.food + meat);
-          // Отметка для связи: что, где и сколько взяли за эти сутки.
-          if (this.sys && Array.isArray(this.sys.huntKills)) {
-            this.sys.huntKills.push({ day: this.day, species: a.kind, head: 1, food: meat, x: a.x, y: a.y, herdId: a.herdId || null });
-          }
+      // hunters: 1 означало, что артельного бонуса в игре нет ВОВСЕ: сколько бы
+      // охотников ни сошлось у стада, модель считала одиночный гон и облава
+      // ничем не отличалась от него. Число рук поблизости знает связь охоты.
+      const rep = herdsHunt(this, t.herd, { hunters: huntParty(this, t.x, t.y), skill: 1 });
+      // Отметка для связи: что, где и сколько взяли за эти сутки. Без неё связь
+      // считает добычу по падению поголовья — верно, но без вида зверя.
+      if (rep.heads > 0 && this.sys && Array.isArray(this.sys.huntKills)) {
+        this.sys.huntKills.push({ day: this.day, species: rep.flags.kind, head: rep.heads, food: rep.food, x: t.x, y: t.y, herdId: t.herd });
+      }
 
 10) МЕСТО СТОЯНКИ. Якорь в produceAt (1 совпадение):
 
@@ -1115,5 +1220,16 @@ function cap1(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
     (порядок важен: зимний коэффициент и множитель дичи перемножаются, а не
     подменяют друг друга)
+
+11) ЕСЛИ МОДЕЛИ СТАД В СБОРКЕ НЕТ (старый мир на this.animals) — вместо правки 9
+    применить эту, к прежней ветке добычи:
+
+          const meat = a.food * huntYieldMult(this, a.x, a.y);
+          this.res.food = Math.min(this.resCap.food, this.res.food + meat);
+          if (this.sys && Array.isArray(this.sys.huntKills)) {
+            this.sys.huntKills.push({ day: this.day, species: a.kind, head: 1, food: meat, x: a.x, y: a.y });
+          }
+
+    Обе правки сразу — это двойной бонус. Или 9, или 11.
 
 ────────────────────────────────────────────────────────────────────────────── */

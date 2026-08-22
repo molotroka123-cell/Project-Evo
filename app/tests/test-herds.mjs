@@ -20,7 +20,7 @@ import {
   createHerds, restoreHerds, serializeHerds, herdsContext,
   capacityAt, climateMult, seasonFeed, dailyChange,
   spawnHerds, herdsNewDay, nearestHerd, herdById, herdPoints,
-  huntHerd, tameHerd, herdsSummary, sustainableFood,
+  huntHerd, tameHerd, herdsSummary, sustainableFood, herdsView,
   driveBonus, partyBonus,
 } from '../src/core/systems/herds.js';
 
@@ -493,6 +493,38 @@ console.log('\n--- Сводка для панели ---');
     () => ok(sustainableFood(st, ctx) > 0, `${sustainableFood(st, ctx)}`));
   t('новорасставленные стада не показываются обречёнными',
     () => ok(s.rows.every(r => r.doomed === 0 || r.heads === 0), snap(s.rows)));
+}
+
+console.log('\n--- Снимок для соседних связей (форма из link_hunt.js) ---');
+{
+  const ctx = makeCtx();
+  const st = spawnHerds(createHerds(), ctx, createRng(41)).state;
+  const view = herdsView(st, ctx);
+  t('снимок отдаётся списком с днём', () => ok(Array.isArray(view.list) && view.list.length === st.herds.length, snap({ n: view.list.length })));
+  t('в снимке ровно те поля, которых ждёт соседний модуль', () => {
+    for (const h of view.list) {
+      for (const f of ['id', 'species', 'head', 'x', 'y', 'r', 'cap', 'fear', 'tame']) {
+        ok(h[f] !== undefined, `нет поля ${f}: ${snap(h)}`);
+      }
+      ok(typeof h.id === 'string' && SPECIES[h.species], snap(h));
+      ok(h.tame === false, 'дичь не может быть помечена прирученной');
+    }
+  });
+  t('ёмкость в снимке совпадает с ёмкостью самой модели — двух оценок быть не должно', () => {
+    for (const h of view.list) {
+      const K = capacityAt(ctx, h.species, h.x, h.y);
+      near(h.cap, Math.round(K * 100) / 100, 1e-9, `${h.species}`);
+    }
+  });
+  t('снимок пересчитывается по сезону, а не хранится', () => {
+    const w = herdsView(st, makeCtx({ seasonIdx: WINTER }));
+    ok(w.list[0].cap < view.list[0].cap, `зима ${w.list[0].cap}, лето ${view.list[0].cap}`);
+  });
+  t('снимок ничего не двигает', () => {
+    const b = snap(st); herdsView(st, ctx); ok(snap(st) === b, 'состояние изменено');
+  });
+  t('пустое состояние даёт пустой снимок, а не падение',
+    () => ok(herdsView(null, ctx).list.length === 0, 'снимок пустого состояния'));
 }
 
 console.log('\n--- Сохранение ---');

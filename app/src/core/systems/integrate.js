@@ -29,6 +29,9 @@ import * as INT from './link_intel.js';
 import * as MAS from './link_masters.js';
 import * as GH from './link_ghost.js';
 import * as B2 from './build2.js';
+import * as HERD from './herds.js';
+import { tileAt } from '../world.js';
+import { createRng } from '../rng.js';
 
 // С какого уровня отношений война считается ударом в спину. 20 — это уже не
 // «терпим друг друга», а сложившийся лад: договоры, караваны, общие войны.
@@ -79,6 +82,27 @@ export function installSystems(sim) {
   sim.linkGhost.seed = sim.seed | 0;
   // Строительство: очередь чертежей, износ, ремонт, улучшение на месте.
   sim.build = B2.createBuild();
+  // Стада: дичь возобновляема, но исчерпаема. Ставится ПОСЛЕ мира и ДО первого
+  // дня — иначе первый же охотник не найдёт ни одного стада.
+  sim.herds = HERD.createHerds();
+  {
+    const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
+    // СВОЙ ПОТОК СЛУЧАЙНОСТИ, а не sim.rng. Расстановка стад — это генерация
+    // мира, и она не имеет права сдвигать главный поток: всё, что создаётся
+    // после неё в конструкторе, получило бы другие числа.
+    //
+    // Это не предосторожность, а починка. С sim.rng круговой сейв ломался:
+    // часть состояния держав выводится при конструировании и в файл не
+    // попадает, поэтому сдвинутый поток давал после загрузки другие значения
+    // (sys.emp.sites.fog расходился на двух позициях из многих). Ошибка тихая:
+    // мир выглядит нормальным, а сохранение перестаёт быть точным.
+    //
+    // Свой поток от того же сида оставляет расстановку воспроизводимой —
+    // один сид даёт одни и те же стада, — и при этом главный поток не трогает.
+    const herdRng = createRng((sim.seed ^ 0x48455244) >>> 0);   // 'HERD'
+    const rep = HERD.spawnHerds(sim.herds, ctx, herdRng);
+    sim.herds = rep.state;
+  }
 }
 
 // ---------- Раз в сутки ----------
@@ -121,6 +145,9 @@ export function systemsNewDay(sim) {
   const warOut = applyWarLinks(sim);
   // Память идёт ПОСЛЕДНЕЙ: она записывает то, что породили остальные связи
   // за эти же сутки, и уже завтра держава живёт с оглядкой на записанное.
+  // Стада считаются ДО памяти: вымирание вида — событие, которое память
+  // должна записать в те же сутки.
+  applyHerds(sim);
   applyMemoryLinks(sim, harvestScars(sim, { war: warOut, surv: survOut }));
 }
 
@@ -290,6 +317,7 @@ export function systemsSerialize(sim) {
     intel: sim.linkIntel || null,
     masters: sim.linkMasters || null,
     ghost: sim.linkGhost || null,
+    herds: HERD.serializeHerds(sim.herds),
     build: B2.serializeBuild(sim.build),
   };
 }
@@ -312,6 +340,7 @@ export function systemsRestore(sim, data) {
   sim.linkIntel = INT.restoreIntel(data.intel);
   sim.linkMasters = MAS.restoreMasters(data.masters);
   sim.linkGhost = GH.restoreGhost(data.ghost);
+  sim.herds = HERD.restoreHerds(data.herds);
   sim.build = B2.restoreBuild(data.build);
 }
 
@@ -377,6 +406,11 @@ function harvestScars(sim, ctx) {
   // Голод. Считаем не «мало еды», а состоявшуюся беду: похороны от голода,
   // хлебный бунт, восстание. Иначе шрам копился бы каждую тощую неделю.
   if (sim.starvedDay === day) out.push({ kind: 'famine', scale: 0.55 });
+  // Выбитый вид — это не «минус зверь», а утраченный источник еды навсегда.
+  const HR = sim.sys && sim.sys.herdsReport;
+  if (HR && HR.flags && HR.flags.extinctNow) {
+    for (let i = 0; i < HR.flags.extinctNow.length; i++) out.push({ kind: 'famine', scale: 0.8 });
+  }
   const surv = ctx && ctx.surv;
   if (surv && surv.flags) {
     if (surv.flags.riot) out.push({ kind: 'famine', scale: 1.0 });
@@ -519,6 +553,39 @@ function applyMasterLinks(sim) {
 
 // Строки для панели «Народ»: у кого что в руках и чем рискуем.
 export function mastersPanel(sim) { return MAS.mastersReport(sim); }
+
+// ---------- Стада ----------
+function applyHerds(sim) {
+  if (!sim.herds) return;
+  const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
+  const rep = HERD.herdsNewDay(sim.herds, ctx, sim.rng);
+  sim.herds = rep.state;
+  for (const e of rep.events) {
+    sim.addLog(e.text, e.type === 'bad' ? 'bad' : (e.type === 'good' ? 'good' : 'info'));
+    if (e.cause === 'extinct') sim.addChronicle(e.text);
+  }
+  sim.sys.herdsReport = rep;
+}
+
+export function herdsPanel(sim) {
+  return HERD.herdsSummary(sim.herds, HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y)));
+}
+export function herdsSustainable(sim) {
+  return HERD.sustainableFood(sim.herds, HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y)));
+}
+export function herdsNearest(sim, x, y) {
+  // maxDist обязателен. Без него охотник уходит за пуганым стадом на другой
+  // конец карты и не возвращается неделю, пока поселение голодает рядом с
+  // ягодником. Дальше 26 клеток охота не окупается — пусть идёт собирать.
+  return HERD.nearestHerd(sim.herds, x, y, { minHeads: 1, maxDist: 26 });
+}
+export function herdsHunt(sim, id, opts) {
+  const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
+  const rep = HERD.huntHerd(sim.herds, id, ctx, opts, sim.rng);
+  sim.herds = rep.state;
+  return rep;
+}
+export function herdPoints(sim) { return HERD.herdPoints(sim.herds); }
 
 // Разведка: знание о соседях как ресурс со сроком годности.
 function applyIntelLinks(sim) {

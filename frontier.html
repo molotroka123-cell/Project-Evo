@@ -5799,12 +5799,12 @@
     const out = [];
     if (!cands.length || max <= 0) return out;
     const start = rng ? rng.int(0, cands.length - 1) : 0;
-    let num13 = 1;
+    let num14 = 1;
     for (let k = 0; k < cands.length && out.length < max; k++) {
       const c = cands[(start + k) % cands.length];
       if (out.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
       if (state.points.some((p) => Math.hypot(p.x - c.x, p.y - c.y) < spacing)) continue;
-      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num13++}`));
+      out.push(addPoint(state, kind, c.x, c.y, `${POINT_KIND_RU[kind]} №${num14++}`));
     }
     return out;
   }
@@ -14377,6 +14377,715 @@
     return Number.isFinite(v) ? v : def;
   }
 
+  // app/src/core/systems/herds.js
+  var YEAR5 = DAYS_PER_SEASON * 4;
+  var WINTER = 3;
+  var SEASON_FEED = [0.85, 1, 1.15, 0.5];
+  function seasonFeed(sp, seasonIdx) {
+    const base = SEASON_FEED[clampInt(seasonIdx, 0, 3)];
+    if (clampInt(seasonIdx, 0, 3) !== WINTER) return base;
+    return 1 - (1 - base) * sp.winterBite;
+  }
+  var SPECIES = {
+    deer: {
+      id: "deer",
+      ru: "Олень",
+      ruMany: "олени",
+      ruGen: "оленей",
+      icon: "🦌",
+      meat: 9,
+      minViable: 4,
+      growth: 0.03,
+      radius: 7,
+      density: 0.145,
+      feed: { [TILE.FOREST]: 1.3, [TILE.GRASS]: 1, [TILE.HILL]: 0.45, [TILE.SAND]: 0.1 },
+      herds: 4,
+      fill: [0.6, 0.85],
+      maxHerds: 6,
+      speed: 0.6,
+      winterBite: 1,
+      lastEra: 9,
+      injury: 0,
+      tameable: false
+    },
+    mammoth: {
+      id: "mammoth",
+      ru: "Мамонт",
+      ruMany: "мамонты",
+      ruGen: "мамонтов",
+      icon: "🦣",
+      // Мало голов, много мяса, почти не плодится: одна взятая голова стоит виду
+      // почти года прироста. Он и должен вымереть первым — это урок, а не
+      // досадность. Зима ему при этом почти нипочём: он к ней и приспособлен.
+      meat: 55,
+      minViable: 3,
+      growth: 0.014,
+      radius: 9,
+      density: 0.038,
+      feed: { [TILE.GRASS]: 1, [TILE.HILL]: 0.9, [TILE.FOREST]: 0.7, [TILE.SAND]: 0.15 },
+      herds: 2,
+      fill: [0.7, 0.95],
+      maxHerds: 3,
+      speed: 0.35,
+      winterBite: 0.25,
+      lastEra: 1,
+      injury: 0,
+      tameable: false
+    },
+    boar: {
+      id: "boar",
+      ru: "Кабан",
+      ruMany: "кабаны",
+      ruGen: "кабанов",
+      icon: "🐗",
+      // Плодовит и потому прощает охоту, но зимой ему хуже всех: мёрзлую землю
+      // не взрыть, а корм у него под землёй.
+      meat: 13,
+      minViable: 3,
+      growth: 0.055,
+      radius: 6,
+      density: 0.2,
+      feed: { [TILE.FOREST]: 1.4, [TILE.GRASS]: 0.35, [TILE.HILL]: 0.3, [TILE.SAND]: 0.05 },
+      herds: 3,
+      fill: [0.55, 0.85],
+      maxHerds: 6,
+      speed: 0.5,
+      winterBite: 1.15,
+      lastEra: 9,
+      injury: 0.22,
+      tameable: false
+    },
+    aurochs: {
+      id: "aurochs",
+      ru: "Дикий бык",
+      ruMany: "быки",
+      ruGen: "быков",
+      icon: "🐂",
+      meat: 24,
+      minViable: 5,
+      growth: 0.02,
+      radius: 8,
+      density: 0.155,
+      feed: { [TILE.GRASS]: 1.4, [TILE.HILL]: 0.7, [TILE.FOREST]: 0.4, [TILE.SAND]: 0.1 },
+      herds: 3,
+      fill: [0.6, 0.9],
+      maxHerds: 5,
+      speed: 0.45,
+      winterBite: 0.9,
+      lastEra: 9,
+      injury: 0.05,
+      tameable: true
+      // кандидат на приручение
+    }
+  };
+  var KINDS = Object.keys(SPECIES);
+  var DOOM_DECAY = 0.02;
+  var STARVE_MAX = 0.012;
+  var PLOT_MIN_CAP = 1.8;
+  var EXTINCT_AT = 0.5;
+  var FEAR_MAX = 1;
+  var FEAR_HALF_LIFE = 12;
+  var FEAR_HUNT = 0.07;
+  var FEAR_PER_HEAD = 0.06;
+  var FEAR_LEADER = 0.15;
+  var FLEE_DIST = 22;
+  var FEAR_FLEE = 0.2;
+  var FAR_WARN = 16;
+  var FEAR_YIELD = 0.45;
+  var HUNT_BASE = 0.9;
+  var DRIVE_MAX = 0.9;
+  var DRIVE_HALF = 8;
+  var HUNT_MAX_SHARE = 0.35;
+  var HUNT_MIN_HEADS = 1;
+  var LEADER_RISK = 0.5;
+  var SPLIT_SHARE = 0.85;
+  var SPLIT_CHANCE = 0.01;
+  var SPLIT_TAKE = 0.38;
+  var SPLIT_MIN_DIST = 2.2;
+  var SPLIT_MAX_DIST = 4.5;
+  var SPAWN_MIN_R = 9;
+  var SPAWN_MAX_R = 34;
+  var SAY_GAP = 30;
+  var HUNT_LOG_DAYS = 30;
+  var LEADER_NAMES = [
+    "Круторогий",
+    "Седой",
+    "Меченый",
+    "Однорогий",
+    "Бурый",
+    "Хромой",
+    "Вислоух",
+    "Пятнистый",
+    "Косач",
+    "Старый",
+    "Чёрный",
+    "Белолобый"
+  ];
+  function createHerds() {
+    return {
+      v: 1,
+      day: -1,
+      // защита от двойного счёта в те же сутки
+      nextId: 1,
+      herds: [],
+      // см. makeHerd()
+      seen: {},
+      // kind → был ли вид на карте вообще
+      gone: {},
+      // kind → день, когда вид выбит НАВСЕГДА
+      hunts: [],
+      // [{day, kind, heads}] — только за последние HUNT_LOG_DAYS
+      lastSaid: {}
+      // kind → день последней жалобы в журнал
+    };
+  }
+  function makeHerd(id, kind, x, y, n, leader, day) {
+    return {
+      id,
+      kind,
+      cx: x,
+      cy: y,
+      // центр участка
+      tx: x,
+      ty: y,
+      // куда стадо бредёт сейчас
+      n,
+      // поголовье (дробное: приплод копится по долям головы)
+      fear: 0,
+      leader,
+      since: day,
+      // когда стадо появилось
+      lastHunt: -9999,
+      doomed: false,
+      // порог живучести уже пробит, сказано об этом один раз
+      wander: 0
+      // сколько суток осталось идти к нынешней цели
+    };
+  }
+  function serializeHerds(state) {
+    const s = state || createHerds();
+    return {
+      v: 1,
+      day: s.day,
+      nextId: s.nextId,
+      herds: s.herds.map((h) => ({ ...h })),
+      seen: { ...s.seen },
+      gone: { ...s.gone },
+      hunts: s.hunts.map((r) => ({ ...r })),
+      lastSaid: { ...s.lastSaid }
+    };
+  }
+  function restoreHerds(data) {
+    const s = createHerds();
+    if (!data || typeof data !== "object") return s;
+    s.day = num13(data.day, -1);
+    s.nextId = Math.max(1, Math.floor(num13(data.nextId, 1)));
+    if (data.seen && typeof data.seen === "object") {
+      for (const k of KINDS) if (data.seen[k]) s.seen[k] = true;
+    }
+    if (data.gone && typeof data.gone === "object") {
+      for (const k of KINDS) if (Number.isFinite(data.gone[k])) s.gone[k] = data.gone[k];
+    }
+    if (data.lastSaid && typeof data.lastSaid === "object") {
+      for (const k of KINDS) if (Number.isFinite(data.lastSaid[k])) s.lastSaid[k] = data.lastSaid[k];
+    }
+    if (Array.isArray(data.hunts)) {
+      for (const r of data.hunts) {
+        if (!r || !SPECIES[r.kind]) continue;
+        s.hunts.push({ day: num13(r.day, 0), kind: r.kind, heads: Math.max(0, num13(r.heads, 0)) });
+      }
+    }
+    if (Array.isArray(data.herds)) {
+      for (const h of data.herds) {
+        if (!h || !SPECIES[h.kind]) continue;
+        const n = Math.max(0, num13(h.n, 0));
+        if (n < EXTINCT_AT) continue;
+        const id = Math.floor(num13(h.id, s.nextId));
+        const g2 = makeHerd(
+          id,
+          h.kind,
+          num13(h.cx, 0),
+          num13(h.cy, 0),
+          n,
+          typeof h.leader === "string" ? h.leader : LEADER_NAMES[0],
+          num13(h.since, 0)
+        );
+        g2.tx = num13(h.tx, g2.cx);
+        g2.ty = num13(h.ty, g2.cy);
+        g2.fear = clamp13(num13(h.fear, 0), 0, FEAR_MAX);
+        g2.lastHunt = num13(h.lastHunt, -9999);
+        g2.doomed = !!h.doomed;
+        g2.wander = Math.max(0, num13(h.wander, 0));
+        s.herds.push(g2);
+        s.seen[g2.kind] = true;
+        if (id >= s.nextId) s.nextId = id + 1;
+      }
+    }
+    return s;
+  }
+  function herdsContext(sim2, tileAt2) {
+    const world = sim2 && sim2.world;
+    const w = world ? world.w : 0, h = world ? world.h : 0;
+    const read = typeof tileAt2 === "function" ? tileAt2 : (x, y) => world ? world.tiles[Math.floor(y) * w + Math.floor(x)] : TILE.DEEP;
+    return {
+      day: sim2 && Number.isFinite(sim2.day) ? sim2.day : 0,
+      seasonIdx: sim2 && Number.isFinite(sim2.seasonIdx) ? sim2.seasonIdx : 0,
+      eraIdx: sim2 && Number.isFinite(sim2.eraIndex) ? sim2.eraIndex : 0,
+      homeX: world ? world.startX : 0,
+      homeY: world ? world.startY : 0,
+      w,
+      h,
+      tile: (x, y) => {
+        const xi = Math.floor(x), yi = Math.floor(y);
+        if (xi < 0 || yi < 0 || xi >= w || yi >= h) return TILE.DEEP;
+        return read(world, xi, yi);
+      },
+      hasTech: (id) => !!(sim2 && sim2.techs && sim2.techs.has && sim2.techs.has(id))
+    };
+  }
+  var CLIMATE_FADE = 0.34;
+  function climateMult(kind, eraIdx) {
+    const sp = SPECIES[kind];
+    if (!sp) return 0;
+    const over = (Number.isFinite(eraIdx) ? eraIdx : 0) - sp.lastEra;
+    if (over <= 0) return 1;
+    return Math.max(0, 1 - over * CLIMATE_FADE);
+  }
+  function capacityAt(ctx, kind, cx, cy) {
+    const sp = SPECIES[kind];
+    if (!sp) return 0;
+    const r = sp.radius, rr = r * r;
+    let sum = 0;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy > rr) continue;
+        sum += sp.feed[ctx.tile(cx + dx, cy + dy)] || 0;
+      }
+    }
+    return sum * sp.density * seasonFeed(sp, ctx.seasonIdx) * climateMult(kind, ctx.eraIdx);
+  }
+  function feedScore(ctx, sp, x, y) {
+    let s = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      s += sp.feed[ctx.tile(x + dx, y + dy)] || 0;
+    }
+    return s / 9;
+  }
+  function walkable(ctx, x, y) {
+    const t = ctx.tile(x, y);
+    return t === TILE.GRASS || t === TILE.FOREST || t === TILE.HILL || t === TILE.SAND;
+  }
+  function lowland(ctx, x, y) {
+    const t = ctx.tile(x, y);
+    if (t === TILE.GRASS || t === TILE.SAND) return 1;
+    if (t === TILE.FOREST) return 0.6;
+    if (t === TILE.HILL) return 0;
+    return 0;
+  }
+  function dailyChange(n, K, sp) {
+    if (n <= 0) return 0;
+    if (n < sp.minViable) return -n * DOOM_DECAY;
+    if (K < 1) return -n * STARVE_MAX;
+    const dn = n * sp.growth * (1 - n / K);
+    return dn < 0 ? Math.max(dn, -n * STARVE_MAX) : dn;
+  }
+  function findPlot(ctx, sp, rng, ax, ay, minD, maxD, taken) {
+    const rough = [];
+    const step = 3;
+    for (let y = 1; y < ctx.h - 1; y += step) {
+      for (let x = 1; x < ctx.w - 1; x += step) {
+        if (!walkable(ctx, x, y)) continue;
+        const d = Math.hypot(x - ax, y - ay);
+        if (d < minD || d > maxD) continue;
+        let clash = false;
+        for (const t of taken) {
+          if (Math.hypot(x - t.x, y - t.y) < sp.radius * 1.6) {
+            clash = true;
+            break;
+          }
+        }
+        if (clash) continue;
+        const s = feedScore(ctx, sp, x, y);
+        if (s <= 0.05) continue;
+        rough.push({ x, y, s });
+      }
+    }
+    if (!rough.length) return null;
+    rough.sort((a, b) => b.s - a.s || a.y - b.y || a.x - b.x);
+    const shortlist = rough.slice(0, Math.min(50, rough.length));
+    const good = [];
+    for (const c of shortlist) {
+      const K = capacityAt(ctx, sp.id, c.x, c.y);
+      if (K < sp.minViable * PLOT_MIN_CAP) continue;
+      good.push({ x: c.x, y: c.y, K });
+    }
+    if (!good.length) return null;
+    good.sort((a, b) => b.K - a.K || a.y - b.y || a.x - b.x);
+    const top = good.slice(0, Math.min(10, good.length));
+    return top[rng.int(0, top.length - 1)];
+  }
+  function spawnHerds(state, ctx, rng) {
+    const S = cloneState(state);
+    const events = [];
+    const taken = [];
+    for (const kind of KINDS) {
+      const sp = SPECIES[kind];
+      if (ctx.eraIdx > sp.lastEra) continue;
+      if (S.gone[kind] != null) continue;
+      let placed = 0;
+      for (let i = 0; i < sp.herds; i++) {
+        const p = findPlot(ctx, sp, rng, ctx.homeX, ctx.homeY, SPAWN_MIN_R, SPAWN_MAX_R, taken);
+        if (!p) break;
+        taken.push(p);
+        const n = Math.max(sp.minViable + 1, Math.round(p.K * rng.range(sp.fill[0], sp.fill[1])));
+        const h = makeHerd(S.nextId++, kind, p.x, p.y, n, rng.pick(LEADER_NAMES), ctx.day);
+        h.wander = rng.range(1, 4);
+        S.herds.push(h);
+        placed++;
+      }
+      if (placed) S.seen[kind] = true;
+    }
+    S.day = ctx.day;
+    return { state: S, events, reasons: [], flags: summaryFlags(S, ctx) };
+  }
+  function pickTarget(h, sp, ctx, rng) {
+    const roam = sp.radius * 0.9;
+    const winter = ctx.seasonIdx === WINTER;
+    const wantAway = h.fear > FEAR_FLEE ? FLEE_DIST * h.fear : 0;
+    let bx = h.cx, by = h.cy, bs = -Infinity;
+    for (let i = 0; i <= 5; i++) {
+      let x, y;
+      if (i === 0) {
+        x = h.cx;
+        y = h.cy;
+      } else {
+        const a = rng.range(0, Math.PI * 2), r = rng.range(roam * 0.3, roam);
+        x = Math.round(h.cx + Math.cos(a) * r);
+        y = Math.round(h.cy + Math.sin(a) * r);
+      }
+      if (x < 1 || y < 1 || x >= ctx.w - 1 || y >= ctx.h - 1) continue;
+      if (!walkable(ctx, x, y)) continue;
+      let s = feedScore(ctx, sp, x, y);
+      if (winter) s += lowland(ctx, x, y) * 0.55;
+      if (wantAway > 0) {
+        const d = Math.hypot(x - ctx.homeX, y - ctx.homeY);
+        s += Math.min(1, d / wantAway) * h.fear * 1.6;
+      }
+      if (s > bs) {
+        bs = s;
+        bx = x;
+        by = y;
+      }
+    }
+    return { x: bx, y: by };
+  }
+  function stepCenter(h, ctx, dist) {
+    const dx = h.tx - h.cx, dy = h.ty - h.cy;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return;
+    const step = Math.min(dist, len);
+    const nx = h.cx + dx / len * step, ny = h.cy + dy / len * step;
+    if (walkable(ctx, nx, ny)) {
+      h.cx = nx;
+      h.cy = ny;
+      return;
+    }
+    if (walkable(ctx, nx, h.cy)) h.cx = nx;
+    else if (walkable(ctx, h.cx, ny)) h.cy = ny;
+    else h.wander = 0;
+  }
+  function herdsNewDay(state, ctx, rng) {
+    const S = cloneState(state);
+    const events = [], reasons = [];
+    if (S.day === ctx.day) {
+      return { state: S, events, reasons, flags: summaryFlags(S, ctx), skipped: true };
+    }
+    S.day = ctx.day;
+    const winter = ctx.seasonIdx === WINTER;
+    const fearKeep = Math.pow(0.5, 1 / FEAR_HALF_LIFE);
+    const alive = [];
+    const born = {};
+    const lost = {};
+    const newborns = [];
+    for (const h of S.herds) {
+      const sp = SPECIES[h.kind];
+      const K = capacityAt(ctx, h.kind, h.cx, h.cy);
+      const before = h.n;
+      h.n = Math.max(0, h.n + dailyChange(h.n, K, sp));
+      const d = h.n - before;
+      if (d >= 0) born[h.kind] = (born[h.kind] || 0) + d;
+      else lost[h.kind] = (lost[h.kind] || 0) - d;
+      if (!h.doomed && h.n > 0 && h.n < sp.minViable) {
+        h.doomed = true;
+        events.push({
+          text: `${sp.icon} ${sp.ru}: стадо вожака ${h.leader} разбито — осталось ${Math.floor(h.n)} гол. Меньше ${sp.minViable}: оно уже не восстановится.`,
+          type: "bad",
+          kind: h.kind,
+          herd: h.id,
+          cause: "doomed"
+        });
+      }
+      h.fear = h.fear * fearKeep;
+      if (h.fear < 5e-3) h.fear = 0;
+      h.wander -= 1;
+      if (h.wander <= 0) {
+        const t = pickTarget(h, sp, ctx, rng);
+        h.tx = t.x;
+        h.ty = t.y;
+        h.wander = rng.range(2, 5) * (h.fear > FEAR_FLEE ? 0.4 : 1);
+      }
+      stepCenter(h, ctx, sp.speed * (1 + h.fear * 0.8));
+      if (h.n < EXTINCT_AT) {
+        events.push({
+          text: `${sp.icon} Стадо вожака ${h.leader} больше не встречается: ${sp.ruGen} на этом участке не осталось.`,
+          type: "bad",
+          kind: h.kind,
+          herd: h.id,
+          cause: "herd_gone"
+        });
+        continue;
+      }
+      alive.push(h);
+    }
+    for (const h of alive.slice()) {
+      const sp = SPECIES[h.kind];
+      const count2 = alive.reduce((a, g3) => a + (g3.kind === h.kind ? 1 : 0), 0);
+      if (count2 >= sp.maxHerds) continue;
+      const K = capacityAt(ctx, h.kind, h.cx, h.cy);
+      if (K < 1 || h.n < K * SPLIT_SHARE) continue;
+      const take2 = h.n * SPLIT_TAKE;
+      if (take2 < sp.minViable || h.n - take2 < sp.minViable) continue;
+      if (!rng.chance(SPLIT_CHANCE)) continue;
+      const p = findPlot(
+        ctx,
+        sp,
+        rng,
+        h.cx,
+        h.cy,
+        sp.radius * SPLIT_MIN_DIST,
+        sp.radius * SPLIT_MAX_DIST,
+        alive.map((g3) => ({ x: g3.cx, y: g3.cy }))
+      );
+      if (!p) continue;
+      h.n -= take2;
+      const g2 = makeHerd(S.nextId++, h.kind, p.x, p.y, take2, rng.pick(LEADER_NAMES), ctx.day);
+      g2.wander = rng.range(1, 4);
+      newborns.push(g2);
+      events.push({
+        text: `${sp.icon} ${sp.ru}: молодняк отбился от стада ${h.leader} и занял новый участок — теперь их водится больше.`,
+        type: "good",
+        kind: h.kind,
+        herd: g2.id,
+        cause: "split"
+      });
+    }
+    S.herds = alive.concat(newborns);
+    const extinctNow = [];
+    for (const kind of KINDS) {
+      if (!S.seen[kind] || S.gone[kind] != null) continue;
+      if (S.herds.some((h) => h.kind === kind)) continue;
+      S.gone[kind] = ctx.day;
+      extinctNow.push(kind);
+      const sp = SPECIES[kind];
+      events.push({
+        text: `${sp.icon} ${sp.ru} выбит подчистую. Последнее стадо угасло — этого зверя на земле больше нет.`,
+        type: "bad",
+        kind,
+        cause: "extinct"
+      });
+    }
+    S.hunts = S.hunts.filter((r) => ctx.day - r.day < HUNT_LOG_DAYS);
+    const takenByKind = {};
+    for (const r of S.hunts) takenByKind[r.kind] = (takenByKind[r.kind] || 0) + r.heads;
+    for (const kind of KINDS) {
+      const list = S.herds.filter((h) => h.kind === kind);
+      if (!list.length) continue;
+      const sp = SPECIES[kind];
+      const near = list.reduce((m, h) => Math.min(m, homeDist(h, ctx)), Infinity);
+      const fear = list.reduce((m, h) => Math.max(m, h.fear), 0);
+      if (near > FAR_WARN && fear > 0.5 && ctx.day - (S.lastSaid[kind] || -9999) >= SAY_GAP) {
+        S.lastSaid[kind] = ctx.day;
+        const t = Math.round(takenByKind[kind] || 0);
+        events.push({
+          text: `${sp.icon} ${sp.ru}: стада откочевали — за месяц выбито ${t} гол., ближняя дичь теперь в ${Math.round(near)} клетках от поселения.`,
+          type: "warn",
+          kind,
+          cause: "fled"
+        });
+        reasons.push({ ru: `${sp.ru}: стада откочевали от поселения на ${Math.round(near)} клеток`, v: Math.round(near) });
+      }
+    }
+    if (winter) {
+      reasons.push({ ru: "Зима: участки кормят вдвое хуже, стада слабеют и спускаются в низины", v: SEASON_FEED[WINTER] });
+    }
+    const flags = summaryFlags(S, ctx);
+    flags.extinctNow = extinctNow;
+    flags.born = round29(Object.values(born).reduce((a, b) => a + b, 0));
+    flags.lost = round29(Object.values(lost).reduce((a, b) => a + b, 0));
+    return { state: S, events, reasons, flags };
+  }
+  function nearestHerd(state, x, y, opts = {}) {
+    const S = state || createHerds();
+    const kind = opts.kind || null;
+    const minHeads = opts.minHeads != null ? opts.minHeads : 1;
+    const maxDist = opts.maxDist != null ? opts.maxDist : Infinity;
+    let best = null, bd = Infinity;
+    for (const h of S.herds) {
+      if (kind && h.kind !== kind) continue;
+      if (h.n < minHeads) continue;
+      const d = Math.hypot(h.cx - x, h.cy - y);
+      if (d < bd && d <= maxDist) {
+        bd = d;
+        best = h;
+      }
+    }
+    if (!best) return null;
+    return { herd: best, id: best.id, kind: best.kind, dist: bd, x: best.cx, y: best.cy };
+  }
+  function driveBonus(n) {
+    return 1 + DRIVE_MAX * (n / (n + DRIVE_HALF));
+  }
+  function partyBonus(hunters) {
+    return Math.sqrt(Math.max(1, hunters));
+  }
+  function huntHerd(state, id, ctx, opts = {}, rng) {
+    const S = cloneState(state);
+    const events = [], reasons = [];
+    const h = S.herds.find((g2) => g2.id === id);
+    if (!h) {
+      return {
+        state: S,
+        ok: false,
+        heads: 0,
+        food: 0,
+        injured: false,
+        events,
+        reasons: [{ ru: "Стадо не найдено: дичь ушла раньше охотников", v: 0 }],
+        flags: {}
+      };
+    }
+    const sp = SPECIES[h.kind];
+    const hunters = Math.max(1, Math.floor(num13(opts.hunters, 1)));
+    const skill = Math.max(0.1, num13(opts.skill, 1));
+    const wary = 1 - FEAR_YIELD * h.fear;
+    let want = HUNT_BASE * driveBonus(h.n) * partyBonus(hunters) * skill * wary;
+    const cap = Math.min(h.n, Math.max(HUNT_MIN_HEADS, h.n * HUNT_MAX_SHARE));
+    want = Math.min(want, cap);
+    let heads = Math.floor(want);
+    if (rng && rng.chance(want - heads)) heads += 1;
+    heads = Math.min(heads, Math.floor(h.n));
+    if (heads < 0) heads = 0;
+    h.n = Math.max(0, h.n - heads);
+    h.lastHunt = ctx.day;
+    let fearAdd = heads > 0 || hunters > 0 ? FEAR_HUNT + FEAR_PER_HEAD * heads : 0;
+    let leaderLost = false;
+    if (heads > 0 && rng) {
+      const share = h.n + heads > 0 ? heads / (h.n + heads) : 0;
+      if (rng.chance(Math.min(0.9, share * LEADER_RISK)) && h.n >= 1) {
+        leaderLost = true;
+        fearAdd += FEAR_LEADER;
+        const old = h.leader;
+        h.leader = rng.pick(LEADER_NAMES);
+        events.push({
+          text: `${sp.icon} ${sp.ru}: вожак ${old} убит. Стадо мечется без него и уходит от людей; новый вожак — ${h.leader}.`,
+          type: "warn",
+          kind: h.kind,
+          herd: h.id,
+          cause: "leader"
+        });
+      }
+    }
+    h.fear = Math.min(FEAR_MAX, h.fear + fearAdd);
+    let injured = false;
+    if (heads > 0 && sp.injury > 0 && rng && rng.chance(sp.injury)) {
+      injured = true;
+      events.push({
+        text: `${sp.icon} ${sp.ru} вспорол охотнику ногу: добыча взята, но человек ранен.`,
+        type: "warn",
+        kind: h.kind,
+        herd: h.id,
+        cause: "injury"
+      });
+    }
+    const food = heads * sp.meat;
+    if (heads > 0) {
+      S.hunts.push({ day: ctx.day, kind: h.kind, heads });
+      reasons.push({
+        ru: heads > 1 ? `Облава на стадо (${sp.ru}, было ${Math.round(h.n + heads)} гол.): взято ${heads} гол., ${Math.round(food)} еды` : `Гон в одиночку (${sp.ru}): взята 1 голова, ${Math.round(food)} еды`,
+        v: Math.round(food)
+      });
+    } else {
+      reasons.push({ ru: `${sp.ru}: стадо пугано и не подпустило — охотники вернулись пустыми`, v: 0 });
+    }
+    if (!h.doomed && h.n > 0 && h.n < sp.minViable) {
+      h.doomed = true;
+      events.push({
+        text: `${sp.icon} ${sp.ru}: в стаде осталось ${Math.floor(h.n)} гол. — меньше порога. Даже если прекратить охоту, оно угаснет.`,
+        type: "bad",
+        kind: h.kind,
+        herd: h.id,
+        cause: "doomed"
+      });
+    }
+    return {
+      state: S,
+      ok: true,
+      heads,
+      food,
+      injured,
+      leaderLost,
+      events,
+      reasons,
+      flags: { kind: h.kind, left: round29(h.n), fear: round29(h.fear), dist: round29(homeDist(h, ctx)) }
+    };
+  }
+  function summaryFlags(S, ctx) {
+    const heads = {}, count2 = {};
+    for (const h of S.herds) {
+      heads[h.kind] = round29((heads[h.kind] || 0) + h.n);
+      count2[h.kind] = (count2[h.kind] || 0) + 1;
+    }
+    let nearest = Infinity;
+    for (const h of S.herds) nearest = Math.min(nearest, homeDist(h, ctx));
+    return {
+      heads,
+      count: count2,
+      total: round29(Object.values(heads).reduce((a, b) => a + b, 0)),
+      nearest: Number.isFinite(nearest) ? round29(nearest) : null,
+      gone: Object.keys(S.gone),
+      extinctNow: []
+    };
+  }
+  function homeDist(h, ctx) {
+    return Math.hypot(h.cx - ctx.homeX, h.cy - ctx.homeY);
+  }
+  function cloneState(state) {
+    const s = state && typeof state === "object" ? state : createHerds();
+    return {
+      v: 1,
+      day: num13(s.day, -1),
+      nextId: Math.max(1, Math.floor(num13(s.nextId, 1))),
+      herds: Array.isArray(s.herds) ? s.herds.map((h) => ({ ...h })) : [],
+      seen: { ...s.seen || {} },
+      gone: { ...s.gone || {} },
+      hunts: Array.isArray(s.hunts) ? s.hunts.map((r) => ({ ...r })) : [],
+      lastSaid: { ...s.lastSaid || {} }
+    };
+  }
+  function clamp13(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function clampInt(v, lo, hi) {
+    const i = Math.floor(Number.isFinite(v) ? v : lo);
+    return i < lo ? lo : i > hi ? hi : i;
+  }
+  function num13(v, def) {
+    return Number.isFinite(v) ? v : def;
+  }
+  function round29(v) {
+    return Math.round(v * 100) / 100;
+  }
+
   // app/src/core/systems/integrate.js
   var BETRAYAL_REL_WAS = 20;
   function relValue2(sim2, fid) {
@@ -14407,6 +15116,13 @@
     sim2.linkGhost = createGhost();
     sim2.linkGhost.seed = sim2.seed | 0;
     sim2.build = createBuild();
+    sim2.herds = createHerds();
+    {
+      const ctx = herdsContext(sim2, (world, x, y) => tileAt(world, x, y));
+      const herdRng = createRng((sim2.seed ^ 1212502596) >>> 0);
+      const rep = spawnHerds(sim2.herds, ctx, herdRng);
+      sim2.herds = rep.state;
+    }
   }
   function systemsNewDay(sim2) {
     if (!sim2.sys) return;
@@ -14427,6 +15143,7 @@
     applyTerritoryLinks(sim2);
     applyIntelLinks(sim2);
     const warOut = applyWarLinks(sim2);
+    applyHerds(sim2);
     applyMemoryLinks(sim2, harvestScars(sim2, { war: warOut, surv: survOut }));
   }
   function systemsFactions(sim2) {
@@ -14540,6 +15257,7 @@
       intel: sim2.linkIntel || null,
       masters: sim2.linkMasters || null,
       ghost: sim2.linkGhost || null,
+      herds: serializeHerds(sim2.herds),
       build: serializeBuild(sim2.build)
     };
   }
@@ -14561,6 +15279,7 @@
     sim2.linkIntel = restoreIntel(data.intel);
     sim2.linkMasters = restoreMasters(data.masters);
     sim2.linkGhost = restoreGhost(data.ghost);
+    sim2.herds = restoreHerds(data.herds);
     sim2.build = restoreBuild(data.build);
   }
   function applyEconomyLinks(sim2) {
@@ -14585,6 +15304,10 @@
     const out = [];
     const day = sim2.day;
     if (sim2.starvedDay === day) out.push({ kind: "famine", scale: 0.55 });
+    const HR = sim2.sys && sim2.sys.herdsReport;
+    if (HR && HR.flags && HR.flags.extinctNow) {
+      for (let i = 0; i < HR.flags.extinctNow.length; i++) out.push({ kind: "famine", scale: 0.8 });
+    }
     const surv = ctx && ctx.surv;
     if (surv && surv.flags) {
       if (surv.flags.riot) out.push({ kind: "famine", scale: 1 });
@@ -14679,6 +15402,26 @@
   }
   function mastersPanel(sim2) {
     return mastersReport(sim2);
+  }
+  function applyHerds(sim2) {
+    if (!sim2.herds) return;
+    const ctx = herdsContext(sim2, (world, x, y) => tileAt(world, x, y));
+    const rep = herdsNewDay(sim2.herds, ctx, sim2.rng);
+    sim2.herds = rep.state;
+    for (const e of rep.events) {
+      sim2.addLog(e.text, e.type === "bad" ? "bad" : e.type === "good" ? "good" : "info");
+      if (e.cause === "extinct") sim2.addChronicle(e.text);
+    }
+    sim2.sys.herdsReport = rep;
+  }
+  function herdsNearest(sim2, x, y) {
+    return nearestHerd(sim2.herds, x, y, { minHeads: 1, maxDist: 26 });
+  }
+  function herdsHunt(sim2, id, opts) {
+    const ctx = herdsContext(sim2, (world, x, y) => tileAt(world, x, y));
+    const rep = huntHerd(sim2.herds, id, ctx, opts, sim2.rng);
+    sim2.herds = rep.state;
+    return rep;
   }
   function applyIntelLinks(sim2) {
     if (!sim2.linkIntel) sim2.linkIntel = createIntel();
@@ -15560,10 +16303,11 @@
         return;
       }
       if (this.techs.has("hunting") && this.res.food < this.resCap.food * 0.8) {
-        const prey = this.animals.find((a) => a.hp > 0);
+        const near = herdsNearest(this, v.x, v.y);
+        const prey = near ? { herd: near.id, x: near.x, y: near.y } : null;
         if (prey) {
           v.job = "hunt";
-          v.target = { kind: "hunt", a: prey, x: prey.x, y: prey.y };
+          v.target = { kind: "hunt", herd: prey.herd, x: prey.x, y: prey.y };
           return;
         }
       }
@@ -15605,14 +16349,10 @@
         return;
       }
       if (t.kind === "hunt") {
-        const a = t.a;
-        if (a.hp > 0) {
-          a.hp -= 4;
-          if (a.hp <= 0) {
-            this.res.food = Math.min(this.resCap.food, this.res.food + a.food);
-            this.animals = this.animals.filter((x) => x !== a);
-          }
-        }
+        const rep = herdsHunt(this, t.herd, { hunters: 1, skill: 1 });
+        if (rep.food > 0) this.res.food = Math.min(this.resCap.food, this.res.food + rep.food);
+        if (rep.injured && v.hp !== void 0) v.hp = Math.max(1, v.hp - 3);
+        for (const e of rep.events) this.addLog(e.text, e.type === "bad" ? "bad" : "info");
         this.release(v);
         return;
       }
@@ -16961,12 +17701,12 @@ ${s}`, "console");
     WETLAND: 9,
     ALPINE: 10
   };
-  var clamp13 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
   function temperature(lat, rel, n) {
-    return clamp13(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
+    return clamp14(1 - Math.pow(lat, 1.35) + n * 0.09 - rel * 0.3, 0, 1);
   }
   function moisture(distSea, n) {
-    return clamp13(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
+    return clamp14(0.74 - Math.min(distSea, 18) * 0.03 + n * 0.45, 0, 1);
   }
 
   // app/src/render/landmarks.js
@@ -17049,7 +17789,7 @@ ${s}`, "console");
     dirt: "#7a6242"
     // вытоптанная земля вокруг
   };
-  var clamp14 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
   var c255 = (v) => v < 0 ? 0 : v > 255 ? 255 : v | 0;
   function mul(hex, k) {
     const c = hex2rgb(hex);
@@ -17477,7 +18217,7 @@ ${s}`, "console");
       const sp = Math.max(1e-4, hi - lo);
       for (let i = 0; i < N; i++) hgt[i] = (world.elev[i] - lo) / sp;
     } else if (height && height.length === N) {
-      for (let i = 0; i < N; i++) hgt[i] = clamp14((height[i] + 0.6) / 1.95, 0, 1);
+      for (let i = 0; i < N; i++) hgt[i] = clamp15((height[i] + 0.6) / 1.95, 0, 1);
     } else {
       for (let i = 0; i < N; i++) hgt[i] = H_BY_TILE[tiles[i]] ?? 0.2;
     }
@@ -17504,7 +18244,7 @@ ${s}`, "console");
           const i = y * W + x;
           const n1 = h3(x * 5, y * 5, 401) * 2 - 1;
           const n2 = h3(x * 3, y * 7, 909) * 2 - 1;
-          const rel = clamp14(hgt[i] - 0.2, 0, 1);
+          const rel = clamp15(hgt[i] - 0.2, 0, 1);
           const t = temperature(lat, rel, n1);
           const m = moisture(dsea[i], n2);
           biome[i] = classify(tiles[i], t, m, rel, river ? river[i] : 0, dsea[i]);
@@ -17535,8 +18275,8 @@ ${s}`, "console");
   }
   function count(f, name, x, y, r) {
     const W1 = f.W + 1;
-    const x0 = clamp14(x - r, 0, f.W), x1 = clamp14(x + r + 1, 0, f.W);
-    const y0 = clamp14(y - r, 0, f.H), y1 = clamp14(y + r + 1, 0, f.H);
+    const x0 = clamp15(x - r, 0, f.W), x1 = clamp15(x + r + 1, 0, f.W);
+    const y0 = clamp15(y - r, 0, f.H), y1 = clamp15(y + r + 1, 0, f.H);
     const T2 = f.sums[name];
     return T2[y1 * W1 + x1] - T2[y0 * W1 + x1] - T2[y1 * W1 + x0] + T2[y0 * W1 + x0];
   }
@@ -17616,7 +18356,7 @@ ${s}`, "console");
       if (f.slope[i] > 0.03) return 0;
       let around = 0, n = 0;
       for (let dy = -4; dy <= 4; dy += 2) for (let dx = -4; dx <= 4; dx += 2) {
-        const xx = clamp14(x + dx, 0, f.W - 1), yy = clamp14(y + dy, 0, f.H - 1);
+        const xx = clamp15(x + dx, 0, f.W - 1), yy = clamp15(y + dy, 0, f.H - 1);
         around += f.hgt[yy * f.W + xx];
         n++;
       }
@@ -24387,7 +25127,7 @@ ${s}`, "console");
     // испечённых спрайтов
     spriteMB: 8
   };
-  var SPECIES = [
+  var SPECIES2 = [
     { id: "spruce", ru: "ель", bark: "#3f3227", acc: ["#2c5a3e", "#24513a", "#25523c", "#2a5240"], sz: [1.5, 2.2], flex: 0.35, bare: false },
     { id: "pine", ru: "сосна", bark: "#7a5230", acc: ["#43703f", "#3a6a3c", "#3d6b3e", "#3c6440"], sz: [1.5, 2.1], flex: 0.55, bare: false },
     { id: "birch", ru: "берёза", bark: "#dfe0d6", acc: ["#9ccc5c", "#7fbb4e", "#e6bb46", "#8fb060"], sz: [1.3, 1.8], flex: 1, bare: true },
@@ -24402,7 +25142,7 @@ ${s}`, "console");
     { id: "dead", ru: "сухостой", bark: "#8a8073", acc: ["#8a8073", "#8a8073", "#8a8073", "#9aa0a4"], sz: [1.2, 1.8], flex: 0.6, bare: true }
   ];
   var SP = {};
-  for (let i = 0; i < SPECIES.length; i++) SP[SPECIES[i].id] = i;
+  for (let i = 0; i < SPECIES2.length; i++) SP[SPECIES2[i].id] = i;
   var U = { BUSH: 0, FERN: 1, REED: 2, FLOWER: 3, GRASS: 4, STUMP: 5, LOG: 6, SAPLING: 7, LITTER: 8 };
   var UNDER_SZ = [
     [0.5, 0.8],
@@ -24427,7 +25167,7 @@ ${s}`, "console");
   var UNDER_FLEX = [0.45, 0.55, 1.3, 0.75, 1, 0, 0, 0.85, 0];
   var KIND_TREE = 0;
   var KIND_UNDER = 1;
-  var clamp15 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp013 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd3(seed) {
     let s = seed | 0 || 625341585;
@@ -25264,7 +26004,7 @@ ${s}`, "console");
       this.ph = Math.ceil(H / S);
       const g2 = new Float32Array(this.pw * this.ph);
       const eraMul = [0.3, 0.42, 0.58, 0.7, 0.82, 0.92, 1, 0.98, 0.66, 0.4];
-      const em = eraMul[clamp15(sim2.eraIndex | 0, 0, 9)];
+      const em = eraMul[clamp16(sim2.eraIndex | 0, 0, 9)];
       const weightOf = (id) => {
         if (id === "lumber") return 1.25;
         if (id === "farm" || id === "pasture") return 0.85;
@@ -25301,7 +26041,7 @@ ${s}`, "console");
     }
     pressureAt(x, y) {
       if (!this.press) return 0;
-      const gx = clamp15(x >> 2, 0, this.pw - 1), gy = clamp15(y >> 2, 0, this.ph - 1);
+      const gx = clamp16(x >> 2, 0, this.pw - 1), gy = clamp16(y >> 2, 0, this.ph - 1);
       return clamp013(this.press[gy * this.pw + gx] + (noise2(x * 0.3, y * 0.3) - 0.5) * 0.22);
     }
     // =========================================================================
@@ -25320,7 +26060,7 @@ ${s}`, "console");
     }
     buildChunk(sim2, cx, cy) {
       const world = sim2.world, W = world.w, H = world.h;
-      const season = sim2.seasonIdx | 0, era = clamp15(sim2.eraIndex | 0, 0, 9);
+      const season = sim2.seasonIdx | 0, era = clamp16(sim2.eraIndex | 0, 0, 9);
       const D = this.q.detail;
       const items = [];
       const tile = (x, y) => x < 0 || y < 0 || x >= W || y >= H ? TILE.DEEP : world.tiles[y * W + x];
@@ -25438,7 +26178,7 @@ ${s}`, "console");
     }
     // ---- заведение растения ------------------------------------------------
     addTree(out, x, y, sp, season, era, p, ra, rb) {
-      const spec = SPECIES[sp];
+      const spec = SPECIES2[sp];
       const sz = spec.sz[0] + (spec.sz[1] - spec.sz[0]) * ra;
       let tone = rb < 0.34 ? 0 : rb < 0.74 ? 1 : 2;
       if (era >= 6 && era <= 7 && p > 0.42) tone = 0;
@@ -25490,7 +26230,7 @@ ${s}`, "console");
       cv.width = S;
       cv.height = S;
       const c = cv.getContext("2d");
-      const spec = SPECIES[sp];
+      const spec = SPECIES2[sp];
       PAINT[sp](c, S, foliage(spec, season, tone), spec, season, form);
       this.sprites.set(key, cv);
       prune(this.sprites, { maxEntries: VEG_LIMITS.sprites, maxBytes: VEG_LIMITS.spriteMB * 1048576, bytesOf: canvasBytes });
@@ -25508,7 +26248,7 @@ ${s}`, "console");
       cv.width = S;
       cv.height = S;
       const c = cv.getContext("2d");
-      const F = foliage(SPECIES[SP.oak], season, tone);
+      const F = foliage(SPECIES2[SP.oak], season, tone);
       PAINT_U[kind](c, S, F, season, form);
       this.sprites.set(key, cv);
       prune(this.sprites, { maxEntries: VEG_LIMITS.sprites, maxBytes: VEG_LIMITS.spriteMB * 1048576, bytesOf: canvasBytes });
@@ -25551,7 +26291,7 @@ ${s}`, "console");
       if (!total) return;
       const cut = total > cap ? cap / total : 1;
       const stormK = sim2.weather === "storm" ? 1.7 : sim2.weather === "rain" ? 1.15 : 1;
-      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp15(this.gust, 0.2, 1.2) * stormK;
+      const amp = (0.03 + 0.085 * Math.abs(this.wind)) * clamp16(this.gust, 0.2, 1.2) * stormK;
       const dir = this.wind < 0 ? -1 : 1;
       const t = this.time;
       const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
@@ -25706,7 +26446,7 @@ ${s}`, "console");
   };
   var ISO_MAX_PX = 23;
   var ISO_FULL_PX = 13;
-  var clamp16 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
   var sstep2 = (a, b, x) => {
     const t = (x - a) / (b - a);
     return t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
@@ -26043,7 +26783,7 @@ ${s}`, "console");
       let top = 1e-3;
       for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
       for (let i = 0; i < N; i++) smooth3[i] /= top;
-      const R = clamp16(Math.round(Math.min(w, h) / 11), 3, 18);
+      const R = clamp17(Math.round(Math.min(w, h) / 11), 3, 18);
       const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
@@ -26060,10 +26800,10 @@ ${s}`, "console");
       const lands = new Float32Array(nLand);
       for (let i = 0, k = 0; i < N; i++) if (landK[i] > 0) lands[k++] = slopeT[i];
       lands.sort();
-      const qAt = (q) => nLand ? lands[clamp16(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
-      const c0 = clamp16(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
+      const qAt = (q) => nLand ? lands[clamp17(Math.floor(q * (nLand - 1)), 0, nLand - 1)] : 0;
+      const c0 = clamp17(qAt(TUNE.cliffQ), TUNE.cliffMin, TUNE.cliffMax);
       this.cliff0 = c0;
-      this.cliff1 = clamp16(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
+      this.cliff1 = clamp17(Math.max(qAt(TUNE.cliffQFull), c0 * 1.7), c0 * 1.4, TUNE.cliffFull);
       const lapsArr = new Float32Array(nLand);
       for (let y = 0, k = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
@@ -26075,8 +26815,8 @@ ${s}`, "console");
         }
       }
       lapsArr.sort();
-      this.lapScale = clamp16(
-        nLand ? lapsArr[clamp16(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
+      this.lapScale = clamp17(
+        nLand ? lapsArr[clamp17(Math.floor(TUNE.lapQ * (nLand - 1)), 0, nLand - 1)] : TUNE.lapMin,
         TUNE.lapMin,
         TUNE.lapMax
       );
@@ -26087,8 +26827,8 @@ ${s}`, "console");
       this.txF = new Float32Array(SW);
       for (let sx = 0; sx < SW; sx++) {
         const u = (sx + 0.5) / S - 0.5, i0 = Math.floor(u);
-        this.txA[sx] = clamp16(i0, 0, w - 1);
-        this.txB[sx] = clamp16(i0 + 1, 0, w - 1);
+        this.txA[sx] = clamp17(i0, 0, w - 1);
+        this.txB[sx] = clamp17(i0 + 1, 0, w - 1);
         this.txF[sx] = u - i0;
       }
       const rowTmp = new Float32Array(SW * h);
@@ -26096,8 +26836,8 @@ ${s}`, "console");
         const row = y * w, out = y * SW;
         for (let sx = 0; sx < SW; sx++) {
           const i0 = tx.idx[sx], o = sx * 4;
-          const a = row + clamp16(i0 - 1, 0, w - 1), b = row + clamp16(i0, 0, w - 1);
-          const c = row + clamp16(i0 + 1, 0, w - 1), d = row + clamp16(i0 + 2, 0, w - 1);
+          const a = row + clamp17(i0 - 1, 0, w - 1), b = row + clamp17(i0, 0, w - 1);
+          const c = row + clamp17(i0 + 1, 0, w - 1), d = row + clamp17(i0 + 2, 0, w - 1);
           rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
         }
       }
@@ -26138,12 +26878,12 @@ ${s}`, "console");
       const end = Math.min(this.SH, upTo);
       for (let sy = this.Hrows; sy < end; sy++) {
         const j0 = ty.idx[sy], o = sy * 4;
-        const ra = clamp16(j0 - 1, 0, h - 1) * SW, rb = clamp16(j0, 0, h - 1) * SW;
-        const rc = clamp16(j0 + 1, 0, h - 1) * SW, rd = clamp16(j0 + 2, 0, h - 1) * SW;
+        const ra = clamp17(j0 - 1, 0, h - 1) * SW, rb = clamp17(j0, 0, h - 1) * SW;
+        const rc = clamp17(j0 + 1, 0, h - 1) * SW, rd = clamp17(j0 + 2, 0, h - 1) * SW;
         const out = sy * SW;
         const wy = sy * invS;
         const uy = (sy + 0.5) * invS - 0.5, jy = Math.floor(uy), fy = uy - jy;
-        const jA = clamp16(jy, 0, h - 1) * w, jB = clamp16(jy + 1, 0, h - 1) * w;
+        const jA = clamp17(jy, 0, h - 1) * w, jB = clamp17(jy + 1, 0, h - 1) * w;
         const txA = this.txA, txB = this.txB, txF = this.txF;
         for (let sx = 0; sx < SW; sx++) {
           let v = rowTmp[ra + sx] * ty.wt[o] + rowTmp[rb + sx] * ty.wt[o + 1] + rowTmp[rc + sx] * ty.wt[o + 2] + rowTmp[rd + sx] * ty.wt[o + 3];
@@ -26193,9 +26933,9 @@ ${s}`, "console");
         const lat = Math.abs((y + 0.5) / h * 2 - 1);
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const warm = temp ? clamp16(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp16(1 - Math.pow(lat, 1.35), 0, 1);
+          const warm = temp ? clamp17(temp[i] + 0.3 * Math.max(0, Ht[i]), 0, 1) : clamp17(1 - Math.pow(lat, 1.35), 0, 1);
           const n = ntAt(g2, x * 0.42 + oC, y * 0.42 + oC) - 0.5;
-          line[i] = clamp16(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
+          line[i] = clamp17(base * (0.49 + warm * 0.47) + n * 0.07, 0.05, 2);
         }
       }
       this.snowH = line;
@@ -26308,7 +27048,7 @@ ${s}`, "console");
       const rowDnD = Math.min(SH - 1, sy + D) * SW;
       const wy = sy * invS;
       const uy = (sy + 0.5) * invS - 0.5, j0 = Math.floor(uy), fy = uy - j0;
-      const jA = clamp16(j0, 0, h - 1) * w, jB = clamp16(j0 + 1, 0, h - 1) * w;
+      const jA = clamp17(j0, 0, h - 1) * w, jB = clamp17(j0 + 1, 0, h - 1) * w;
       const txA = this.txA, txB = this.txB, txF = this.txF;
       let iA = 0, iB = 0, fx = 0;
       const bil = (arr) => {
@@ -26351,7 +27091,7 @@ ${s}`, "console");
         v += asp * T2.aspect;
         const cliff = sstep2(C0, C1, slopeW);
         if (cliff > 0.25) CNT.cliff++;
-        if (!simple) v -= clamp16(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
+        if (!simple) v -= clamp17(lap * T2.ledgeN, -0.9, 0.9) * (0.35 + 0.65 * cliff);
         cr = 0;
         cg = 0;
         cb = 0;
@@ -26373,7 +27113,7 @@ ${s}`, "console");
           over(T2.rockRGB[0], T2.rockRGB[1], T2.rockRGB[2], rockK * 0.55);
         }
         if (!simple && detail >= 1) {
-          const foot = clamp16(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
+          const foot = clamp17(lap * T2.screeCurv, 0, 1) * sstep2(0.1, 0.24, hC) * sstep2(C0 * 0.38, C0 * 1.1, slopeW) * (1 - sstep2(C0 * 1.55, C1 * 1.15, slopeW));
           if (foot > 0.02) {
             if (foot > 0.15) CNT.scree++;
             const gc = Math.max(1, S / 3);
@@ -26449,28 +27189,28 @@ ${s}`, "console");
       if (!busy && this.job) this.step(this.job.first ? RELIEF_BUDGET.first : RELIEF_BUDGET.rebake);
       if (!this.base) return;
       const S = this.S, w = this.w, h = this.h;
-      const x0 = clamp16(Math.floor(-ox / z) - 1, 0, w);
-      const x1 = clamp16(Math.ceil((cw - ox) / z) + 1, 0, w);
-      const y0 = clamp16(Math.floor(-oy / z) - 1, 0, h);
-      const y1 = clamp16(Math.ceil((ch - oy) / z) + 1, 0, h);
+      const x0 = clamp17(Math.floor(-ox / z) - 1, 0, w);
+      const x1 = clamp17(Math.ceil((cw - ox) / z) + 1, 0, w);
+      const y0 = clamp17(Math.floor(-oy / z) - 1, 0, h);
+      const y1 = clamp17(Math.ceil((ch - oy) / z) + 1, 0, h);
       if (x1 <= x0 || y1 <= y0) return;
       const sx = x0 * S, sy = y0 * S, sw = (x1 - x0) * S, sh = (y1 - y0) * S;
       const dx = ox + x0 * z, dy = oy + y0 * z;
       const dw = (x1 - x0) * z, dh = (y1 - y0) * z;
       let k = 1;
       if (L && typeof L.mul === "number") {
-        const sun = clamp16((L.mul - 0.42) / 0.58, 0, 1);
-        k = clamp16(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
+        const sun = clamp17((L.mul - 0.42) / 0.58, 0, 1);
+        k = clamp17(0.52 + sun * 0.5 + Math.sin(Math.PI * sun) * 0.3, 0.45, 1.16);
       }
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "low";
-      ctx.globalAlpha = clamp16(0.72 + 0.28 * k, 0, 1);
+      ctx.globalAlpha = clamp17(0.72 + 0.28 * k, 0, 1);
       ctx.drawImage(this.base, sx, sy, sw, sh, dx, dy, dw, dh);
       this.drawn++;
       if (this.lite) {
         ctx.globalCompositeOperation = "lighter";
-        ctx.globalAlpha = clamp16(k, 0, 1);
+        ctx.globalAlpha = clamp17(k, 0, 1);
         ctx.drawImage(this.lite, sx, sy, sw, sh, dx, dy, dw, dh);
         ctx.globalCompositeOperation = "source-over";
         this.drawn++;
@@ -26592,7 +27332,7 @@ ${s}`, "console");
   var SELF_MIN_ZOOM = 0.75;
   var PAD = 0.055;
   var SPREAD_PAD = 0.45;
-  var clamp17 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp014 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var smooth2 = (k) => k * k * (3 - 2 * k);
   var FALLBACK_Q = {
@@ -26768,8 +27508,8 @@ ${s}`, "console");
       const L = lightAt(t);
       const W = WEATHER_SHADOW[sim2.weather] || WEATHER_DEFAULT;
       const fog = opts && typeof opts.fog === "number" ? clamp014(opts.fog) : 0;
-      const len = clamp17(L.shadowLen, 0.45, 2.2);
-      const u = clamp17((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
+      const len = clamp18(L.shadowLen, 0.45, 2.2);
+      const u = clamp18((t - 0.5) / ((DAY_B - DAY_A) / 2), -1, 1);
       const sun = sunAt(t) * W.a * (1 - 0.75 * fog);
       const dim = Math.min(1, 1.15 / (0.55 + 0.62 * len));
       const target = {
@@ -26829,7 +27569,7 @@ ${s}`, "console");
       const hf = spr.hFact || 0;
       if (hf < SELF_MIN_H) return;
       if (this.selfs >= this.maxSelf) return;
-      const band = clamp17(0.78 / hf, 0.32, 0.6);
+      const band = clamp18(0.78 / hf, 0.32, 0.6);
       const a = this._selfOf(spr.sil, dw, dh, band);
       if (!a) return;
       const mul2 = this._checkMul(ctx);
@@ -26935,8 +27675,8 @@ ${s}`, "console");
         this._self = /* @__PURE__ */ new WeakMap();
         this._bytes = 0;
       }
-      const w = clamp17(Math.round(dw), 12, 256);
-      const h = clamp17(Math.round(dh), 12, 384);
+      const w = clamp18(Math.round(dw), 12, 256);
+      const h = clamp18(Math.round(dh), 12, 384);
       s = bakeSoft(src, w, h, 1);
       this._bytes += s.bytes;
       this._soft.set(src, s);
@@ -26946,8 +27686,8 @@ ${s}`, "console");
       if (!src) return null;
       let s = this._self.get(src);
       if (s) return s;
-      const w = clamp17(Math.round(dw), 12, 256);
-      const h = clamp17(Math.round(dh), 12, 384);
+      const w = clamp18(Math.round(dw), 12, 256);
+      const h = clamp18(Math.round(dh), 12, 384);
       s = bakeSelfShade(src, w, h, band);
       this._bytes += s.bytes;
       this._self.set(src, s);
@@ -27108,7 +27848,7 @@ ${s}`, "console");
     first_frost: "vaporpuff",
     cold: "vaporpuff"
   };
-  var clamp18 = (v, a, b) => v < a ? a : v > b ? b : v;
+  var clamp19 = (v, a, b) => v < a ? a : v > b ? b : v;
   var clamp015 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   function makeRnd5(seed) {
     let s = seed | 0 || 1831565813;
@@ -27624,7 +28364,7 @@ ${s}`, "console");
     _tickMeteor(e, dt, dens) {
       if (this.night < 0.18) return;
       if (!this.cw) return;
-      e.acc += (e.d.rate || 2.2) * dt * clamp18(dens, 0.4, 1);
+      e.acc += (e.d.rate || 2.2) * dt * clamp19(dens, 0.4, 1);
       while (e.acc >= 1) {
         e.acc--;
         const m = take(this.meteors);
@@ -27726,7 +28466,7 @@ ${s}`, "console");
       this.forges.length = 0;
       const list = sim2.buildings;
       if (!Array.isArray(list)) return;
-      const crowd = clamp18(10 / Math.max(1, this._smokers || 1), 0.4, 1);
+      const crowd = clamp19(10 / Math.max(1, this._smokers || 1), 0.4, 1);
       const dens = this._density();
       const workSmoke = dens > 0 && !this.off;
       let smokers = 0;
@@ -28099,7 +28839,7 @@ ${s}`, "console");
         const rise = l.rise * (1 - (1 - k) * (1 - k));
         const sx = ox + l.x * z, sy = oy + (l.y - rise) * z;
         if (sx < -80 || sy < -40 || sx > cw + 80 || sy > ch + 40) continue;
-        const px = Math.round(clamp18(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
+        const px = Math.round(clamp19(z * (l.big ? 0.55 : 0.42), l.big ? 14 : 11, l.big ? 34 : 24));
         ctx.font = `bold ${px}px system-ui, "Segoe UI", sans-serif`;
         ctx.globalAlpha = k < 0.1 ? k / 0.1 : k > 0.6 ? (1 - k) / 0.4 : 1;
         ctx.lineWidth = Math.max(2, px * 0.22);
@@ -28183,7 +28923,7 @@ ${s}`, "console");
     _seedStars() {
       const p = this.stars;
       p.n = 0;
-      const want = Math.round(FX_LIMITS.star * clamp18(this._density(), 0.3, 1));
+      const want = Math.round(FX_LIMITS.star * clamp19(this._density(), 0.3, 1));
       for (let i = 0; i < want; i++) {
         const s = take(p);
         if (!s) break;

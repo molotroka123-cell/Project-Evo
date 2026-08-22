@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { Simulation } from '../src/core/simulation.js';
 import {
   huntLinks, huntState, huntYieldMult, huntLodgeMult, huntBreakdown, huntScars,
-  huntHappyMod, tameCandidates, tameHerd,
+  huntHappyMod, huntParty, tameCandidates, tameHerd, withStock,
   createHuntMemory, restoreHuntMemory,
   SPECIES, KILL_WINDOW, BATTUE_MAX, BATTUE_MIN_HEAD, BATTUE_FULL_HEAD, BATTUE_PARTY_FULL,
   LODGE_MIN, LODGE_MAX, LODGE_RADIUS, FEAR_PER_KILL, FEAR_DAY_CAP, FEAR_CALM,
@@ -519,6 +519,63 @@ console.log('\n--- Разбор для панели ---');
   });
 }
 
+console.log('\n--- Раскладка полей настоящей модели стад ---');
+{
+  // Так стадо выглядит в herds.js: kind вместо species, n вместо head,
+  // cx/cy вместо x/y, поголовье дробное, радиуса в стаде нет вовсе.
+  const real = (o = {}) => ({
+    id: o.id ?? 1, kind: o.kind || 'deer', n: o.n ?? 20.6,
+    cx: o.cx ?? 50, cy: o.cy ?? 50, tx: 50, ty: 50,
+    fear: o.fear ?? 0, leader: 'Рогач', since: 0, lastHunt: -9999, doomed: false, wander: 0,
+  });
+  const sim = makeSim({ hunters: [{ x: 50, y: 50, n: 3 }] });
+  sim.herds = { v: 1, day: 10, herds: [real(), real({ id: 2, kind: 'aurochs', n: 9.9, cx: 44, cy: 44 })], seen: {}, gone: {} };
+  const out = huntLinks(sim);
+  t('поголовье читается из полей kind/n/cx/cy', () => ok(out.flags.wildHead === 20 + 9, `${out.flags.wildHead}`));
+  t('дробные головы округляются вниз: туша либо есть, либо нет',
+    () => ok(huntState(sim).bySpecies.deer === 20, JSON.stringify(huntState(sim).bySpecies)));
+  t('участок находится по радиусу вида, раз модель его не прислала',
+    () => ok(huntYieldMult(sim, 50 + 6, 50) > 1, `${huntYieldMult(sim, 50 + 6, 50)}`));
+  t('дальше радиуса вида участок не тянется',
+    () => near(huntYieldMult(sim, 50 + 12, 50), 1, 1e-9, 'множитель'));
+  t('вид, уже объявленный моделью выбитым, второй раз не хоронится', () => {
+    const m = createHuntMemory();
+    m.seen.mammoth = 100;
+    const s2 = makeSim({ day: 101, mem: m });
+    s2.herds = { v: 1, day: 101, herds: [real()], seen: {}, gone: { mammoth: 100 } };
+    const o = huntLinks(s2);
+    ok(o.flags.extinctToday.length === 0 && huntScars(o).length === 0, JSON.stringify(o.flags.extinctToday));
+    ok(o.flags.memory.extinct.mammoth === 101, 'отметка о виде не поставлена — завтра расскажем снова');
+  });
+  t('артель у стада посчитана', () => ok(huntParty(sim, 50, 50) === 3, `${huntParty(sim, 50, 50)}`));
+  t('охотник всегда хотя бы один: модель стад делит на это число',
+    () => ok(huntParty(sim, 90, 90) === 1, `${huntParty(sim, 90, 90)}`));
+}
+
+console.log('\n--- Скот, отданный моделью стад ---');
+{
+  // herds.js прирученное стадо из своего списка убирает — головы забирает
+  // счётчик скота этой связи.
+  const mem = withStock(createHuntMemory(), 'aurochs', 18);
+  const sim = makeSim({ mem, buildings: [pasture(46, 46)], techs: ['fire', 'hunting', 'animal_husbandry'] });
+  sim.herds = { v: 1, day: 10, herds: [], seen: {}, gone: {} };
+  const out = huntLinks(sim);
+  t('приручённые головы кормят каждый день', () => near(out.mods.food, 18 * TAME_FOOD_PER_HEAD, 1e-9, 'еда'));
+  t('и видны в отчёте как скот, а не как дичь',
+    () => ok(out.flags.stockHead === 18 && out.flags.wildHead === 0, JSON.stringify(out.flags)));
+  t('withStock не трогает переданную память', () => {
+    const before = createHuntMemory();
+    withStock(before, 'aurochs', 5);
+    ok(Object.keys(before.stock).length === 0, JSON.stringify(before.stock));
+  });
+  t('withStock складывает стада, а не подменяет',
+    () => ok(withStock(mem, 'aurochs', 7).stock.aurochs === 25, JSON.stringify(withStock(mem, 'aurochs', 7).stock)));
+  t('мусор на входе withStock не роняет и не портит счёт',
+    () => ok(withStock(null, 'нет-такого', 'много').stock.wild === undefined, 'мусор просочился в счёт'));
+  t('скот переживает сохранение',
+    () => ok(restoreHuntMemory(JSON.parse(JSON.stringify(mem))).stock.aurochs === 18, 'скот потерян при загрузке'));
+}
+
 console.log('\n--- На настоящей симуляции ---');
 {
   const sim = new Simulation(11, { startEra: 0 });
@@ -526,8 +583,21 @@ console.log('\n--- На настоящей симуляции ---');
   const out = huntLinks(sim);
   t('связь работает на живой партии, а не только на подделке',
     () => ok(typeof out.flags.pressure === 'number' && typeof out.mods.yieldMult === 'number', JSON.stringify(out.flags)));
-  t('зверьё ядра видно как одиночки, пока модели стад нет',
-    () => ok(out.flags.wildHead === sim.animals.length, `${out.flags.wildHead} против ${sim.animals.length}`));
+  t('поголовье читается из настоящей модели стад, а не из фигурок ядра', () => {
+    const list = (sim.herds && (sim.herds.herds || sim.herds.list)) || [];
+    ok(list.length > 0, 'в живой партии нет ни одного стада');
+    const heads = list.reduce((a, h) => a + Math.floor(h.n != null ? h.n : h.head), 0);
+    ok(out.flags.wildHead === heads, `${out.flags.wildHead} против ${heads}`);
+  });
+  t('участок стада найден по его настоящим полям (cx/cy/kind/n)', () => {
+    const list = (sim.herds && (sim.herds.herds || sim.herds.list)) || [];
+    const h = list.find(g => Math.floor(g.n) >= 4);
+    ok(!h || huntYieldMult(sim, h.cx, h.cy) > 1, 'облава на живом стаде не даёт прибавки');
+  });
+  t('без модели стад зверьё ядра видно как одиночки', () => {
+    const s = makeSim({ animals: [{ kind: 'deer', x: 50, y: 50, hp: 8 }, { kind: 'deer', x: 51, y: 51, hp: 8 }] });
+    ok(huntLinks(s).flags.wildHead === 2, 'одиночки не посчитаны');
+  });
   t('множитель добычи на живой карте конечен', () => {
     const a = sim.animals[0];
     const m = a ? huntYieldMult(sim, a.x, a.y) : 1;

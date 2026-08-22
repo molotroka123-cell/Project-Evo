@@ -4,7 +4,7 @@ import { createRng, makeNoise2D } from './rng.js';
 import * as D from './data.js';
 import { generateWorld, tileAt, isWater, stepToward, findNearestTile, hasNeighborTile, makeAnimal, aStar, findFactionSpawns } from './world.js';
 import { TILE, WALKABLE, ERAS, TECHS, TECH_ERA_IDX, BUILDINGS, BUILDING_ERA_IDX, SPIRE_STAGES, UNITS, TRAIN_COST, ARMY_UPKEEP, COUNTERS, FACTIONS, DIPLO_FACTORS, MARKET_BASE, SEASONS, DAYS_PER_SEASON, WEATHER_TABLE, WEATHER, EVENT_DEFS, OBJECTIVES, NAMES, NICKNAMES, GREAT_TYPES, SAVE_VERSION } from './data.js';
-import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
+import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore, herdsNearest, herdsHunt } from './systems/integrate.js';
 import { memoryEatMult } from './systems/link_memory.js';
 import { wearWorkMult } from './systems/build2.js';
 
@@ -692,8 +692,12 @@ export class Simulation {
     }
     // 3. Охота
     if (this.techs.has('hunting') && this.res.food < this.resCap.food * 0.8) {
-      const prey = this.animals.find(a => a.hp > 0);
-      if (prey) { v.job = 'hunt'; v.target = { kind: 'hunt', a: prey, x: prey.x, y: prey.y }; return; }
+      // Охотник идёт не на первого попавшегося зверя из массива, а на
+      // ближайшее стадо: у охоты появляется место на карте, и стоянку теперь
+      // осмысленно ставить именно там, где водится дичь.
+      const near = herdsNearest(this, v.x, v.y);
+      const prey = near ? { herd: near.id, x: near.x, y: near.y } : null;
+      if (prey) { v.job = 'hunt'; v.target = { kind: 'hunt', herd: prey.herd, x: prey.x, y: prey.y }; return; }
     }
     // 3.5 Древесный кризис. Без него партию можно было запороть насмерть:
     // потратил стартовые 30 дерева на пять хижин — и всё. Лесопилка стоит 10
@@ -740,14 +744,13 @@ export class Simulation {
       return;
     }
     if (t.kind === 'hunt') {
-      const a = t.a;
-      if (a.hp > 0) {
-        a.hp -= 4;
-        if (a.hp <= 0) {
-          this.res.food = Math.min(this.resCap.food, this.res.food + a.food);
-          this.animals = this.animals.filter(x => x !== a);
-        }
-      }
+      // Одна ходка — одна облава. Сколько взято, решает модель стада: она
+      // знает и поголовье, и испуг. Здоровье охотнику снимаем здесь: модуль
+      // только сообщает, что человек ранен, но сам ничего не мутирует.
+      const rep = herdsHunt(this, t.herd, { hunters: 1, skill: 1 });
+      if (rep.food > 0) this.res.food = Math.min(this.resCap.food, this.res.food + rep.food);
+      if (rep.injured && v.hp !== undefined) v.hp = Math.max(1, v.hp - 3);
+      for (const e of rep.events) this.addLog(e.text, e.type === 'bad' ? 'bad' : 'info');
       this.release(v);
       return;
     }

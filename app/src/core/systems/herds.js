@@ -943,6 +943,37 @@ export function herdsSummary(state, ctx) {
   };
 }
 
+// ---------- Вид для соседних связей ----------
+//
+// ПОЧЕМУ ЭТО ОТДЕЛЬНАЯ ФУНКЦИЯ, А НЕ ПЕРЕИМЕНОВАННЫЕ ПОЛЯ. Соседний модуль
+// link_hunt.js (охотничий промысел) объявил у себя, какую форму стада он ждёт:
+// { id, species, head, x, y, r, cap, fear, tame }, и читает её ПО ФОРМЕ, без
+// импорта. Переименовывать под него внутренние поля модели нельзя: cap
+// (ёмкость) зависит от сезона и эпохи и потому не является состоянием — храня
+// её в стаде, мы получили бы вторую, всегда протухшую копию, и панель врала бы
+// относительно мира. Поэтому состояние остаётся своим, а наружу отдаётся
+// ПРОИЗВОДНЫЙ СНИМОК, который пересчитывается каждые сутки.
+//
+// Ничего не двигает; ёмкость считается здесь тем же capacityAt, что и в самой
+// модели, — двух разных оценок ёмкости в игре быть не должно.
+export function herdsView(state, ctx) {
+  const S = state || createHerds();
+  return {
+    v: 1,
+    day: S.day,
+    list: S.herds.map(h => ({
+      id: String(h.id),
+      species: h.kind,
+      head: round2(h.n),
+      x: h.cx, y: h.cy,
+      r: SPECIES[h.kind].radius,
+      cap: round2(capacityAt(ctx, h.kind, h.cx, h.cy)),
+      fear: round2(h.fear),
+      tame: false,          // прирученное стадо уходит из дичи целиком
+    })),
+  };
+}
+
 // Сколько мяса даст округа за год, если брать ровно прирост и не больше. Число
 // для игрока, который спрашивает «сколько можно есть, не проедая будущее».
 export function sustainableFood(state, ctx) {
@@ -985,184 +1016,114 @@ function round2(v) { return Math.round(v * 100) / 100; }
 
 /* ПОДКЛЮЧЕНИЕ ─────────────────────────────────────────────────────────────────
 
-Модуль ничего не пишет сам. Ниже — точные строки для главного разработчика.
-Якоря даны целиком, с отступами; число совпадений проверено grep-ом и указано.
+СОСТОЯНИЕ НА МОМЕНТ ПРАВКИ ЭТОГО БЛОКА: основное подключение УЖЕ ВЫПОЛНЕНО
+главным разработчиком (коммит df73cb3 «Ещё четыре модуля от роёв: значки, огни
+города, стада и охота»). Ниже — сначала то, что осталось сделать, потом
+проверочный список уже сделанного. Все якоря проверены grep -cxF, число
+совпадений указано у каждого.
 
-── A. app/src/core/systems/integrate.js ──────────────────────────────────────
+═══ ЧТО ОСТАЛОСЬ ═══
 
-A1. ИМПОРТ. Якорь (1 совпадение в integrate.js):
+R1. ОШИБКА В УЖЕ ПОДКЛЮЧЁННОМ КОДЕ. herdPoints() принимает ОДНО стадо, а не
+    состояние целиком: он раскладывает головы вокруг центра конкретного стада.
+    В integrate.js ему сейчас передаётся всё состояние, и он МОЛЧА возвращает
+    пустой список (Math.round(undefined) → NaN → цикл не выполняется ни разу).
+    Проверено: HERD.herdPoints({herds:[...]}) === [].
 
-import * as GH from './link_ghost.js';
+    Якорь (1 совпадение в integrate.js):
 
-    ВСТАВИТЬ ПОСЛЕ:
+export function herdPoints(sim) { return HERD.herdPoints(sim.herds); }
 
-import * as HERD from './herds.js';
-import { tileAt } from '../world.js';
+    ЗАМЕНИТЬ НА:
 
-    (проверено: `grep -c tileAt integrate.js` даёт 0 — вторая строка нужна)
-
-A2. УСТАНОВКА. Якорь (1 совпадение в integrate.js):
-
-  sim.linkGhost.seed = sim.seed | 0;
-
-    ВСТАВИТЬ ПОСЛЕ:
-
-  // Стада: дичь возобновляема, но исчерпаема. Ставится ПОСЛЕ мира и ДО первого
-  // дня — иначе первый же охотник не найдёт ни одного стада.
-  sim.herds = HERD.createHerds();
-  {
-    const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
-    const rep = HERD.spawnHerds(sim.herds, ctx, sim.rng);
-    sim.herds = rep.state;
+// Все головы всех стад одним списком — для отрисовки. herdPoints() работает с
+// ОДНИМ стадом: раскладка считается от его id и поголовья.
+export function herdPoints(sim) {
+  const st = sim.herds;
+  if (!st || !Array.isArray(st.herds)) return [];
+  const out = [];
+  for (const h of st.herds) {
+    for (const p of HERD.herdPoints(h)) out.push({ x: p.x, y: p.y, kind: h.kind });
   }
+  return out;
+}
 
-A3. ДЕНЬ. Якорь (1 совпадение в integrate.js):
+R2. ЁМКОСТЬ УЧАСТКА ДЛЯ link_hunt.js. Соседний модуль читает стада по форме и
+    берёт cap из самого стада, а при отсутствии подставляет head — то есть
+    считает КАЖДОЕ стадо стоящим ровно на своей ёмкости. Тогда его оценка
+    «поспевает ли приплод за добычей» всегда говорит «стадо полно», и
+    предупреждение об истощении не срабатывает никогда.
 
-  applyMemoryLinks(sim, harvestScars(sim, { war: warOut, surv: survOut }));
+    Ёмкость намеренно НЕ хранится в стаде: она зависит от сезона и эпохи, то
+    есть не является состоянием, и вторая её копия протухла бы на первой же
+    смене сезона. Вместо этого есть производный снимок herdsView().
 
-    ВСТАВИТЬ ПЕРЕД этой строкой (стада обязаны посчитаться ДО памяти: вымирание
-    вида — это событие, которое память должна записать в те же сутки):
+    Якорь (1 совпадение в integrate.js, внутри applyHerds):
 
-  applyHerds(sim);
-
-    и добавить в конец файла применитель:
-
-function applyHerds(sim) {
-  if (!sim.herds) return;
-  const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
-  const rep = HERD.herdsNewDay(sim.herds, ctx, sim.rng);
-  sim.herds = rep.state;
-  for (const e of rep.events) {
-    sim.addLog(e.text, e.type === 'bad' ? 'bad' : (e.type === 'good' ? 'good' : 'info'));
-    if (e.cause === 'extinct') sim.addChronicle(e.text);
-  }
   sim.sys.herdsReport = rep;
-}
-
-A4. СЕЙВ. Якорь (1 совпадение в integrate.js):
-
-    ghost: sim.linkGhost || null,
 
     ВСТАВИТЬ ПОСЛЕ:
 
-    herds: HERD.serializeHerds(sim.herds),
+  // Снимок в форме, которую объявил link_hunt.js: он читает стада по форме и
+  // сам ёмкости не считает. Снимок производный, в сейв не идёт.
+  sim.herdsView = HERD.herdsView(sim.herds, ctx);
 
-A5. ВОССТАНОВЛЕНИЕ. Якорь (1 совпадение в integrate.js):
+    и в link_hunt.js, в readHerds(), якорь (1 совпадение):
 
-  sim.linkGhost = GH.restoreGhost(data.ghost);
+      cap: Math.max(0, numOf(h.cap, head)),
 
-    ВСТАВИТЬ ПОСЛЕ:
+    ЗАМЕНИТЬ НА (взять ёмкость из снимка, если стадо пришло без неё):
 
-  sim.herds = HERD.restoreHerds(data.herds);
+      cap: Math.max(0, numOf(h.cap, capFromView(sim, h.id, head))),
 
-A6. ПАНЕЛЬ. Якорь (1 совпадение в integrate.js):
+    Правка в link_hunt.js — за его автором: это его файл и его readHerds.
+    Если правку делать не хотят, достаточно передавать в readHerds не
+    sim.herds, а sim.herdsView — поля там уже названы так, как он ждёт.
 
-export function mastersPanel(sim) { return MAS.mastersReport(sim); }
+R3. ОТРИСОВКА. sim.animals (26 оленей и 2 мамонта) и tickAnimals пока живут
+    как были: на них завязан рендер. Порядок работ важен — сперва убедиться,
+    что охота идёт через стада (это уже сделано, см. B1/B2 ниже), и только
+    ПОТОМ заменить источник точек на herdPoints(sim) из R1. Обе правки в один
+    заход — верный способ получить пустую карту и не понять почему.
 
-    ВСТАВИТЬ ПОСЛЕ:
+═══ ЧТО УЖЕ СДЕЛАНО (проверочный список) ═══
 
-export function herdsPanel(sim) {
-  return HERD.herdsSummary(sim.herds, HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y)));
-}
-export function herdsSustainable(sim) {
-  return HERD.sustainableFood(sim.herds, HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y)));
-}
+integrate.js:
+  A1  import * as HERD from './herds.js';        + import { tileAt } from '../world.js';
+  A2  installSystems: sim.herds = HERD.createHerds(), затем HERD.spawnHerds(...)
+      — ПОСЛЕ готового мира и ДО первого дня, иначе первый охотник не найдёт
+      ни одного стада;
+  A3  systemsNewDay: applyHerds(sim) вызывается ПЕРЕД applyMemoryLinks —
+      вымирание вида должно лечь в память теми же сутками;
+  A4  systemsSerialize: herds: HERD.serializeHerds(sim.herds);
+  A5  systemsRestore:   sim.herds = HERD.restoreHerds(data.herds);
+  A6  herdsPanel(sim) и herdsSustainable(sim) для HUD;
+  A7  harvestScars: HR.flags.extinctNow → шрам famine ×0.8 (выбитый вид — это
+      утраченный источник еды навсегда, народ помнит его как будущий голод);
+      обёртки herdsNearest(sim,x,y) и herdsHunt(sim,id,opts).
 
-A7. ВЫМИРАНИЕ В ЛЕТОПИСЬ. Якорь (1 совпадение в integrate.js) — строка ВНУТРИ
-    harvestScars(), сразу после которой собирается список шрамов:
+simulation.js:
+  B1  assignJob, ветка «3. Охота»: цель — ближайшее СТАДО (herdsNearest),
+      v.target = { kind:'hunt', herd, x, y };
+  B2  onArrive, ветка 'hunt': одна ходка — одна облава через herdsHunt();
+      еда на склад, рана охотнику (−3 hp, не ниже 1), события в журнал;
+  B3  импорт herdsNearest и herdsHunt из integrate.js.
 
-  if (sim.starvedDay === day) out.push({ kind: 'famine', scale: 0.55 });
+ПРОВЕРЕНО ЖИВЫМ ПРОГОНОМ: Simulation(11, {startEra:0}), 200 суток —
+16 стад, панель «Олень 69, Кабан 45, Дикий бык 40, Мамонт 14», годовой
+прокорм 978 еды, sim не сломан.
 
-    ВСТАВИТЬ ПОСЛЕ (памяти сюда достаточно одной породы: выбитая дичь — это
-    будущий голод, и народ помнит её именно так):
+ЧТО ВАЖНО НЕ ПОТЕРЯТЬ ПРИ ДАЛЬНЕЙШИХ ПРАВКАХ:
 
-  // Выбитый вид — это не «минус зверь», а утраченный источник еды навсегда.
-  const HR = sim.sys && sim.sys.herdsReport;
-  if (HR && HR.flags && HR.flags.extinctNow) {
-    for (let i = 0; i < HR.flags.extinctNow.length; i++) out.push({ kind: 'famine', scale: 0.8 });
-  }
-
-    (объемлющая функция объявлена как `function harvestScars(sim, ctx) {` —
-    1 совпадение; переменные out и day в ней уже есть)
-
-── B. app/src/core/simulation.js ─────────────────────────────────────────────
-
-B1. ВЫБОР ЦЕЛИ ОХОТЫ. Якорь (1 совпадение в simulation.js):
-
-      const prey = this.animals.find(a => a.hp > 0);
-
-    ЗАМЕНИТЬ НА:
-
-      // Охотник идёт не на первого попавшегося зверя из массива, а на
-      // ближайшее стадо: у охоты появляется место на карте.
-      const near = herdsNearest(this, v.x, v.y);
-      const prey = near ? { herd: near.id, x: near.x, y: near.y } : null;
-
-    и следующую строку якоря (1 совпадение):
-
-      if (prey) { v.job = 'hunt'; v.target = { kind: 'hunt', a: prey, x: prey.x, y: prey.y }; return; }
-
-    ЗАМЕНИТЬ НА:
-
-      if (prey) { v.job = 'hunt'; v.target = { kind: 'hunt', herd: prey.herd, x: prey.x, y: prey.y }; return; }
-
-B2. САМА ОХОТА. Якорь — весь блок целиком (1 совпадение в simulation.js):
-
-    if (t.kind === 'hunt') {
-      const a = t.a;
-      if (a.hp > 0) {
-        a.hp -= 4;
-        if (a.hp <= 0) {
-          this.res.food = Math.min(this.resCap.food, this.res.food + a.food);
-          this.animals = this.animals.filter(x => x !== a);
-        }
-      }
-      this.release(v);
-      return;
-    }
-
-    ЗАМЕНИТЬ НА:
-
-    if (t.kind === 'hunt') {
-      // Одна ходка — одна облава. Сколько взято, решает модель стада: она
-      // знает и поголовье, и испуг. Здоровье охотнику снимаем здесь: модуль
-      // только сообщает, что человек ранен, но сам ничего не мутирует.
-      const rep = herdsHunt(this, t.herd, { hunters: 1, skill: happyMult });
-      if (rep.food > 0) this.res.food = Math.min(this.resCap.food, this.res.food + rep.food);
-      if (rep.injured && v.hp !== undefined) v.hp = Math.max(1, v.hp - 3);
-      for (const e of rep.events) this.addLog(e.text, e.type === 'bad' ? 'bad' : 'info');
-      this.release(v);
-      return;
-    }
-
-B3. ИМПОРТ в simulation.js. Якорь (1 совпадение в simulation.js, строка 7):
-
-import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore } from './systems/integrate.js';
-
-    ЗАМЕНИТЬ НА ту же строку с двумя добавленными именами:
-
-import { installSystems, systemsNewDay, systemsFactions, systemsHappyMod, systemsWorkMult, systemsPopCapMod, systemsSerialize, systemsRestore, herdsNearest, herdsHunt } from './systems/integrate.js';
-
-    ВНИМАНИЕ: порядок имён в этой строке уже менялся — перед правкой сверить
-    grep -cxF. Обёртки завести в integrate.js:
-
-export function herdsNearest(sim, x, y) {
-  // maxDist обязателен. Без него охотник уходит за пуганым стадом на другой
-  // конец карты и не возвращается неделю, пока поселение голодает рядом с
-  // ягодником. Дальше 26 клеток охота не окупается — пусть идёт собирать.
-  return HERD.nearestHerd(sim.herds, x, y, { minHeads: 1, maxDist: 26 });
-}
-export function herdsHunt(sim, id, opts) {
-  const ctx = HERD.herdsContext(sim, (world, x, y) => tileAt(world, x, y));
-  const rep = HERD.huntHerd(sim.herds, id, ctx, opts, sim.rng);
-  sim.herds = rep.state;
-  return rep;
-}
-
-B4. СТАРЫЕ ЗВЕРИ. Массив this.animals и tickAnimals остаются как есть — на них
-    завязана отрисовка. Правильный порядок работ: сперва подключить стада и
-    убедиться, что охота идёт через них (B1–B2), и только потом заменить
-    источник this.animals на HERD.herdPoints() в рендере. Обе правки в одном
-    заходе — верный способ получить пустую карту и не понять почему.
+  · herdsNearest ОБЯЗАН иметь maxDist. Без него охотник уходит за пуганым
+    стадом на другой конец карты и не возвращается неделю, пока поселение
+    голодает рядом с ягодником. Сейчас 26 клеток — дальше охота не окупается,
+    пусть житель идёт собирать;
+  · applyHerds вызывать РОВНО ОДИН РАЗ в сутки. Модуль сам себя защищает
+    (state.day === ctx.day → пропуск без единого обращения к rng), но второй
+    вызов из другого места означал бы, что кто-то считает день дважды;
+  · sim.rng и только он. Одно чужое случайное число — и два прогона одного
+    сида разойдутся, сейв перестанет совпадать с партией, а «тень прошлой
+    партии» покажет чужой мир.
 
 ────────────────────────────────────────────────────────────────────────────── */
