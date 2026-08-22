@@ -10,6 +10,7 @@
 // память не расходуется на невидимые куски.
 import { TILE } from '../core/data.js';
 import { TERRAIN, TILE_HEIGHT, hash2, fbm2, hex2rgb, mixHex } from './palette.js';
+import { LandmarkLayer } from './landmarks.js';
 
 export const CHUNK = 16;
 
@@ -24,6 +25,9 @@ export class Terrain {
     this.low = null;           // мини-канвас всей карты
     this.w = 0; this.h = 0;
     this.road = null;          // сеть дорог: рёбра, пятаки перекрёстков, индекс по чанкам
+    // Природные ориентиры: пик, вулкан, оазис, водопад. Живут вместе с
+    // местностью, потому что печутся прямо в её чанки.
+    this.landmarks = new LandmarkLayer(quality);
     this.roadKey = null;       // подпись состава построек и эпохи
   }
 
@@ -110,6 +114,9 @@ export class Terrain {
     if (this.worldSeed !== sim.world.seed || !this.height) this.buildHeight(sim.world);
     if (this.season !== sim.seasonIdx) { this.chunks.clear(); this.low = null; this.season = sim.seasonIdx; }
     if (!this.low) this.buildLow(sim);
+    // Ориентиры расставляются по готовому полю высот и только при смене
+    // мира: ensure возвращает true один раз за партию, тогда и чистим чанки.
+    if (this.landmarks.ensure(sim, this.q, this.height)) this.chunks.clear();
     // Дороги живут внутри чанков. Пересобираем сеть только когда меняется
     // состав достроенного или эпоха — то есть несколько раз за партию, а не в кадре.
     const key = roadKeyOf(sim);
@@ -213,6 +220,9 @@ export class Terrain {
         this.edges(c, world, pal, x, y, (x - x0) * TP, (y - y0) * TP, TP);
       }
     }
+    // Ориентир кладётся последним слоем чанка: он стоит НА местности, и его
+    // не должны перечёркивать ни береговая кромка, ни тени обрывов.
+    this.landmarks.paint(c, sim, x0, y0, TP, CHUNK);
     return cv;
   }
 
