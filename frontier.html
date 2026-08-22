@@ -26809,19 +26809,19 @@ ${s}`, "console");
         landK[i] = wet ? 0 : 1;
         if (!wet) Ht[i] += dome[i];
       }
-      const smooth3 = _ReliefLayer.blur(Ht, w, h, 1, landK);
+      const smooth4 = _ReliefLayer.blur(Ht, w, h, 1, landK);
       let top = 1e-3;
-      for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth3[i] > top) top = smooth3[i];
-      for (let i = 0; i < N; i++) smooth3[i] /= top;
+      for (let i = 0; i < N; i++) if (landK[i] > 0 && smooth4[i] > top) top = smooth4[i];
+      for (let i = 0; i < N; i++) smooth4[i] /= top;
       const R = clamp17(Math.round(Math.min(w, h) / 11), 3, 18);
-      const low = _ReliefLayer.boxBlur(Float32Array.from(smooth3), w, h, R, 2);
+      const low = _ReliefLayer.boxBlur(Float32Array.from(smooth4), w, h, R, 2);
       const landSoft = _ReliefLayer.blur(Float32Array.from(landK), w, h, 1, null);
       const slopeT = new Float32Array(N);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
-          const l = smooth3[y * w + Math.max(0, x - 1)], r = smooth3[y * w + Math.min(w - 1, x + 1)];
-          const u = smooth3[Math.max(0, y - 1) * w + x], d = smooth3[Math.min(h - 1, y + 1) * w + x];
+          const l = smooth4[y * w + Math.max(0, x - 1)], r = smooth4[y * w + Math.min(w - 1, x + 1)];
+          const u = smooth4[Math.max(0, y - 1) * w + x], d = smooth4[Math.min(h - 1, y + 1) * w + x];
           slopeT[i] = Math.hypot((r - l) * 0.5, (d - u) * 0.5);
         }
       }
@@ -26839,9 +26839,9 @@ ${s}`, "console");
         for (let x = 0; x < w; x++) {
           const i = y * w + x;
           if (landK[i] <= 0) continue;
-          const l = smooth3[y * w + Math.max(0, x - 1)], r = smooth3[y * w + Math.min(w - 1, x + 1)];
-          const u = smooth3[Math.max(0, y - 1) * w + x], d = smooth3[Math.min(h - 1, y + 1) * w + x];
-          lapsArr[k++] = Math.abs(l + r + u + d - 4 * smooth3[i]);
+          const l = smooth4[y * w + Math.max(0, x - 1)], r = smooth4[y * w + Math.min(w - 1, x + 1)];
+          const u = smooth4[Math.max(0, y - 1) * w + x], d = smooth4[Math.min(h - 1, y + 1) * w + x];
+          lapsArr[k++] = Math.abs(l + r + u + d - 4 * smooth4[i]);
         }
       }
       lapsArr.sort();
@@ -26868,7 +26868,7 @@ ${s}`, "console");
           const i0 = tx.idx[sx], o = sx * 4;
           const a = row + clamp17(i0 - 1, 0, w - 1), b = row + clamp17(i0, 0, w - 1);
           const c = row + clamp17(i0 + 1, 0, w - 1), d = row + clamp17(i0 + 2, 0, w - 1);
-          rowTmp[out + sx] = smooth3[a] * tx.wt[o] + smooth3[b] * tx.wt[o + 1] + smooth3[c] * tx.wt[o + 2] + smooth3[d] * tx.wt[o + 3];
+          rowTmp[out + sx] = smooth4[a] * tx.wt[o] + smooth4[b] * tx.wt[o + 1] + smooth4[c] * tx.wt[o + 2] + smooth4[d] * tx.wt[o + 3];
         }
       }
       this.rowTmp = rowTmp;
@@ -26881,7 +26881,7 @@ ${s}`, "console");
       this.SH = SH;
       this.H = H;
       this.Hlow = low;
-      this.tileH = smooth3;
+      this.tileH = smooth4;
       this.landK = landSoft;
       this.slopeT = slopeT;
       this.seed = world.seed;
@@ -31584,8 +31584,1235 @@ ${s}`, "console");
     }
   };
 
-  // app/src/render/herds_view.js
+  // app/src/render/borders_view.js
+  var PLAYER_GOLD2 = "#c9a227";
+  var UNKNOWN_GRAY = "#6a6f7a";
+  var FILL_BANDS = [0.2, 0.13, 0.09, 0.065];
+  var BAND_DITHER = 1.4;
+  var DITHER_BLOCK = 2;
+  var LINE_OWN = 2.2;
+  var LINE_OTHER = 1.5;
+  var LINE_HALO = 1.4;
+  var HALO_COLOR = "rgba(6,9,16,0.5)";
+  var MAX_POINTS = 6e3;
+  var BAKE_MB_OF_CAP = { eco: 1.5, medium: 3, high: 6, ultra: 12 };
+  function bordersState(sim2) {
+    const s = sim2 && sim2.sys && sim2.sys.borders || sim2 && sim2.borders;
+    return s && s.owners && s.owners.length ? s : null;
+  }
+  function ownerColorOf(sim2, code) {
+    if (code === OWNER_PLAYER) return PLAYER_GOLD2;
+    const def = FACTIONS[code - 2];
+    if (!def) return UNKNOWN_GRAY;
+    const live = sim2 && sim2.factions ? sim2.factions.find((f) => f && f.id === def.id) : null;
+    return live && live.def && live.def.color || def.color || UNKNOWN_GRAY;
+  }
+  function h32(x, y, seed) {
+    let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 2246822519) | 0;
+    h = Math.imul(h ^ h >>> 13, 1274126177);
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+  function fillBand(depth, x, y, seed) {
+    const last2 = FILL_BANDS.length - 1;
+    const d = depth > 0 ? depth - 1 : 0;
+    if (d >= 2) return d > last2 ? last2 : d;
+    const b = Math.round(d + (h32(x >> DITHER_BLOCK, y >> DITHER_BLOCK, seed) - 0.5) * BAND_DITHER);
+    return b < 0 ? 0 : b > 2 ? 2 : b;
+  }
+  function pickBakePx(q, W, H) {
+    const capMB = BAKE_MB_OF_CAP[q && q.id] || 3;
+    const capByTextures = q && q.caps && q.caps.textureMB ? q.caps.textureMB / 4 : capMB;
+    const budget = Math.min(capMB, capByTextures) * 1024 * 1024;
+    let px = 16;
+    while (px > 2 && W * px * H * px * 4 > budget) px >>= 1;
+    return px;
+  }
+  function contestedMask(st, world, out = null) {
+    const W = st.w, H = st.h, N = W * H;
+    const owners = st.owners;
+    const tiles = world && world.tiles && world.tiles.length === N ? world.tiles : null;
+    const m = out && out.length === N ? out : new Uint8Array(N);
+    m.fill(0);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (owners[i]) continue;
+        if (tiles) {
+          const t = tiles[i];
+          if (t === TILE.WATER || t === TILE.DEEP) continue;
+        }
+        let a = 0, b = 0;
+        for (let dy = -1; dy <= 1 && !b; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= H) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= W) continue;
+            const o = owners[yy * W + xx];
+            if (!o) continue;
+            if (!a) a = o;
+            else if (o !== a) {
+              b = o;
+              break;
+            }
+          }
+        }
+        if (b) m[i] = 1;
+      }
+    }
+    return m;
+  }
+  function traceContours(owners, W, H, code, opts = {}) {
+    const maxPoints = opts.maxPoints || MAX_POINTS;
+    const CW = W + 1;
+    const from = [], to = [];
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (owners[i] !== code) continue;
+        const c = y * CW + x;
+        if (y === 0 || owners[i - W] !== code) {
+          from.push(c);
+          to.push(c + 1);
+        }
+        if (x === W - 1 || owners[i + 1] !== code) {
+          from.push(c + 1);
+          to.push(c + 1 + CW);
+        }
+        if (y === H - 1 || owners[i + W] !== code) {
+          from.push(c + CW + 1);
+          to.push(c + CW);
+        }
+        if (x === 0 || owners[i - 1] !== code) {
+          from.push(c + CW);
+          to.push(c);
+        }
+      }
+    }
+    const n = from.length;
+    const res = { polys: [], points: 0, segments: n, bbox: null, truncated: false };
+    if (!n) return res;
+    const outIdx = /* @__PURE__ */ new Map();
+    for (let e = 0; e < n; e++) {
+      const k = from[e];
+      const l = outIdx.get(k);
+      if (l) l.push(e);
+      else outIdx.set(k, [e]);
+    }
+    const used = new Uint8Array(n);
+    let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+    for (let e0 = 0; e0 < n && !res.truncated; e0++) {
+      if (used[e0]) continue;
+      const pts = [];
+      const k0 = from[e0];
+      _push(pts, k0 % CW, k0 / CW | 0);
+      let cur = e0;
+      while (cur >= 0 && !used[cur]) {
+        used[cur] = 1;
+        const k = to[cur];
+        _push(pts, k % CW, k / CW | 0);
+        const list = outIdx.get(k);
+        let nxt = -1;
+        if (list) {
+          for (let j = 0; j < list.length; j++) if (!used[list[j]]) {
+            nxt = list[j];
+            break;
+          }
+        }
+        cur = nxt;
+      }
+      if (pts.length < 4) continue;
+      const closed = pts[0] === pts[pts.length - 2] && pts[1] === pts[pts.length - 1];
+      if (closed) {
+        pts.length -= 2;
+      }
+      for (let j = 0; j < pts.length; j += 2) {
+        const x = pts[j], y = pts[j + 1];
+        if (x < minx) minx = x;
+        if (x > maxx) maxx = x;
+        if (y < miny) miny = y;
+        if (y > maxy) maxy = y;
+      }
+      res.points += pts.length >> 1;
+      res.polys.push({ pts: Float32Array.from(pts), closed });
+      if (res.points >= maxPoints) res.truncated = true;
+    }
+    if (res.polys.length) res.bbox = { x0: minx, y0: miny, x1: maxx, y1: maxy };
+    return res;
+  }
+  function _push(pts, x, y) {
+    const n = pts.length;
+    if (n >= 2 && pts[n - 2] === x && pts[n - 1] === y) return;
+    if (n >= 4) {
+      const px = pts[n - 2], py = pts[n - 1], qx = pts[n - 4], qy = pts[n - 3];
+      if ((px - qx) * (y - py) === (x - px) * (py - qy)) {
+        pts[n - 2] = x;
+        pts[n - 1] = y;
+        return;
+      }
+    }
+    pts.push(x, y);
+  }
+  var BordersView = class {
+    constructor(q) {
+      this.q = q;
+      this.cv = null;
+      this.cx = null;
+      this.bakePx = 0;
+      this.key = "";
+      this.bakes = 0;
+      this.layers = [];
+      this.fillBox = null;
+      this.mask = null;
+      this.hatch = null;
+      this.hatchPx = 0;
+      this.points = 0;
+      this.truncated = false;
+      this.strokes = 0;
+    }
+    // Смена пресета меняет разрешение выпечки — держать старый канвас незачем.
+    setQuality(q) {
+      this.q = q;
+      this.key = "";
+      this.cv = null;
+      this.cx = null;
+      this.hatch = null;
+      this.hatchPx = 0;
+    }
+    bytes() {
+      return canvasBytes(this.cv);
+    }
+    stats() {
+      return {
+        bakes: this.bakes,
+        bakePx: this.bakePx,
+        points: this.points,
+        polys: this.layers.reduce((s, l) => s + l.polys.length, 0),
+        owners: this.layers.length,
+        truncated: this.truncated,
+        strokes: this.strokes,
+        bytes: this.bytes()
+      };
+    }
+    // Возвращает число вызовов stroke() — по нему главный разработчик может
+    // сразу увидеть, во что слой обошёлся, не подключая профилировщик.
+    //
+    // opts: { enabled, mode: 'own'|'full', zoom }
+    //   'own'  (по умолчанию, когда sim.showTerritory выключен) — заливка только
+    //          своей земли и контуры всех: тихо, но «где кончается моё» видно;
+    //   'full' (sim.showTerritory включён клавишей в hud.js) — полная политическая
+    //          раскраска: заливка соседей и штриховка спорных клеток.
+    draw(sim2, ctx, ox, oy, z, cw, ch, opts = {}) {
+      this.strokes = 0;
+      if (opts.enabled === false) return 0;
+      const st = bordersState(sim2);
+      if (!st) return 0;
+      const mode = opts.mode || (sim2 && sim2.showTerritory ? "full" : "own");
+      const zoom = opts.zoom || z / 32;
+      const lod = lodForZoom(this.q, zoom);
+      this._ensure(sim2, st, mode);
+      if (!this.layers.length && !this.fillBox) return 0;
+      this._blitFill(ctx, ox, oy, z, cw, ch, st);
+      this._strokeOutlines(ctx, ox, oy, z, cw, ch, mode, lod);
+      return this.strokes;
+    }
+    // ---- выпечка ------------------------------------------------------------
+    _ensure(sim2, st, mode) {
+      const W = st.w, H = st.h;
+      const bp = pickBakePx(this.q, W, H);
+      const key = `${st.recomputes}|${st.version}|${st.lastDay}|${W}x${H}|${bp}|${mode}|${this.q.id}|${(sim2.world && sim2.world.seed) | 0}`;
+      if (key === this.key && this.cv) return;
+      this.key = key;
+      this.bakePx = bp;
+      this._bake(sim2, st, mode, bp);
+      this.bakes++;
+    }
+    _bake(sim2, st, mode, bp) {
+      const W = st.w, H = st.h;
+      const cvW = W * bp, cvH = H * bp;
+      if (!this.cv || this.cv.width !== cvW || this.cv.height !== cvH) {
+        this.cv = document.createElement("canvas");
+        this.cv.width = cvW;
+        this.cv.height = cvH;
+        this.cx = this.cv.getContext("2d");
+        this.hatch = null;
+        this.hatchPx = 0;
+      }
+      const c = this.cx;
+      if (c.setTransform) c.setTransform(1, 0, 0, 1, 0, 0);
+      c.clearRect(0, 0, cvW, cvH);
+      this.fillBox = null;
+      this._bakeFill(sim2, st, mode, bp, c);
+      if (mode === "full" && this.q.detail >= 1) this._bakeHatch(sim2, st, bp, c);
+      this._traceAll(sim2, st);
+    }
+    // Заливка. Ключевой приём — склейка по строке: подряд идущие клетки с тем же
+    // владельцем и той же полосой затухания рисуются ОДНИМ fillRect. Территория
+    // это крупные пятна, поэтому вместо 9216 прямоугольников выходит 200–900.
+    _bakeFill(sim2, st, mode, bp, c) {
+      const W = st.w, H = st.h;
+      const owners = st.owners, depth = st.depth;
+      const seed = (sim2.world && sim2.world.seed) | 0;
+      const onlyPlayer = mode !== "full";
+      const styles = /* @__PURE__ */ new Map();
+      const styleOf = (code, band) => {
+        const k = code * 8 + band;
+        let s = styles.get(k);
+        if (s === void 0) {
+          s = _rgba(ownerColorOf(sim2, code), FILL_BANDS[band]);
+          styles.set(k, s);
+        }
+        return s;
+      };
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let y = 0; y < H; y++) {
+        let runCode = 0, runBand = 0, runX = 0;
+        for (let x = 0; x <= W; x++) {
+          let code = 0, band = 0;
+          if (x < W) {
+            const i = y * W + x;
+            code = owners[i];
+            if (code && onlyPlayer && code !== OWNER_PLAYER) code = 0;
+            if (code) band = fillBand(depth[i], x, y, seed);
+          }
+          if (code !== runCode || band !== runBand) {
+            if (runCode) {
+              c.fillStyle = styleOf(runCode, runBand);
+              c.fillRect(runX * bp, y * bp, (x - runX) * bp, bp);
+              if (runX < x0) x0 = runX;
+              if (x > x1) x1 = x;
+              if (y < y0) y0 = y;
+              if (y + 1 > y1) y1 = y + 1;
+            }
+            runCode = code;
+            runBand = band;
+            runX = x;
+          }
+        }
+      }
+      if (x0 <= x1) this.fillBox = { x0, y0, x1, y1 };
+    }
+    // Штриховка спорных клеток. Все отрезки собираются в ОДИН путь и заливаются
+    // паттерном за одну операцию: паттерн — это заливка «бесконечными» полосами,
+    // и платить за неё имеет смысл ровно один раз, а не по клетке.
+    _bakeHatch(sim2, st, bp, c) {
+      this.mask = contestedMask(st, sim2.world, this.mask);
+      const W = st.w, H = st.h;
+      const m = this.mask;
+      const pat = this._hatchPattern(bp, c);
+      if (!c.beginPath || !c.rect || !c.fill) return;
+      c.beginPath();
+      let any = false;
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+      for (let y = 0; y < H; y++) {
+        let run = -1;
+        for (let x = 0; x <= W; x++) {
+          const on = x < W && m[y * W + x] === 1;
+          if (on && run < 0) run = x;
+          else if (!on && run >= 0) {
+            c.rect(run * bp, y * bp, (x - run) * bp, bp);
+            any = true;
+            if (run < bx0) bx0 = run;
+            if (x > bx1) bx1 = x;
+            if (y < by0) by0 = y;
+            if (y + 1 > by1) by1 = y + 1;
+            run = -1;
+          }
+        }
+      }
+      if (!any) return;
+      c.fillStyle = pat || "rgba(232,238,250,0.10)";
+      c.fill();
+      if (!this.fillBox) this.fillBox = { x0: bx0, y0: by0, x1: bx1, y1: by1 };
+      else {
+        const f = this.fillBox;
+        if (bx0 < f.x0) f.x0 = bx0;
+        if (by0 < f.y0) f.y0 = by0;
+        if (bx1 > f.x1) f.x1 = bx1;
+        if (by1 > f.y1) f.y1 = by1;
+      }
+    }
+    // Ячейка паттерна: диагональ из левого нижнего угла в правый верхний. Такая
+    // диагональ стыкуется сама с собой при повторении без швов, поэтому хватает
+    // одного отрезка. Период — полклетки выпечки: целая клетка даёт три жирные
+    // полосы на всю спорную зону и читается как брак, а не как штриховка.
+    _hatchPattern(bp, c) {
+      const p = Math.max(4, bp >> 1);
+      if (this.hatch && this.hatchPx === p) return this.hatch;
+      if (typeof c.createPattern !== "function") return null;
+      try {
+        const cv = document.createElement("canvas");
+        cv.width = p;
+        cv.height = p;
+        const g2 = cv.getContext("2d");
+        g2.strokeStyle = "rgba(240,244,255,0.42)";
+        g2.lineWidth = Math.max(1, p / 5);
+        g2.beginPath();
+        g2.moveTo(0, p);
+        g2.lineTo(p, 0);
+        g2.stroke();
+        this.hatch = c.createPattern(cv, "repeat");
+        this.hatchPx = p;
+        return this.hatch;
+      } catch {
+        return null;
+      }
+    }
+    // Контуры всех владельцев. Порядок — игрок ПОСЛЕДНИМ: на стыке двух держав
+    // линии лежат в одной и той же точке решётки, и сверху должна оказаться своя.
+    _traceAll(sim2, st) {
+      const codes = [];
+      if (st.tiles && st.tiles.length) {
+        for (let code = 1; code < st.tiles.length; code++) if (st.tiles[code] > 0) codes.push(code);
+      }
+      if (!codes.length) {
+        const seen = /* @__PURE__ */ new Set();
+        for (let i = 0; i < st.owners.length; i++) {
+          const o = st.owners[i];
+          if (o) seen.add(o);
+        }
+        for (const o of seen) codes.push(o);
+        codes.sort((a, b) => a - b);
+      }
+      codes.sort((a, b) => (a === OWNER_PLAYER ? 1 : 0) - (b === OWNER_PLAYER ? 1 : 0) || a - b);
+      this.layers = [];
+      this.points = 0;
+      this.truncated = false;
+      const hasPath2D = typeof Path2D === "function";
+      for (const code of codes) {
+        const budget = MAX_POINTS - this.points;
+        if (budget <= 0) {
+          this.truncated = true;
+          break;
+        }
+        const r = traceContours(st.owners, st.w, st.h, code, { maxPoints: budget });
+        if (!r.polys.length) continue;
+        this.points += r.points;
+        if (r.truncated) this.truncated = true;
+        let path = null;
+        if (hasPath2D) {
+          path = new Path2D();
+          for (const p of r.polys) {
+            const a = p.pts;
+            path.moveTo(a[0], a[1]);
+            for (let i = 2; i < a.length; i += 2) path.lineTo(a[i], a[i + 1]);
+            if (p.closed) path.closePath();
+          }
+        }
+        this.layers.push({ code, color: ownerColorOf(sim2, code), polys: r.polys, path, bbox: r.bbox });
+      }
+    }
+    // ---- кадр ---------------------------------------------------------------
+    // Один drawImage. Источник вырезается по пересечению видимого прямоугольника
+    // и прямоугольника закрашенного: без этого мы бы каждый кадр отдавали
+    // растеризатору весь мир 96×96 даже тогда, когда владение игрока — пятно в
+    // десять клеток, и платили бы за пустые пиксели полную цену блита с альфой.
+    _blitFill(ctx, ox, oy, z, cw, ch, st) {
+      const f = this.fillBox;
+      if (!f || !this.cv) return;
+      const bp = this.bakePx;
+      let x0 = Math.max(f.x0, Math.floor((0 - ox) / z));
+      let y0 = Math.max(f.y0, Math.floor((0 - oy) / z));
+      let x1 = Math.min(f.x1, Math.ceil((cw - ox) / z));
+      let y1 = Math.min(f.y1, Math.ceil((ch - oy) / z));
+      x0 = Math.max(0, x0);
+      y0 = Math.max(0, y0);
+      x1 = Math.min(st.w, x1);
+      y1 = Math.min(st.h, y1);
+      if (x1 <= x0 || y1 <= y0) return;
+      ctx.save();
+      if ("imageSmoothingEnabled" in ctx) ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(
+        this.cv,
+        x0 * bp,
+        y0 * bp,
+        (x1 - x0) * bp,
+        (y1 - y0) * bp,
+        ox + x0 * z,
+        oy + y0 * z,
+        (x1 - x0) * z,
+        (y1 - y0) * z
+      );
+      ctx.restore();
+    }
+    // Линии. Путь построен в КЛЕТОЧНЫХ координатах, поэтому камера задаётся
+    // трансформацией, а толщина делится на z — так линия остаётся ровно LINE_*
+    // экранных пикселей на любом зуме, и перестроение пути при зуме не нужно.
+    _strokeOutlines(ctx, ox, oy, z, cw, ch, mode, lod) {
+      if (!this.layers.length) return;
+      const vx0 = (0 - ox) / z - 1, vy0 = (0 - oy) / z - 1;
+      const vx1 = (cw - ox) / z + 1, vy1 = (ch - oy) / z + 1;
+      const halo = this.q.detail >= 1 && !lod.far;
+      const thin = lod.far ? 0.75 : 1;
+      ctx.save();
+      ctx.translate(ox, oy);
+      ctx.scale(z, z);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      for (const l of this.layers) {
+        const b = l.bbox;
+        if (b && (b.x1 < vx0 || b.x0 > vx1 || b.y1 < vy0 || b.y0 > vy1)) continue;
+        const own = l.code === OWNER_PLAYER;
+        const w = (own ? LINE_OWN : LINE_OTHER) * thin;
+        if (halo) {
+          ctx.globalAlpha = 1;
+          ctx.strokeStyle = HALO_COLOR;
+          ctx.lineWidth = (w + LINE_HALO) / z;
+          this._strokeLayer(ctx, l);
+        }
+        ctx.globalAlpha = own ? 1 : mode === "full" ? 0.95 : 0.7;
+        ctx.strokeStyle = l.color;
+        ctx.lineWidth = w / z;
+        this._strokeLayer(ctx, l);
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+    // Path2D — один вызов на всю границу владельца: геометрию держит браузер,
+    // JS в кадре не трогает ни одной точки. Ветка с ломаными нужна там, где
+    // Path2D нет (node в тестах) — она делает то же самое, но руками.
+    _strokeLayer(ctx, l) {
+      this.strokes++;
+      if (l.path) {
+        ctx.stroke(l.path);
+        return;
+      }
+      for (const p of l.polys) {
+        const a = p.pts;
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        for (let i = 2; i < a.length; i += 2) ctx.lineTo(a[i], a[i + 1]);
+        if (p.closed) ctx.closePath();
+        ctx.stroke();
+      }
+    }
+  };
+  function _rgba(hex, a) {
+    let r = 106, g2 = 111, b = 122;
+    if (typeof hex === "string" && hex[0] === "#" && hex.length >= 7) {
+      const v = parseInt(hex.slice(1, 7), 16);
+      if (!Number.isNaN(v)) {
+        r = v >> 16 & 255;
+        g2 = v >> 8 & 255;
+        b = v & 255;
+      }
+    }
+    return `rgba(${r},${g2},${b},${a})`;
+  }
+
+  // app/src/render/construction.js
   var TILE_PX6 = 32;
+  var CONSTRUCTION_LIMITS = {
+    sitesFrame: 12,
+    // площадок в кадре; больше двенадцати одновременных
+    // строек не бывает даже у игрока с полной казной —
+    // жителей на них всё равно не хватит (3 на объект)
+    buildersPerSite: 3,
+    // ровно BUILDERS_PER_SITE из simulation.js: больше трёх
+    // фигурок на настиле физически неоткуда взять
+    dustPerSite: 4,
+    // облачков пыли у основания
+    chipsPerSite: 3,
+    // летящих стружек у основания
+    flashes: 6,
+    // одновременных вспышек сдачи
+    flashChips: 14,
+    // щепок в одной вспышке
+    scafEntries: 24,
+    // записей в кэше лесов (LRU)
+    plateEntries: 20,
+    // записей в кэше плит площадки (LRU)
+    scafMB: 8
+    // память под леса; ниже ещё режется q.caps.spriteMB
+  };
+  var FOUNDATION_P = 0.12;
+  var DISMANTLE_P = 0.75;
+  var SCAF_AHEAD = 0.18;
+  var SCAF_MIN = 0.22;
+  var SCAF_TAIL = 0.08;
+  var LEVEL_H = 0.32;
+  var LEVELS_MIN = 2;
+  var LEVELS_MAX = 7;
+  var FLASH_LIFE = 0.9;
+  var BUILDER_H = 0.34;
+  var PLATE_BASE = [40, 64, 88];
+  var SCAF_BASE = [44, 72, 100];
+  var BUILDER_BASE = [16, 24, 32];
+  var WOOD = { pole: "#8a6a3f", plank: "#b08d57", rope: "#c9b27a", net: null };
+  var TUBE = { pole: "#9aa3ab", plank: "#c2c8cc", rope: "#7fa4c8", net: "rgba(110,190,140,0.18)" };
+  var METAL_ERA = 7;
+  function chash(a, b, c) {
+    let h = (a | 0) * 374761393 + (b | 0) * 668265263 + (c | 0) * 1103515245 | 0;
+    h = (h ^ h >>> 13) * 1274126177 | 0;
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+  function rngFrom2(seed) {
+    let s = seed >>> 0 || 1;
+    return () => {
+      s = s * 1664525 + 1013904223 >>> 0;
+      return s / 4294967296;
+    };
+  }
+  function progressOf(b) {
+    if (!b) return 0;
+    const days = b.buildDays > 0 ? b.buildDays : 0.01;
+    const p = (b.progress || 0) / days;
+    return p > 0 ? p < 1 ? p : 1 : 0;
+  }
+  function revealFrac(p) {
+    if (p <= FOUNDATION_P) return 0;
+    return (p - FOUNDATION_P) / (1 - FOUNDATION_P);
+  }
+  function dismantleK(p) {
+    if (p <= DISMANTLE_P) return 0;
+    return (p - DISMANTLE_P) / (1 - DISMANTLE_P);
+  }
+  function scaffoldFrac(p) {
+    const ahead = Math.min(1, revealFrac(p) + SCAF_AHEAD);
+    const up = Math.max(SCAF_MIN, ahead);
+    return up * (1 - dismantleK(p) * (1 - SCAF_TAIL));
+  }
+  function levelsFor(hTiles) {
+    const n = Math.round(hTiles / LEVEL_H);
+    return Math.max(LEVELS_MIN, Math.min(LEVELS_MAX, n));
+  }
+  function postsFor(sizeTiles) {
+    return Math.max(3, Math.min(8, Math.round(4 * sizeTiles) + 1));
+  }
+  function eraOf2(b, sim2) {
+    const own = BUILDING_ERA_IDX[b.id] || 0;
+    const cur = sim2 && sim2.eraIndex !== void 0 ? sim2.eraIndex : own;
+    return Math.max(own, Math.min(9, Math.min(cur, own + 3)));
+  }
+  function heightFactor(id) {
+    return archHeight(ARCH[id] || "house") * 1.12;
+  }
+  var VARIANTS3 = 4;
+  function siteVariant(b, seed) {
+    return Math.floor(chash(b.x * 3 + 17, b.y * 5 + 23, seed) * VARIANTS3) % VARIANTS3;
+  }
+  function mkCanvas2(w, h) {
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.round(w));
+    cv.height = Math.max(1, Math.round(h));
+    return cv;
+  }
+  function outline2(c, body, k) {
+    const sil = mkCanvas2(body.width, body.height);
+    const sc = sil.getContext("2d");
+    sc.drawImage(body, 0, 0);
+    sc.globalCompositeOperation = "source-in";
+    sc.fillStyle = "rgba(24,18,14,0.85)";
+    sc.fillRect(0, 0, sil.width, sil.height);
+    for (const [dx, dy] of [[-k, 0], [k, 0], [0, -k], [0, k]]) c.drawImage(sil, dx, dy);
+  }
+  function lineTo(c, x1, y1, x2, y2, col, w) {
+    c.strokeStyle = col;
+    c.lineWidth = Math.max(1, w);
+    c.beginPath();
+    c.moveTo(x1, y1);
+    c.lineTo(x2, y2);
+    c.stroke();
+  }
+  function bakePlate(sizeTiles, era, variant, detail) {
+    const W = Math.round(PLATE_BASE[detail] * sizeTiles);
+    const cv = mkCanvas2(W, W);
+    const c = cv.getContext("2d");
+    const rnd = rngFrom2(variant * 7919 + era * 131 + sizeTiles * 17 + 1);
+    const soil = era >= METAL_ERA ? "#6b6b6b" : "#6d5637";
+    c.fillStyle = soil;
+    c.fillRect(0, 0, W, W);
+    const spots = 10 + detail * 8;
+    for (let i = 0; i < spots; i++) {
+      const r = W * (0.05 + rnd() * 0.11);
+      c.fillStyle = shade(soil, rnd() < 0.5 ? -0.16 : 0.14);
+      c.beginPath();
+      c.ellipse(rnd() * W, rnd() * W, r, r * 0.72, 0, 0, 7);
+      c.fill();
+    }
+    c.strokeStyle = "rgba(20,14,8,0.42)";
+    c.lineWidth = Math.max(1, W * 0.035);
+    c.beginPath();
+    c.rect(W * 0.03, W * 0.03, W * 0.94, W * 0.94);
+    c.stroke();
+    const cx = variant & 1 ? W * 0.74 : W * 0.24;
+    const cy = variant & 2 ? W * 0.74 : W * 0.26;
+    const bw = W * 0.3, bh = W * 0.075;
+    for (let i = 0; i < 4; i++) {
+      const y = cy + bh * (1.5 - i) * 0.85;
+      c.fillStyle = shade(era >= METAL_ERA ? "#8f979d" : "#a8834e", i * 0.05 - 0.06);
+      c.fillRect(cx - bw / 2 + i % 2 * bw * 0.06, y, bw, bh);
+    }
+    c.fillStyle = "rgba(0,0,0,0.28)";
+    c.fillRect(cx - bw / 2, cy + bh * 1.9, bw, bh * 0.5);
+    const peg = W * 0.022;
+    c.fillStyle = era >= METAL_ERA ? "#c8ccd0" : "#c9b27a";
+    for (let i = 0; i < 4; i++) {
+      const t = 0.12 + i * 0.25;
+      c.fillRect(W * t, W * 0.02, peg, W * 0.07);
+      c.fillRect(W * t, W * 0.91, peg, W * 0.07);
+    }
+    lineTo(c, W * 0.12, W * 0.045, W * 0.87, W * 0.045, "rgba(220,210,180,0.55)", W * 0.012);
+    lineTo(c, W * 0.12, W * 0.935, W * 0.87, W * 0.935, "rgba(220,210,180,0.55)", W * 0.012);
+    return cv;
+  }
+  function bakeScaffold(sizeTiles, hFact, era, variant, detail) {
+    const W = Math.round(SCAF_BASE[detail] * sizeTiles * 1.14);
+    const H = Math.round(W * (hFact * 1.06) / 1.14);
+    const cv = mkCanvas2(W, H);
+    const c = cv.getContext("2d");
+    const rnd = rngFrom2(variant * 104729 + era * 313 + Math.round(hFact * 100) * 7 + sizeTiles);
+    const M = era >= METAL_ERA ? TUBE : WOOD;
+    const posts = postsFor(sizeTiles);
+    const levels = levelsFor(hFact);
+    const pw = Math.max(1, W * 0.022);
+    const dh = H / levels;
+    const side = W * 0.055;
+    const dark = shade(M.pole, -0.34);
+    for (let i = 0; i < posts; i++) {
+      const x = W * 0.04 + W * 0.92 * (i / (posts - 1));
+      lineTo(c, x + side, -side * 0.5, x + side, H - side * 0.5, dark, pw);
+    }
+    for (let l = 0; l <= levels; l++) {
+      const y = H - l * dh;
+      lineTo(c, W * 0.04 + side, y - side * 0.5, W * 0.96 + side, y - side * 0.5, shade(M.plank, -0.34), pw * 1.1);
+    }
+    for (let i = 0; i < posts; i++) {
+      const x = W * 0.04 + W * 0.92 * (i / (posts - 1));
+      const over = dh * (0.1 + rnd() * 0.22);
+      lineTo(c, x, -over, x, H, M.pole, pw);
+      lineTo(c, x - pw * 0.4, -over, x - pw * 0.4, H, shade(M.pole, 0.18), pw * 0.4);
+    }
+    for (let l = 0; l <= levels; l++) {
+      const y = H - l * dh;
+      c.fillStyle = M.plank;
+      c.fillRect(W * 0.02, y - pw * 1.2, W * 0.96, pw * 1.9);
+      c.fillStyle = "rgba(0,0,0,0.30)";
+      c.fillRect(W * 0.02, y + pw * 0.7, W * 0.96, pw * 0.8);
+    }
+    for (let l = 0; l < levels; l += 2) {
+      const y0 = H - l * dh, y1 = H - (l + 1) * dh;
+      const x0 = W * 0.06, x1 = W * 0.94;
+      lineTo(c, l % 4 ? x0 : x1, y0, l % 4 ? x1 : x0, y1, shade(M.pole, -0.12), pw * 0.7);
+    }
+    const rx = W * (0.18 + rnd() * 0.62);
+    lineTo(c, rx, H - levels * dh, rx, H - (levels - 1.35) * dh, M.rope, pw * 0.55);
+    c.fillStyle = shade(M.plank, -0.3);
+    c.fillRect(rx - W * 0.035, H - (levels - 1.35) * dh, W * 0.07, W * 0.055);
+    if (M.net) {
+      c.fillStyle = M.net;
+      c.fillRect(W * 0.04, 0, W * 0.92, H);
+    }
+    return cv;
+  }
+  function bakeDeck(sizeTiles, era, detail) {
+    const W = Math.round(SCAF_BASE[detail] * sizeTiles * 1.14);
+    const H = Math.max(4, Math.round(W * 0.13));
+    const cv = mkCanvas2(W, H);
+    const c = cv.getContext("2d");
+    const M = era >= METAL_ERA ? TUBE : WOOD;
+    const t = Math.max(1, H * 0.2);
+    c.fillStyle = M.plank;
+    c.fillRect(0, H - t * 1.6, W, t * 1.6);
+    c.fillStyle = "rgba(0,0,0,0.32)";
+    c.fillRect(0, H - t * 0.35, W, t * 0.5);
+    lineTo(c, 0, H - t * 3.4, W, H - t * 3.4, M.pole, t * 0.8);
+    for (let i = 0; i <= 6; i++) {
+      const x = W * (0.03 + 0.94 * i / 6);
+      lineTo(c, x, H - t * 3.4, x, H - t * 1.4, M.pole, t * 0.6);
+    }
+    return cv;
+  }
+  function bakeBuilder(era, detail) {
+    const fh = BUILDER_BASE[detail];
+    const fw = Math.round(fh * 0.62);
+    const cv = mkCanvas2(fw * 2, fh);
+    const c = cv.getContext("2d");
+    const body = mkCanvas2(fw * 2, fh);
+    const bc = body.getContext("2d");
+    const cloth = era >= METAL_ERA ? "#e8a33c" : "#a8763f";
+    const skin = era >= METAL_ERA ? "#d9a97e" : "#c99a72";
+    const helm = era >= METAL_ERA ? "#ffd24a" : "#7a5a34";
+    for (let f = 0; f < 2; f++) {
+      const ox = f * fw;
+      bc.fillStyle = "#4a3a2c";
+      bc.fillRect(ox + fw * 0.3, fh * 0.58, fw * 0.16, fh * 0.4);
+      bc.fillRect(ox + fw * 0.54, fh * 0.58, fw * 0.16, fh * 0.4);
+      bc.fillStyle = cloth;
+      bc.fillRect(ox + fw * 0.26, fh * 0.3, fw * 0.48, fh * 0.32);
+      bc.fillStyle = skin;
+      bc.fillRect(ox + fw * 0.34, fh * 0.12, fw * 0.32, fh * 0.2);
+      bc.fillStyle = helm;
+      bc.fillRect(ox + fw * 0.28, fh * 0.06, fw * 0.44, fh * 0.1);
+      const ay = f === 0 ? fh * 0.02 : fh * 0.4;
+      bc.fillStyle = skin;
+      bc.fillRect(ox + fw * 0.7, ay + fh * 0.06, fw * 0.13, fh * 0.26);
+      bc.fillStyle = "#59504a";
+      bc.fillRect(ox + fw * 0.64, ay, fw * 0.3, fh * 0.09);
+    }
+    outline2(c, body, Math.max(1, Math.round(fh / 16)));
+    c.drawImage(body, 0, 0);
+    return { cv, fw, fh };
+  }
+  function bakePuff(warm) {
+    const S = 40;
+    const cv = mkCanvas2(S, S);
+    const c = cv.getContext("2d");
+    const col = warm ? "196,172,128" : "188,190,192";
+    const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    g2.addColorStop(0, `rgba(${col},0.50)`);
+    g2.addColorStop(0.45, `rgba(${col},0.22)`);
+    g2.addColorStop(1, `rgba(${col},0)`);
+    c.fillStyle = g2;
+    c.fillRect(0, 0, S, S);
+    return cv;
+  }
+  function bakeChip(era) {
+    const S = 10;
+    const cv = mkCanvas2(S, S);
+    const c = cv.getContext("2d");
+    c.fillStyle = era >= METAL_ERA ? "#c8ccd0" : "#d8b877";
+    c.beginPath();
+    c.moveTo(S * 0.1, S * 0.5);
+    c.lineTo(S * 0.9, S * 0.25);
+    c.lineTo(S * 0.85, S * 0.7);
+    c.lineTo(S * 0.15, S * 0.8);
+    c.closePath();
+    c.fill();
+    c.fillStyle = "rgba(60,44,26,0.55)";
+    c.fillRect(0, S * 0.72, S, S * 0.14);
+    return cv;
+  }
+  function bakeFlash() {
+    const S = 96;
+    const cv = mkCanvas2(S, S);
+    const c = cv.getContext("2d");
+    const g2 = c.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    g2.addColorStop(0, "rgba(255,255,240,0.95)");
+    g2.addColorStop(0.28, "rgba(255,214,140,0.55)");
+    g2.addColorStop(0.62, "rgba(255,180,90,0.18)");
+    g2.addColorStop(1, "rgba(255,170,80,0)");
+    c.fillStyle = g2;
+    c.fillRect(0, 0, S, S);
+    return cv;
+  }
+  var ConstructionLayer = class {
+    constructor(quality) {
+      this.enabled = true;
+      this.scaf = /* @__PURE__ */ new Map();
+      this.plates = /* @__PURE__ */ new Map();
+      this.decks = /* @__PURE__ */ new Map();
+      this.builders = /* @__PURE__ */ new Map();
+      this.puff = null;
+      this._puffCold = null;
+      this.chip = null;
+      this.chipHi = null;
+      this.flash = null;
+      this._seen = /* @__PURE__ */ new WeakSet();
+      this._events = [];
+      this._bars = [];
+      this._sprAsked = /* @__PURE__ */ new WeakSet();
+      this.time = 0;
+      this._stats = { sites: 0, builders: 0, particles: 0, flashes: 0, bakes: 0 };
+      this.setQuality(quality);
+    }
+    setQuality(q) {
+      this.q = q;
+      this.capSites = Math.min(CONSTRUCTION_LIMITS.sitesFrame, q.caps.buildings);
+      this.capDust = Math.max(0, Math.round(CONSTRUCTION_LIMITS.dustPerSite * q.particles));
+      this.capChips = Math.max(0, Math.round(CONSTRUCTION_LIMITS.chipsPerSite * q.particles));
+      this.capFlashChips = Math.max(4, Math.round(CONSTRUCTION_LIMITS.flashChips * q.particles));
+      this.capBuilders = Math.max(1, Math.min(
+        CONSTRUCTION_LIMITS.buildersPerSite,
+        Math.round(CONSTRUCTION_LIMITS.buildersPerSite * q.particles + 0.4)
+      ));
+      this.scafMB = Math.min(CONSTRUCTION_LIMITS.scafMB, q.caps.spriteMB * 0.25);
+      this.detailMinZoom = q.lod.propsMinZoom;
+      this.clear();
+    }
+    clear() {
+      this.scaf.clear();
+      this.plates.clear();
+      this.decks.clear();
+      this.builders.clear();
+      this.puff = null;
+      this._puffCold = null;
+      this.chip = null;
+      this.chipHi = null;
+      this.flash = null;
+      this._events.length = 0;
+      this._bars.length = 0;
+    }
+    stats() {
+      return { ...this._stats, scafCache: this.scaf.size, plateCache: this.plates.size };
+    }
+    // ------------------------------------------------------------------ кадр
+    // Один вызов на кадр, до общего Y-прохода. Считает то, что не должно
+    // считаться по 200 раз: зум, гейты, бюджет выпечки, — и ловит переход
+    // «площадка → готовое здание», по которому зажигается вспышка.
+    begin(sim2, dtReal, ox, oy, z, cw, ch) {
+      this.time += dtReal || 0;
+      this.ox = ox;
+      this.oy = oy;
+      this.z = z;
+      this.cw = cw;
+      this.ch = ch;
+      const zoom = z / TILE_PX6;
+      this.zoom = zoom;
+      this.onSite = this.enabled && z >= 6;
+      this.onDetail = this.enabled && zoom >= this.detailMinZoom;
+      this.onFlash = this.enabled && z >= 6;
+      this.bakeLeft = this.q.caps.bakesPerFrame;
+      this.seed = ((sim2 && sim2.world && sim2.world.seed) | 0) & 65535;
+      this._bars.length = 0;
+      this._stats.sites = 0;
+      this._stats.builders = 0;
+      this._stats.particles = 0;
+      this._stats.flashes = 0;
+      this._stats.bakes = 0;
+      this._scanFinished(sim2);
+      this._ageEvents(dtReal || 0);
+    }
+    // Переход «была площадкой → стала готовой». Ловится сравнением с прошлым
+    // кадром, потому что ядро о рендере не знает и события не шлёт.
+    // Важное следствие правильной реализации: здание, ПРИШЕДШЕЕ готовым из сейва
+    // или поставленное placeFree() (стартовое кострище, награды), вспышку не
+    // получает — мы никогда не видели его площадкой. Наивная проверка «done и
+    // раньше не видели» зажигала бы фейерверк над всем городом при каждой
+    // загрузке.
+    _scanFinished(sim2) {
+      if (!sim2 || !sim2.buildings) return;
+      for (const b of sim2.buildings) {
+        if (b.destroyed) {
+          this._seen.delete(b);
+          continue;
+        }
+        if (!b.done) {
+          this._seen.add(b);
+          continue;
+        }
+        if (this._seen.has(b)) {
+          this._seen.delete(b);
+          if (this._events.length >= CONSTRUCTION_LIMITS.flashes) this._events.shift();
+          const def = BUILDINGS[b.id];
+          this._events.push({
+            x: b.x,
+            y: b.y,
+            size: b.size || 1,
+            era: eraOf2(b, sim2),
+            t: 0,
+            seed: b.x * 73 + b.y * 151 + this.seed | 0,
+            h: heightFactor(b.id) * (def && def.size ? def.size : 1)
+          });
+        }
+      }
+    }
+    _ageEvents(dt) {
+      if (!this._events.length) return;
+      for (const e of this._events) e.t += dt;
+      while (this._events.length && this._events[0].t > FLASH_LIFE) this._events.shift();
+    }
+    // ------------------------------------------------------------- площадка
+    // Рисует ОДНУ строящуюся постройку. Вызывается из renderer.drawBuilding
+    // вместо прежней ветки `if (!b.done)`, то есть внутри общего Y-прохода: это
+    // важно, потому что житель, идущий перед стройкой, обязан быть впереди лесов,
+    // а идущий за ней — позади.
+    //
+    // sprOf — не спрайт, а функция, которая его достанет. Так сделано, чтобы
+    // решение «печь ли спрайт здания» осталось здесь: на дальнем зуме и при
+    // исчерпанном бюджете выпечки мы его просто не спрашиваем, и SpriteCache не
+    // тратит 2 мс на дом, которого ещё нет.
+    site(sim2, ctx, b, sx, sy, size, sprOf) {
+      const p = progressOf(b);
+      if (!this.onSite) {
+        ctx.fillStyle = "rgba(109,86,55,0.75)";
+        ctx.fillRect(sx + 1, sy + 1, size - 2, size - 2);
+        return;
+      }
+      if (this._stats.sites >= this.capSites) return;
+      this._stats.sites++;
+      const era = eraOf2(b, sim2);
+      const eraCls = era >= METAL_ERA ? 1 : 0;
+      const sizeTiles = b.size || 1;
+      const variant = siteVariant(b, this.seed);
+      const detail = this.q.detail;
+      const hFact = heightFactor(b.id);
+      const dw = size * 1.16, dh = dw * hFact;
+      const dx = sx - size * 0.08, dy = sy + size - dh;
+      const plate2 = this._plate(sizeTiles, eraCls, variant, detail);
+      if (plate2) ctx.drawImage(plate2, sx - size * 0.06, sy - size * 0.06, size * 1.12, size * 1.12);
+      else {
+        ctx.fillStyle = "rgba(109,86,55,0.85)";
+        ctx.fillRect(sx, sy, size, size);
+      }
+      const r = revealFrac(p);
+      let spr = null;
+      if (r > 0.02 && sprOf) {
+        const fresh = !this._sprAsked.has(b);
+        if (!fresh || this.bakeLeft > 0) {
+          if (fresh) {
+            this._sprAsked.add(b);
+            this.bakeLeft--;
+            this._stats.bakes++;
+          }
+          spr = sprOf();
+        }
+      }
+      if (spr && spr.cv && spr.cv.height > 0) {
+        const sh = spr.cv.height, sw = spr.cv.width;
+        const cut = Math.max(1, Math.round(sh * r));
+        ctx.drawImage(spr.cv, 0, sh - cut, sw, cut, dx, dy + dh - dh * r, dw, dh * r);
+        const cy = dy + dh - dh * r;
+        ctx.fillStyle = eraCls ? "rgba(200,214,226,0.55)" : "rgba(226,208,168,0.55)";
+        ctx.fillRect(dx + dw * 0.04, cy - Math.max(1, size * 0.02), dw * 0.92, Math.max(1, size * 0.035));
+      }
+      const f = scaffoldFrac(p);
+      const scafW = dw * 1.14, scafH = dh * 1.06;
+      const scafX = dx - dw * 0.07, scafBot = dy + dh;
+      const scafTopY = scafBot - scafH * f;
+      const sc = this._scaffold(sizeTiles, hFact, eraCls, variant, detail);
+      if (sc && f > 0.01) {
+        const cut = Math.max(1, Math.round(sc.height * f));
+        ctx.drawImage(sc, 0, sc.height - cut, sc.width, cut, scafX, scafTopY, scafW, scafH * f);
+        const deck = this._deck(sizeTiles, eraCls, detail);
+        if (deck) {
+          const dhh = scafW * (deck.height / deck.width);
+          ctx.drawImage(deck, scafX, scafTopY - dhh * 0.55, scafW, dhh);
+        }
+      }
+      if (!this.onDetail) return;
+      const crew = Math.min(this.capBuilders, b.workers && b.workers.length || 0);
+      if (crew > 0) {
+        const bs = this._builder(eraCls, detail);
+        if (bs) {
+          const bh = size * BUILDER_H, bw = bh * (bs.fw / bs.fh);
+          for (let i = 0; i < crew; i++) {
+            const t = 0.18 + 0.32 * i + chash(b.x, b.y, i + 5) * 0.14;
+            const ph = chash(b.x + 3, b.y + 7, i) * 6.28;
+            const fr = (this.time * 3.4 + ph | 0) & 1;
+            const bob = Math.sin(this.time * 3.4 + ph) * size * 0.012;
+            ctx.drawImage(
+              bs.cv,
+              fr * bs.fw,
+              0,
+              bs.fw,
+              bs.fh,
+              scafX + scafW * t - bw / 2,
+              scafTopY - bh * 0.92 + bob,
+              bw,
+              bh
+            );
+            this._stats.builders++;
+          }
+        }
+      }
+      this._groundFx(ctx, b, sx, sy, size, eraCls);
+      const barY = Math.min(scafTopY - size * 0.22, sy - size * 0.1);
+      this._bars.push({ x: sx + size / 2, y: barY, w: size * 0.9, p });
+    }
+    // Пыль и стружка. Частицы БЕЗ состояния: фаза считается из времени и хеша,
+    // поэтому массива живых частиц нет вовсе — ни выделений, ни сборки мусора,
+    // ни рассинхрона при паузе. Цена одной частицы — ровно один drawImage.
+    _groundFx(ctx, b, sx, sy, size, eraCls) {
+      const base = sy + size * 0.94;
+      for (let i = 0; i < this.capDust; i++) {
+        const ph = chash(b.x, b.y, i + 11);
+        const life = (this.time * 0.55 + ph) % 1;
+        const rise = size * (0.1 + life * 0.55);
+        const rad = size * (0.1 + life * 0.3);
+        const a = (1 - life) * 0.55 * (0.5 + ph * 0.5);
+        if (a < 0.02) continue;
+        const px = sx + size * (0.18 + chash(b.x + 1, b.y + 2, i) * 0.64);
+        const puff = this._puff(eraCls);
+        if (!puff) break;
+        ctx.globalAlpha = a;
+        ctx.drawImage(puff, px - rad, base - rise - rad, rad * 2, rad * 2);
+        ctx.globalAlpha = 1;
+        this._stats.particles++;
+      }
+      for (let i = 0; i < this.capChips; i++) {
+        const ph = chash(b.x + 5, b.y + 9, i + 3);
+        const life = (this.time * 0.9 + ph) % 1;
+        const dir = ph < 0.5 ? -1 : 1;
+        const dist = size * life * (0.22 + ph * 0.22);
+        const up = size * 0.3 * 4 * (life - life * life);
+        const s = size * 0.09;
+        const chip = this._chip(eraCls);
+        if (!chip) break;
+        ctx.globalAlpha = Math.min(1, (1 - life) * 2.2);
+        ctx.drawImage(chip, sx + size * 0.5 + dir * dist - s / 2, base - up - s / 2, s, s);
+        ctx.globalAlpha = 1;
+        this._stats.particles++;
+      }
+    }
+    // ------------------------------------------------- проход поверх зданий
+    // Вспышки сдачи, разлёт щепок и полоски прогресса. Отдельным проходом ПОСЛЕ
+    // общего Y-прохода: и вспышка, и полоска обязаны быть поверх всех крыш,
+    // иначе сдача объекта в плотном квартале пройдёт за соседним домом.
+    drawFx(ctx) {
+      if (!this.enabled) return;
+      const z = this.z, ox = this.ox, oy = this.oy;
+      if (this.onFlash) {
+        for (const e of this._events) {
+          const k = e.t / FLASH_LIFE;
+          const sx = ox + e.x * z, sy = oy + e.y * z;
+          const size = e.size * z;
+          if (sx < -200 || sy < -300 || sx > this.cw + 200 || sy > this.ch + 200) continue;
+          const fl = this._flash();
+          if (!fl) break;
+          const rad = size * (0.55 + 1.5 * Math.pow(k, 0.55));
+          const a = (1 - k) * (1 - k) * 0.9;
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          ctx.globalAlpha = a;
+          const cy = sy + size * 0.5 - size * e.h * 0.22;
+          ctx.drawImage(fl, sx + size / 2 - rad, cy - rad, rad * 2, rad * 2);
+          ctx.restore();
+          const chip = this._chip(e.era >= METAL_ERA ? 1 : 0);
+          if (chip) {
+            const s = size * 0.11;
+            ctx.globalAlpha = Math.min(1, (1 - k) * 1.8);
+            for (let i = 0; i < this.capFlashChips; i++) {
+              const ang = chash(e.seed, i, 1) * 6.28318;
+              const spd = 0.5 + chash(e.seed, i, 2) * 0.9;
+              const d = size * spd * k;
+              const fall = size * 1.6 * k * k * spd * 0.6;
+              ctx.drawImage(
+                chip,
+                sx + size / 2 + Math.cos(ang) * d - s / 2,
+                cy + Math.sin(ang) * d * 0.6 + fall - s / 2,
+                s,
+                s
+              );
+            }
+            ctx.globalAlpha = 1;
+          }
+          this._stats.flashes++;
+        }
+      }
+      for (const bar of this._bars) {
+        const w = bar.w, h = Math.max(3, w * 0.075);
+        const x = bar.x - w / 2, y = bar.y;
+        ctx.fillStyle = "rgba(20,16,12,0.62)";
+        ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+        ctx.fillStyle = "rgba(70,58,42,0.85)";
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = bar.p > 0.75 ? "#8fd06a" : "#c9a227";
+        ctx.fillRect(x, y, w * bar.p, h);
+      }
+      this._bars.length = 0;
+    }
+    // --------------------------------------------------------------- кэши
+    // Все шесть геттеров устроены одинаково: попал в кэш — вернули и «тронули»
+    // запись (LRU), промахнулся — печём, если бюджет выпечки на кадр не исчерпан,
+    // иначе возвращаем null и элемент кадр не рисуется. Возврат null вместо
+    // выпечки любой ценой — это и есть соблюдение бюджета: пропущенный кадр без
+    // лесов незаметен, рывок на 3 мс заметен.
+    _plate(sizeTiles, eraCls, variant, detail) {
+      const key = `${sizeTiles}|${eraCls}|${variant}|${detail}`;
+      const hit = this.plates.get(key);
+      if (hit) {
+        touch(this.plates, key);
+        return hit;
+      }
+      if (this.bakeLeft <= 0) return null;
+      this.bakeLeft--;
+      this._stats.bakes++;
+      const cv = bakePlate(sizeTiles, eraCls * METAL_ERA, variant, detail);
+      this.plates.set(key, cv);
+      prune(this.plates, { maxEntries: CONSTRUCTION_LIMITS.plateEntries });
+      return cv;
+    }
+    _scaffold(sizeTiles, hFact, eraCls, variant, detail) {
+      const h10 = Math.round(hFact * 10);
+      const key = `${sizeTiles}|${h10}|${eraCls}|${variant}|${detail}`;
+      const hit = this.scaf.get(key);
+      if (hit) {
+        touch(this.scaf, key);
+        return hit;
+      }
+      if (this.bakeLeft <= 0) return null;
+      this.bakeLeft--;
+      this._stats.bakes++;
+      const cv = bakeScaffold(sizeTiles, h10 / 10, eraCls * METAL_ERA, variant, detail);
+      this.scaf.set(key, cv);
+      prune(this.scaf, {
+        maxEntries: CONSTRUCTION_LIMITS.scafEntries,
+        maxBytes: this.scafMB * 1024 * 1024,
+        bytesOf: canvasBytes
+      });
+      return cv;
+    }
+    _deck(sizeTiles, eraCls, detail) {
+      const key = `${sizeTiles}|${eraCls}|${detail}`;
+      const hit = this.decks.get(key);
+      if (hit) {
+        touch(this.decks, key);
+        return hit;
+      }
+      if (this.bakeLeft <= 0) return null;
+      this.bakeLeft--;
+      this._stats.bakes++;
+      const cv = bakeDeck(sizeTiles, eraCls * METAL_ERA, detail);
+      this.decks.set(key, cv);
+      prune(this.decks, { maxEntries: 12 });
+      return cv;
+    }
+    _builder(eraCls, detail) {
+      const key = `${eraCls}|${detail}`;
+      const hit = this.builders.get(key);
+      if (hit) return hit;
+      if (this.bakeLeft <= 0) return null;
+      this.bakeLeft--;
+      this._stats.bakes++;
+      const s = bakeBuilder(eraCls * METAL_ERA, detail);
+      this.builders.set(key, s);
+      return s;
+    }
+    // Пыль, щепка и вспышка — по одному спрайту на всю игру, кэшировать по ключу
+    // нечего. Печём лениво: у игрока, который ещё ничего не строил, этих трёх
+    // канвасов в памяти нет.
+    _puff(eraCls) {
+      if (eraCls) {
+        if (!this._puffCold) {
+          if (this.bakeLeft <= 0) return null;
+          this.bakeLeft--;
+          this._stats.bakes++;
+          this._puffCold = bakePuff(false);
+        }
+        return this._puffCold;
+      }
+      if (!this.puff) {
+        if (this.bakeLeft <= 0) return null;
+        this.bakeLeft--;
+        this._stats.bakes++;
+        this.puff = bakePuff(true);
+      }
+      return this.puff;
+    }
+    _chip(eraCls) {
+      const f = eraCls ? "chipHi" : "chip";
+      if (!this[f]) {
+        if (this.bakeLeft <= 0) return null;
+        this.bakeLeft--;
+        this._stats.bakes++;
+        this[f] = bakeChip(eraCls * METAL_ERA);
+      }
+      return this[f];
+    }
+    _flash() {
+      if (!this.flash) {
+        if (this.bakeLeft <= 0) return null;
+        this.bakeLeft--;
+        this._stats.bakes++;
+        this.flash = bakeFlash();
+      }
+      return this.flash;
+    }
+  };
+
+  // app/src/render/herds_view.js
+  var TILE_PX7 = 32;
   var HERD_LIMITS = {
     // Голов от одного стада. Стадо в шестьдесят голов на экране — это шестьдесят
     // блитов ради картинки, которая уже с двадцати читается как «много». Сверх
@@ -31807,7 +33034,7 @@ ${s}`, "console");
     drawGround(sim2, ctx, ox, oy, z, cw, ch) {
       this.prints = 0;
       if (!sim2 || !sim2.world) return;
-      const zoom = z / TILE_PX6;
+      const zoom = z / TILE_PX7;
       if (zoom < ZONE_MIN_ZOOM) return;
       const season = clamp20(Math.floor(num14(sim2.seasonIdx, 0)), 0, 3);
       const herds = readHerds(sim2);
@@ -31862,7 +33089,7 @@ ${s}`, "console");
       if (!sim2 || !sim2.world) return;
       const herds = readHerds(sim2);
       if (!herds.length) return;
-      const zoom = z / TILE_PX6;
+      const zoom = z / TILE_PX7;
       const near = zoom >= (this.q.lod ? this.q.lod.beastMinZoom : 0.75);
       const capHeads = (this.q.caps ? this.q.caps.beasts : 60) | 0;
       if (this.animals && this.animals.gen !== this.atlasGen) {
@@ -32214,10 +33441,10 @@ ${s}`, "console");
       const k = ZONE_PPT / z;
       const bx = (sx0 - ox) * k, by = (sy0 - oy) * k;
       const bwv = (sx1 - sx0) * k, bhv = (sy1 - sy0) * k;
-      const smooth3 = ctx.imageSmoothingEnabled;
+      const smooth4 = ctx.imageSmoothingEnabled;
       if ("imageSmoothingEnabled" in ctx) ctx.imageSmoothingEnabled = false;
       ctx.drawImage(this._zoneCv, bx, by, bwv, bhv, sx0, sy0, sx1 - sx0, sy1 - sy0);
-      if ("imageSmoothingEnabled" in ctx) ctx.imageSmoothingEnabled = smooth3;
+      if ("imageSmoothingEnabled" in ctx) ctx.imageSmoothingEnabled = smooth4;
     }
     zoneSprite(season, alert, doomed) {
       const key = `zone|${season}|${alert ? 1 : 0}|${doomed ? 1 : 0}`;
@@ -32348,9 +33575,490 @@ ${s}`, "console");
     }
   }
 
-  // app/src/render/postfx.js
-  var TILE_PX7 = 32;
+  // app/src/render/era_transition.js
+  var TAU4 = Math.PI * 2;
+  var TL = {
+    total: 2.5,
+    waveFrom: 0.18,
+    waveTo: 2.02,
+    // кольцо стартует чуть позже темноты:
+    // сначала гаснет кадр, потом бьёт свет
+    dimIn: 0.3,
+    dimOut: 0.55,
+    cardIn: [0.12, 0.46],
+    cardOut: [1.86, 2.34],
+    // Клик в первые 0,35 с не считается пропуском. Эпоху почти всегда открывает
+    // клик по дереву технологий; следующий за ним случайный клик (или дабл-клик
+    // по той же кнопке) убил бы шоу до того, как игрок понял, что оно началось.
+    skipAfter: 0.35,
+    // Пропуск не обрывает картинку рывком, а доигрывает её ускоренно: волна
+    // добегает и титр гаснет за ~0,6 с вместо оставшихся двух секунд.
+    skipRate: 3.4
+  };
+  var SNAP_MAX_PX = 32e5;
+  var SPARK_MAX = 64;
+  var Q_FALLBACK = { detail: 2, particles: 1, caps: {} };
   var clamp017 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+  var lerp4 = (a, b, k) => a + (b - a) * k;
+  function smooth3(u) {
+    u = clamp017(u);
+    return u * u * (3 - 2 * u);
+  }
+  function waveK(t) {
+    return smooth3((t - TL.waveFrom) / (TL.waveTo - TL.waveFrom));
+  }
+  function dimK(t) {
+    const a = smooth3(t / TL.dimIn);
+    const b = smooth3((TL.total - t) / TL.dimOut);
+    return clamp017(Math.min(a, b));
+  }
+  function cardK(t) {
+    const inK = smooth3((t - TL.cardIn[0]) / (TL.cardIn[1] - TL.cardIn[0]));
+    const outK = smooth3((TL.cardOut[1] - t) / (TL.cardOut[1] - TL.cardOut[0]));
+    return { a: clamp017(Math.min(inK, outK)), scale: 1 + 0.05 * (1 - inK) + 0.03 * (1 - outK) };
+  }
+  function maxRadius(cx, cy, cw, ch) {
+    const dx = Math.max(Math.abs(cx), Math.abs(cw - cx));
+    const dy = Math.max(Math.abs(cy), Math.abs(ch - cy));
+    return Math.sqrt(dx * dx + dy * dy) * 1.03;
+  }
+  function sparkCount(q) {
+    const p = q && typeof q.particles === "number" ? q.particles : 1;
+    return Math.max(0, Math.min(SPARK_MAX, Math.round(SPARK_MAX * p)));
+  }
+  function hashE(seed, i, salt) {
+    let h = i * 374761393 + salt * 668265263 + (seed | 0) * 1442695041 | 0;
+    h = (h ^ h >>> 13) * 1274126177 | 0;
+    return ((h ^ h >>> 16) >>> 0) / 4294967296;
+  }
+  function eraCard(i) {
+    const e = ERAS[Math.max(0, Math.min(ERAS.length - 1, i | 0))] || ERAS[0];
+    return { ru: e.ru, years: e.years, hue: e.hue };
+  }
+  var EraTransition = class {
+    constructor(quality) {
+      this.q = quality || Q_FALLBACK;
+      this.enabled = true;
+      this.era = null;
+      this.seed = null;
+      this.active = false;
+      this.t = 0;
+      this.rate = 1;
+      this.frame = 0;
+      this.from = 0;
+      this.skipped = false;
+      this.snap = null;
+      this.cam0 = null;
+      this.card = null;
+      this.cardCss = null;
+      this.dim = null;
+      this.dimFor = 0;
+      this.dpr = 1;
+      this.fire = null;
+      this.onSkip = null;
+      this.bakes = 0;
+    }
+    setQuality(q) {
+      if (q) this.q = q;
+      this.card = null;
+      this.dim = null;
+    }
+    // --- вызывается в самом начале renderer.draw(), ДО очистки холста ---------
+    // Здесь и только здесь холст ещё хранит предыдущий кадр — старый мир.
+    begin(sim2, ctx, dtReal, quality, dpr) {
+      if (quality) this.q = quality;
+      if (dpr) this.dpr = dpr;
+      if (!sim2 || !sim2.world) return;
+      const era = sim2.eraIndex | 0;
+      const seed = sim2.world.seed | 0;
+      if (this.seed !== seed) {
+        this.stop();
+        this.seed = seed;
+        this.era = era;
+        return;
+      }
+      if (this.era === null) {
+        this.era = era;
+        return;
+      }
+      if (era !== this.era) {
+        const prev = this.era;
+        this.era = era;
+        if (era > prev && this.enabled) this.start(sim2, ctx, prev);
+        else this.stop();
+      }
+      if (!this.active) return;
+      if (this.frame === 0) this.capture(ctx);
+      this.t += Math.max(0, dtReal || 0) * this.rate;
+      this.frame++;
+      if (this.t >= TL.total) this.stop();
+    }
+    start(sim2, ctx, from) {
+      const already = this.active;
+      this.active = true;
+      this.t = 0;
+      this.rate = 1;
+      this.skipped = false;
+      this.from = from;
+      this.card = null;
+      this.fire = null;
+      if (!already) {
+        this.frame = 0;
+        this.snap = null;
+        this.cam0 = null;
+      } else this.frame = Math.max(1, this.frame);
+      this.bindSkip(ctx);
+    }
+    stop() {
+      this.active = false;
+      this.t = 0;
+      this.rate = 1;
+      this.frame = 0;
+      this.snap = null;
+      this.cam0 = null;
+      this.card = null;
+      this.dim = null;
+      this.fire = null;
+      this.unbindSkip();
+    }
+    skip() {
+      if (!this.active || this.t < TL.skipAfter) return false;
+      this.skipped = true;
+      this.rate = TL.skipRate;
+      return true;
+    }
+    // --- копия предыдущего кадра ---------------------------------------------
+    capture(ctx) {
+      const src = ctx && ctx.canvas;
+      if (!src || !src.width || !src.height || typeof document === "undefined") return;
+      const W = src.width | 0, H = src.height | 0;
+      const capPx = this.q.caps && this.q.caps.textureMB ? this.q.caps.textureMB * 0.35 * 262144 : SNAP_MAX_PX;
+      const k = Math.min(1, Math.sqrt(Math.min(SNAP_MAX_PX, capPx) / (W * H)));
+      const cv = document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(W * k));
+      cv.height = Math.max(1, Math.round(H * k));
+      const c = cv.getContext("2d");
+      if (!c) return;
+      c.drawImage(src, 0, 0, cv.width, cv.height);
+      this.snap = cv;
+      this.bakes++;
+    }
+    // --- сам кадр перехода ----------------------------------------------------
+    // Ставится в самом конце draw(): переход обязан лежать поверх погоды, тона
+    // времени суток и виньетки. Иначе ночной тон затемнил бы титр, а виньетка
+    // съела бы кольцо волны у краёв кадра.
+    draw(sim2, ctx, ox, oy, z, cw, ch) {
+      if (!this.active || !sim2 || !ctx) return;
+      const q = this.q || Q_FALLBACK;
+      const t = this.t;
+      const detail = q.detail | 0;
+      if (!this.cam0) this.cam0 = { ox, oy, z };
+      if (!this.card) this.bakeCard(cw, ch);
+      else if (!this.dim) this.bakeDim(cw, ch);
+      const f = this.firePos(sim2);
+      const cx = ox + f.x * z, cy = oy + f.y * z;
+      const R = waveK(t) * maxRadius(cx, cy, cw, ch);
+      const S = Math.min(cw, ch) / 720;
+      if (detail > 0 && this.snap) this.drawOldWorld(ctx, ox, oy, z, cw, ch, cx, cy, R);
+      if (detail > 0) this.drawRepaint(ctx, cx, cy, R, cw, ch);
+      this.drawRing(ctx, cx, cy, R, S, t);
+      this.drawSparks(ctx, sim2, cx, cy, R, S, t);
+      this.drawDim(ctx, cw, ch, t);
+      this.drawCard(ctx, cw, ch, t);
+    }
+    // Старый мир — снаружи круга. Клип «прямоугольник минус круг» по правилу
+    // evenodd: один блит, ни одного промежуточного канваса, а пиксели внутри
+    // круга вообще не трогаются. Вариант «нарисовать снимок целиком, потом
+    // вырезать дырку» потребовал бы третьего полноэкранного канваса и трёх
+    // проходов по нему вместо одного.
+    drawOldWorld(ctx, ox, oy, z, cw, ch, cx, cy, R) {
+      const c0 = this.cam0;
+      const k = c0.z > 0 ? z / c0.z : 1;
+      const dx = ox - k * c0.ox, dy = oy - k * c0.oy;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, cw, ch);
+      if (R > 0.5) ctx.arc(cx, cy, R, 0, TAU4);
+      ctx.clip("evenodd");
+      ctx.drawImage(this.snap, dx, dy, cw * k, ch * k);
+      ctx.restore();
+    }
+    // Перекраска: внутри круга кадр уже нарисован по-новому, но разница между
+    // соседними эпохами в палитре мягкая, и без подсказки глаз её не поймает.
+    // Кладём тон новой эпохи, сильный у фронта и почти исчезнувший в центре, —
+    // получается «краска, которую волна везёт с собой» и которая осела за ней.
+    //
+    // Композитные режимы 'overlay' и 'soft-light' здесь смотрелись бы богаче, но
+    // на программном растеризаторе они стоят два-три обычных заливок, а это
+    // полный экран каждый кадр. Обычная заливка с малой прозрачностью даёт
+    // 90 % эффекта за 30 % цены.
+    drawRepaint(ctx, cx, cy, R, cw, ch) {
+      if (R < 2) return;
+      const c = hex2rgb(eraCard(this.era).hue);
+      const g2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+      g2.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},0.02)`);
+      g2.addColorStop(0.72, `rgba(${c[0]},${c[1]},${c[2]},0.09)`);
+      g2.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0.26)`);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, TAU4);
+      ctx.clip();
+      ctx.fillStyle = g2;
+      ctx.fillRect(
+        Math.max(0, cx - R),
+        Math.max(0, cy - R),
+        Math.min(cw, R * 2),
+        Math.min(ch, R * 2)
+      );
+      ctx.restore();
+    }
+    // Кольцо волны. Три обводки дуги вместо одного блита градиентного спрайта:
+    // спрайт пришлось бы тянуть на 2R, то есть платить прозрачностью за всю
+    // площадь круга, а обводка красит только свою полосу — 2πR × 39 px.
+    // Заодно яркая полоса прячет шов между старым и новым миром: клип по кругу
+    // даёт жёсткую границу, и без света она читалась бы как дырка.
+    drawRing(ctx, cx, cy, R, S, t) {
+      if (R < 1) return;
+      const fade = clamp017(Math.min(1, (t - TL.waveFrom) * 6)) * clamp017((TL.waveTo + 0.35 - t) * 2.2);
+      if (fade <= 0.01) return;
+      const now2 = hex2rgb(eraCard(this.era).hue);
+      const then = hex2rgb(eraCard(this.from).hue);
+      const warm = [
+        Math.round(lerp4(then[0], 255, 0.55)),
+        Math.round(lerp4(then[1], 176, 0.55)),
+        Math.round(lerp4(then[2], 87, 0.55))
+      ];
+      const bands = (this.q.detail | 0) > 0 ? [[26, 0.16, warm, 10], [10, 0.34, now2, 2], [3, 0.72, [255, 246, 224], 0]] : [[14, 0.22, warm, 6], [3, 0.6, now2, 0]];
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const [w, a, col, back] of bands) {
+        const r = R - back * S;
+        if (r <= 0.5) continue;
+        ctx.globalAlpha = a * fade;
+        ctx.lineWidth = Math.max(1, w * S);
+        ctx.strokeStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, TAU4);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // Искры на фронте: без них кольцо — просто ровная дуга, а с ними это огонь,
+    // который несут от кострища. Позиции детерминированы (см. hashE), количество
+    // ограничено дважды — пресетом и SPARK_MAX.
+    drawSparks(ctx, sim2, cx, cy, R, S, t) {
+      const n = sparkCount(this.q);
+      if (!n || R < 4) return;
+      const fade = clamp017((TL.waveTo + 0.2 - t) * 2) * clamp017((t - TL.waveFrom) * 5);
+      if (fade <= 0.02) return;
+      const seed = (sim2.world && sim2.world.seed) | 0;
+      const salt = (this.era + 1) * 977;
+      const c = hex2rgb(eraCard(this.era).hue);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < n; i++) {
+        const a0 = hashE(seed, i, salt) * TAU4;
+        const a = a0 + (hashE(seed, i, salt + 7) - 0.5) * 0.7 * t;
+        const back = hashE(seed, i, salt + 13);
+        const r = R - back * back * 46 * S;
+        if (r < 2) continue;
+        const tw = 0.45 + 0.55 * Math.abs(Math.sin(t * 9 + hashE(seed, i, salt + 23) * TAU4));
+        const s = (1 + hashE(seed, i, salt + 31) * 1.8) * S;
+        ctx.globalAlpha = fade * tw * (0.35 + 0.65 * (1 - back));
+        ctx.fillStyle = back < 0.4 ? "#fff6e0" : `rgb(${c[0]},${c[1]},${c[2]})`;
+        ctx.fillRect(cx + Math.cos(a) * r - s / 2, cy + Math.sin(a) * r - s / 2, s, s);
+      }
+      ctx.restore();
+    }
+    // Диафрагма. Выпечена один раз в 256×N и растягивается на весь кадр: градиент
+    // при увеличении в пять раз неразличим от честного, а платить за
+    // createRadialGradient и полноэкранную заливку каждый кадр незачем.
+    // Сжатие к центру сделано масштабом блита, а не перевыпечкой: масштаб 1,55
+    // выносит тёмное кольцо за края кадра, масштаб 1,0 сажает его точно по краю.
+    drawDim(ctx, cw, ch, t) {
+      if (!this.dim) return;
+      const a = dimK(t);
+      if (a <= 0.01) return;
+      const k = 1 + 0.55 * (1 - a);
+      const w = cw * k, h = ch * k;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.drawImage(this.dim, (cw - w) / 2, (ch - h) / 2, w, h);
+      ctx.restore();
+    }
+    drawCard(ctx, cw, ch, t) {
+      if (!this.card) return;
+      const k = cardK(t);
+      if (k.a <= 0.01) return;
+      const w = this.cardCss.w * k.scale, h = this.cardCss.h * k.scale;
+      ctx.save();
+      ctx.globalAlpha = k.a;
+      ctx.drawImage(this.card, (cw - w) / 2, ch * 0.4 - h / 2, w, h);
+      ctx.restore();
+    }
+    // --- выпечки ---------------------------------------------------------------
+    bakeDim(cw, ch) {
+      if (typeof document === "undefined" || cw < 2 || ch < 2) return;
+      const W = 256, H = Math.max(16, Math.round(256 * ch / cw));
+      const cv = document.createElement("canvas");
+      cv.width = W;
+      cv.height = H;
+      const c = cv.getContext("2d");
+      if (!c) return;
+      const g2 = c.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * 0.72);
+      g2.addColorStop(0, "rgba(2,4,8,0)");
+      g2.addColorStop(0.42, "rgba(2,4,8,0.10)");
+      g2.addColorStop(0.74, "rgba(2,4,8,0.52)");
+      g2.addColorStop(1, "rgba(2,4,8,0.92)");
+      c.save();
+      c.translate(W / 2, H / 2);
+      c.scale(1, H / W);
+      c.translate(-W / 2, -H / 2 * (W / H));
+      c.fillStyle = g2;
+      c.fillRect(-W, -W, W * 3, W * 3);
+      c.restore();
+      this.dim = cv;
+      this.dimFor = cw / ch;
+      this.bakes++;
+    }
+    bakeCard(cw, ch) {
+      if (typeof document === "undefined" || cw < 2) return;
+      const e = eraCard(this.era);
+      const dpr = Math.max(1, Math.min(3, this.dpr || 1));
+      const w = Math.min(cw * 0.92, 880);
+      const titlePx = Math.max(26, Math.min(58, w * 0.072));
+      const yearsPx = Math.max(13, titlePx * 0.34);
+      const capPx = Math.max(10, titlePx * 0.24);
+      const h = titlePx * 2.9;
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+      const c = cv.getContext("2d");
+      if (!c) return;
+      c.scale(dpr, dpr);
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      const hue = e.hue;
+      const midY = h * 0.5;
+      c.font = `600 ${capPx}px system-ui, "Segoe UI", sans-serif`;
+      c.fillStyle = "rgba(226,232,240,0.72)";
+      tracked(c, "НОВАЯ ЭПОХА", w / 2, midY - titlePx * 0.92, capPx * 0.42);
+      c.font = `700 ${titlePx}px system-ui, "Segoe UI", sans-serif`;
+      c.shadowColor = "rgba(0,0,0,0.85)";
+      c.shadowBlur = titlePx * 0.5;
+      c.fillStyle = "#f6f2e8";
+      tracked(c, e.ru.toUpperCase(), w / 2, midY, titlePx * 0.1);
+      c.shadowBlur = 0;
+      c.font = `500 ${yearsPx}px system-ui, "Segoe UI", sans-serif`;
+      c.fillStyle = hue;
+      tracked(c, e.years, w / 2, midY + titlePx * 0.86, yearsPx * 0.24);
+      const lw = w * 0.42;
+      for (const [y, aa] of [[midY - titlePx * 0.6, 0.55], [midY + titlePx * 0.58, 0.4]]) {
+        const g2 = c.createLinearGradient(w / 2 - lw, 0, w / 2 + lw, 0);
+        g2.addColorStop(0, "rgba(255,255,255,0)");
+        g2.addColorStop(0.5, hue);
+        g2.addColorStop(1, "rgba(255,255,255,0)");
+        c.globalAlpha = aa;
+        c.fillStyle = g2;
+        c.fillRect(w / 2 - lw, y, lw * 2, Math.max(1, titlePx * 0.025));
+        c.globalAlpha = 1;
+      }
+      this.card = cv;
+      this.cardCss = { w, h };
+      this.bakes++;
+    }
+    // --- вспомогательное -------------------------------------------------------
+    // Центр волны — кострище: сердце поселения и единственная постройка, которая
+    // существует с первого дня. Если его снесли рейдом — точка старта мира.
+    firePos(sim2) {
+      if (this.fire) return this.fire;
+      let p = null;
+      for (const b of sim2.buildings || []) {
+        if (b.id === "campfire" && !b.destroyed) {
+          p = { x: b.x + (b.size || 1) / 2, y: b.y + (b.size || 1) / 2 };
+          break;
+        }
+      }
+      if (!p) p = { x: (sim2.world.startX || 0) + 0.5, y: (sim2.world.startY || 0) + 0.5 };
+      this.fire = p;
+      return p;
+    }
+    // Пропуск по клику. Слой ставит обработчик сам и снимает его по окончании —
+    // иначе пришлось бы править main.js, а его правит главный разработчик.
+    //
+    // Ловим на window в фазе перехвата, но реагируем ТОЛЬКО на события, чья цель
+    // — игровой холст. Иначе первый же клик по кнопке HUD во время перехода был
+    // бы съеден stopPropagation, и две с половиной секунды интерфейс стоял бы
+    // мёртвым. По той же причине клавиши — только Escape/Пробел/Enter и только
+    // если фокус не в поле ввода: в HUD есть консоль, и глотать в ней набор
+    // текста нельзя.
+    bindSkip(ctx) {
+      if (this.onSkip || typeof window === "undefined" || !window.addEventListener) return;
+      const cv = ctx && ctx.canvas;
+      const h = (e) => {
+        if (!this.active) return;
+        if (e.type === "keydown") {
+          const tg = e.target || {};
+          const tag = (tg.tagName || "").toLowerCase();
+          if (tag === "input" || tag === "textarea" || tg.isContentEditable) return;
+          if (e.key !== "Escape" && e.key !== " " && e.key !== "Enter") return;
+        } else if (cv && e.target !== cv) {
+          return;
+        }
+        e.stopPropagation();
+        if (e.cancelable) e.preventDefault();
+        this.skip();
+      };
+      this.onSkip = h;
+      const opt = { capture: true };
+      for (const ev of ["pointerdown", "mousedown", "click", "touchstart", "keydown"]) {
+        window.addEventListener(ev, h, ev === "touchstart" ? { capture: true, passive: false } : opt);
+      }
+    }
+    unbindSkip() {
+      if (!this.onSkip || typeof window === "undefined" || !window.removeEventListener) return;
+      for (const ev of ["pointerdown", "mousedown", "click", "touchstart", "keydown"]) {
+        window.removeEventListener(ev, this.onSkip, { capture: true });
+      }
+      this.onSkip = null;
+    }
+    stats() {
+      return {
+        active: this.active,
+        era: this.era,
+        t: +this.t.toFixed(3),
+        wave: +waveK(this.t).toFixed(3),
+        skipped: this.skipped,
+        snapMB: this.snap ? +(this.snap.width * this.snap.height * 4 / 1048576).toFixed(2) : 0,
+        bakes: this.bakes,
+        sparks: this.active ? sparkCount(this.q) : 0
+      };
+    }
+  };
+  function tracked(c, text, cx, y, track) {
+    if (!text) return;
+    const ch = [...String(text)];
+    if (!c.measureText) {
+      c.fillText(text, cx, y);
+      return;
+    }
+    let total = 0;
+    const w = ch.map((s) => {
+      const m = c.measureText(s).width;
+      total += m;
+      return m;
+    });
+    total += track * Math.max(0, ch.length - 1);
+    let x = cx - total / 2;
+    for (let i = 0; i < ch.length; i++) {
+      c.fillText(ch[i], x + w[i] / 2, y);
+      x += w[i] + track;
+    }
+  }
+
+  // app/src/render/postfx.js
+  var TILE_PX8 = 32;
+  var clamp018 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
   var RATE = {
     copy: 35e-8,
     // блит 1:1 и сплошная заливка 'source-over'
@@ -32375,7 +34083,7 @@ ${s}`, "console");
     let keep = 1, r = 0, g2 = 0, b = 0;
     for (const f of list) {
       if (!f) continue;
-      const a = clamp017(f[3]);
+      const a = clamp018(f[3]);
       if (!(a > 0)) continue;
       r = r * (1 - a) + f[0] * a;
       g2 = g2 * (1 - a) + f[1] * a;
@@ -32385,9 +34093,9 @@ ${s}`, "console");
     const A = 1 - keep;
     if (A <= 0) return { r: 0, g: 0, b: 0, a: 0 };
     return {
-      r: Math.round(clamp017(r / A / 255) * 255),
-      g: Math.round(clamp017(g2 / A / 255) * 255),
-      b: Math.round(clamp017(b / A / 255) * 255),
+      r: Math.round(clamp018(r / A / 255) * 255),
+      g: Math.round(clamp018(g2 / A / 255) * 255),
+      b: Math.round(clamp018(b / A / 255) * 255),
       a: A
     };
   }
@@ -32402,11 +34110,11 @@ ${s}`, "console");
     return mergeFills(fills);
   }
   function vignetteAlpha(L, weather) {
-    const night = L ? clamp017(L.glow) : 0;
+    const night = L ? clamp018(L.glow) : 0;
     let k = 0.62 + 0.38 * night;
     const w = WEATHER_TINT[weather];
     if (w) k *= 1 + 0.22 * (w.desat || 0);
-    return clamp017(k);
+    return clamp018(k);
   }
   function bloomTier(areaPx, bloomMs) {
     if (!(areaPx > 0) || !(bloomMs > 0)) return "off";
@@ -32552,7 +34260,7 @@ ${s}`, "console");
       if (cx + r < 0 || cy + r < 0 || cx - r > this.bw || cy - r > this.bh) return true;
       const brush = warm ? this.warmBrush() : this.coldBrush();
       if (!brush) return true;
-      const a = clamp017(k);
+      const a = clamp018(k);
       this.bctx.globalAlpha = a;
       this.bctx.drawImage(brush, cx - r, cy - r, r * 2, r * 2);
       this.spots++;
@@ -32580,7 +34288,7 @@ ${s}`, "console");
       if (!this.on || !this.bufOn || !this.bctx || !sim2 || !sim2.buildings) return 0;
       const glow = L ? L.glow : 0;
       if (glow < 0.05) return 0;
-      const zoom = z / TILE_PX7;
+      const zoom = z / TILE_PX8;
       if (zoom < (this.q.lod.buildingGlowMinZoom || 0) * 0.7) return 0;
       let n = 0;
       for (const b of sim2.buildings) {
@@ -32900,7 +34608,7 @@ ${s}`, "console");
   }
 
   // app/src/render/renderer.js
-  var TILE_PX8 = 32;
+  var TILE_PX9 = 32;
   var Renderer = class {
     constructor(canvas2) {
       this.canvas = canvas2;
@@ -32939,6 +34647,9 @@ ${s}`, "console");
       this.icons = new IconLayer(this.quality);
       this.notify = new Notifications(this.quality);
       this.cityLights = new CityLights(this.quality);
+      this.bordersView = new BordersView(this.quality);
+      this.construction = new ConstructionLayer(this.quality);
+      this.eraFx = new EraTransition(this.quality);
     }
     // id ∈ QUALITY_ORDER или 'auto'
     setQuality(id) {
@@ -32968,6 +34679,9 @@ ${s}`, "console");
       this.icons.setQuality(this.quality);
       this.notify.setQuality(this.quality);
       this.cityLights.setQuality(this.quality);
+      this.bordersView.setQuality(this.quality);
+      this.construction.setQuality(this.quality);
+      this.eraFx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
@@ -32980,14 +34694,14 @@ ${s}`, "console");
     }
     screenToWorld(sx, sy) {
       return {
-        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX8 * this.cam.zoom),
-        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX8 * this.cam.zoom)
+        x: this.cam.x + (sx - this.canvas.width / this.dpr / 2) / (TILE_PX9 * this.cam.zoom),
+        y: this.cam.y + (sy - this.canvas.height / this.dpr / 2) / (TILE_PX9 * this.cam.zoom)
       };
     }
     worldToScreen(wx, wy) {
       return {
-        x: (wx - this.cam.x) * TILE_PX8 * this.cam.zoom + this.canvas.width / this.dpr / 2,
-        y: (wy - this.cam.y) * TILE_PX8 * this.cam.zoom + this.canvas.height / this.dpr / 2
+        x: (wx - this.cam.x) * TILE_PX9 * this.cam.zoom + this.canvas.width / this.dpr / 2,
+        y: (wy - this.cam.y) * TILE_PX9 * this.cam.zoom + this.canvas.height / this.dpr / 2
       };
     }
     // ---------------------------------------------------------------------
@@ -32999,10 +34713,11 @@ ${s}`, "console");
       const dpr = this.dpr;
       const cw = this.canvas.width / dpr, ch = this.canvas.height / dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.eraFx.begin(sim2, ctx, dtReal, this.quality, dpr);
       const L = lightAt(sim2.dayTime);
       ctx.fillStyle = L.sky;
       ctx.fillRect(0, 0, cw, ch);
-      const z = TILE_PX8 * this.cam.zoom;
+      const z = TILE_PX9 * this.cam.zoom;
       const ox = cw / 2 - this.cam.x * z, oy = ch / 2 - this.cam.y * z;
       this.postfx.begin(sim2, cw, ch, L, { dpr, ox, oy, z, zoom: this.cam.zoom, time: this.time });
       this.terrain.draw(ctx, sim2, ox, oy, z, cw, ch);
@@ -33014,12 +34729,13 @@ ${s}`, "console");
       this.veg.update(sim2, dtReal, ox, oy, z, cw, ch, { wind: this.atmo.wind, roads: this.terrain.road && this.terrain.road.tiles });
       this.shadows.begin(sim2, dtReal, z, { fog: this.atmo.fogK });
       this.damage.begin(sim2, dtReal, z, { wind: this.atmo.wind });
+      this.construction.begin(sim2, dtReal, ox, oy, z, cw, ch);
       this.atmo.drawGround(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.richVeg) this.veg.draw(sim2, ctx, ox, oy, z, cw, ch);
       this.terrain.landmarks.drawLive(sim2, ctx, ox, oy, z, cw, ch, this.time);
       this.herds.drawGround(sim2, ctx, ox, oy, z, cw, ch);
       if (this.quality.clouds) this.drawClouds(sim2, ctx, ox, oy, z, cw, ch);
-      if (sim2.showTerritory) this.drawTerritory(sim2, ctx, ox, oy, z);
+      this.bordersView.draw(sim2, ctx, ox, oy, z, cw, ch, { zoom: this.cam.zoom });
       for (const f of sim2.factions) {
         if (!f.alive) continue;
         for (const s of f.settlements) {
@@ -33032,6 +34748,7 @@ ${s}`, "console");
       this.herds.draw(sim2, ctx, ox, oy, z, cw, ch);
       this.drawSortedEntities(sim2, ctx, ox, oy, z, cw, ch, L);
       this.damage.drawSmoke(ctx);
+      this.construction.drawFx(ctx);
       this.cityLights.begin(sim2, ox, oy, z, cw, ch, L, { zoom: this.cam.zoom, time: this.time });
       this.select.drawGround(sim2, ctx, ox, oy, z, cw, ch, dtReal);
       this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
@@ -33082,10 +34799,11 @@ ${s}`, "console");
       this.icons.draw(sim2, ctx, ox, oy, z, cw, ch, this.time, dtReal);
       this.postfx.draw(ctx);
       this.notify.draw(sim2, ctx, ox, oy, z, cw, ch, dtReal);
+      this.eraFx.draw(sim2, ctx, ox, oy, z, cw, ch);
       this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
       this.minimapRect = this.minimap.draw(sim2, ctx, cw, ch, {
         cam: this.cam,
-        tilePx: TILE_PX8,
+        tilePx: TILE_PX9,
         time: this.time,
         quality: this.quality
       });
@@ -33114,6 +34832,9 @@ ${s}`, "console");
         this.icons.setQuality(this.quality);
         this.notify.setQuality(this.quality);
         this.cityLights.setQuality(this.quality);
+        this.bordersView.setQuality(this.quality);
+        this.construction.setQuality(this.quality);
+        this.eraFx.setQuality(this.quality);
         this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
         this.resize();
       }
@@ -33227,47 +34948,16 @@ ${s}`, "console");
         ctx.fill();
       }
     }
-    drawTerritory(sim2, ctx, ox, oy, z) {
-      const cw = this.canvas.width / this.dpr, ch = this.canvas.height / this.dpr;
-      const step = Math.max(1, Math.floor(2 / this.cam.zoom));
-      const x0 = Math.max(0, Math.floor(this.cam.x - cw / 2 / z)), x1 = Math.min(sim2.world.w, Math.ceil(this.cam.x + cw / 2 / z));
-      const y0 = Math.max(0, Math.floor(this.cam.y - ch / 2 / z)), y1 = Math.min(sim2.world.h, Math.ceil(this.cam.y + ch / 2 / z));
-      const centers = [];
-      for (const f of sim2.factions) if (f.alive) for (const s of f.settlements) centers.push({ x: s.x, y: s.y, col: f.def.color, P: f.P });
-      centers.push({ x: sim2.world.startX, y: sim2.world.startY, col: "#c9a227", P: sim2.villagers.length * 3 });
-      for (let y = y0; y < y1; y += step) {
-        for (let x = x0; x < x1; x += step) {
-          let best = null, bestV = 0;
-          for (const c of centers) {
-            const d2 = (c.x - x) ** 2 + (c.y - y) ** 2;
-            const v = c.P / (1 + d2 * 0.15);
-            if (v > bestV) {
-              bestV = v;
-              best = c;
-            }
-          }
-          if (best && bestV > 0.35) {
-            ctx.fillStyle = best.col + "33";
-            ctx.fillRect(ox + x * z, oy + y * z, z * step, z * step);
-          }
-        }
-      }
-    }
+    // drawTerritory удалён: границы владений рисует borders_view.js по
+    // owners[] из borders.js. Прежний метод чертил свою вороную по
+    // поселениям, не совпадавшую с настоящими владениями.
     // --- процедурный спрайт здания, эволюционирующий по эпохам ---
     drawBuilding(sim2, ctx, b, sx, sy, size) {
       const def = BUILDINGS[b.id];
       const own = BUILDING_ERA_IDX[b.id] || 0;
       const e = Math.max(own, Math.min(9, Math.min(sim2.eraIndex, own + 3)));
       if (!b.done) {
-        ctx.fillStyle = "rgba(139,109,66,0.5)";
-        ctx.fillRect(sx + 2, sy + 2, size - 4, size - 4);
-        ctx.strokeStyle = "#8b6d42";
-        ctx.setLineDash([4, 3]);
-        ctx.strokeRect(sx + 2, sy + 2, size - 4, size - 4);
-        ctx.setLineDash([]);
-        const p = b.progress / b.buildDays;
-        ctx.fillStyle = "#c9a227";
-        ctx.fillRect(sx + 2, sy + size - 6, (size - 4) * Math.min(1, p), 4);
+        this.construction.site(sim2, ctx, b, sx, sy, size, () => this.sprites.building(b.id, def, e, b.size || 1));
         return;
       }
       if (b.id === "spire") {

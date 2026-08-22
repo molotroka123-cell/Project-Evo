@@ -20,8 +20,11 @@ import { SelectLayer } from './select.js';
 import { IconLayer } from './icons.js';
 import { Notifications } from './notifications.js';
 import { CityLights } from './city_lights.js';
+import { BordersView } from './borders_view.js';
+import { ConstructionLayer } from './construction.js';
 import { HerdsView } from './herds_view.js';
 import { lightAt, WEATHER_TINT, hash2 } from './palette.js';
+import { EraTransition } from './era_transition.js';
 import { PostFX } from './postfx.js';
 
 const TILE_PX = 32; // мировая единица «тайл→экран» при zoom=1 — НЕ зависит от пресета графики
@@ -71,6 +74,9 @@ export class Renderer {
     this.icons = new IconLayer(this.quality);          // значки состояния
     this.notify = new Notifications(this.quality);     // всплывающие числа
     this.cityLights = new CityLights(this.quality);    // окна и фонари ночью
+    this.bordersView = new BordersView(this.quality);   // границы владений
+    this.construction = new ConstructionLayer(this.quality); // леса и рост стройки
+    this.eraFx = new EraTransition(this.quality);      // переход эпохи
   }
 
   // id ∈ QUALITY_ORDER или 'auto'
@@ -101,6 +107,9 @@ export class Renderer {
     this.icons.setQuality(this.quality);
     this.notify.setQuality(this.quality);
     this.cityLights.setQuality(this.quality);
+    this.bordersView.setQuality(this.quality);
+    this.construction.setQuality(this.quality);
+    this.eraFx.setQuality(this.quality);
     this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
     this.resize();
   }
@@ -138,6 +147,10 @@ export class Renderer {
     const dpr = this.dpr;
     const cw = this.canvas.width / dpr, ch = this.canvas.height / dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Смену эпохи ловим ДО очистки холста: на нём сейчас предыдущий кадр,
+    // нарисованный по старым правилам, и это единственный момент, когда
+    // старый мир можно забрать бесплатно.
+    this.eraFx.begin(sim, ctx, dtReal, this.quality, dpr);
 
     const L = lightAt(sim.dayTime);
     ctx.fillStyle = L.sky;
@@ -170,6 +183,7 @@ export class Renderer {
     // = false, а ниже порога зума не рисует вообще ничего.
     this.shadows.begin(sim, dtReal, z, { fog: this.atmo.fogK });
     this.damage.begin(sim, dtReal, z, { wind: this.atmo.wind });
+    this.construction.begin(sim, dtReal, ox, oy, z, cw, ch);
     this.atmo.drawGround(sim, ctx, ox, oy, z, cw, ch);
     // Растительность стоит 15 FPS на общем виде карты (58 -> 43). Держим её
     // там, где есть запас: на eco лес остаётся тем, что печёт terrain.js.
@@ -190,7 +204,10 @@ export class Renderer {
     if (this.quality.clouds) this.drawClouds(sim, ctx, ox, oy, z, cw, ch);
 
     // --- территории фракций ---
-    if (sim.showTerritory) this.drawTerritory(sim, ctx, ox, oy, z);
+    // Заменяет прежний drawTerritory. Тот рисовал СВОЮ вороную по
+    // поселениям и к owners[] из borders.js отношения не имел: игрок платил
+    // налог и терял отряды по одной линии, а видел на карте другую.
+    this.bordersView.draw(sim, ctx, ox, oy, z, cw, ch, { zoom: this.cam.zoom });
 
     // --- поселения фракций ---
     for (const f of sim.factions) {
@@ -213,6 +230,7 @@ export class Renderer {
     // Дым — после: он поднимается над крышами, а нарисованный до зданий
     // столб упирался бы в собственный конёк.
     this.damage.drawSmoke(ctx);
+    this.construction.drawFx(ctx);
     this.cityLights.begin(sim, ox, oy, z, cw, ch, L, { zoom: this.cam.zoom, time: this.time });
     this.select.drawGround(sim, ctx, ox, oy, z, cw, ch, dtReal);
     this.fx.drawWorld(ctx, ox, oy, z, cw, ch);
@@ -296,6 +314,9 @@ export class Renderer {
     this.notify.draw(sim, ctx, ox, oy, z, cw, ch, dtReal);
 
     // --- миникарта (без пост-эффектов) ---
+    // Поверх всего мира, погоды, тона суток и виньетки — но ПОД подписями
+    // и миникартой: их игрок должен видеть и во время перехода.
+    this.eraFx.draw(sim, ctx, ox, oy, z, cw, ch);
     this.fx.drawLabels(ctx, ox, oy, z, cw, ch);
     this.minimapRect = this.minimap.draw(sim, ctx, cw, ch, {
       cam: this.cam, tilePx: TILE_PX, time: this.time, quality: this.quality,
@@ -326,6 +347,9 @@ export class Renderer {
     this.icons.setQuality(this.quality);
     this.notify.setQuality(this.quality);
     this.cityLights.setQuality(this.quality);
+    this.bordersView.setQuality(this.quality);
+    this.construction.setQuality(this.quality);
+    this.eraFx.setQuality(this.quality);
       this.dpr = Math.min(this.quality.maxDpr, window.devicePixelRatio || 1);
       this.resize();
     }
@@ -451,29 +475,9 @@ export class Renderer {
     }
   }
 
-  drawTerritory(sim, ctx, ox, oy, z) {
-    const cw = this.canvas.width / this.dpr, ch = this.canvas.height / this.dpr;
-    const step = Math.max(1, Math.floor(2 / this.cam.zoom));
-    const x0 = Math.max(0, Math.floor(this.cam.x - cw / 2 / z)), x1 = Math.min(sim.world.w, Math.ceil(this.cam.x + cw / 2 / z));
-    const y0 = Math.max(0, Math.floor(this.cam.y - ch / 2 / z)), y1 = Math.min(sim.world.h, Math.ceil(this.cam.y + ch / 2 / z));
-    const centers = [];
-    for (const f of sim.factions) if (f.alive) for (const s of f.settlements) centers.push({ x: s.x, y: s.y, col: f.def.color, P: f.P });
-    centers.push({ x: sim.world.startX, y: sim.world.startY, col: '#c9a227', P: sim.villagers.length * 3 });
-    for (let y = y0; y < y1; y += step) {
-      for (let x = x0; x < x1; x += step) {
-        let best = null, bestV = 0;
-        for (const c of centers) {
-          const d2 = (c.x - x) ** 2 + (c.y - y) ** 2;
-          const v = c.P / (1 + d2 * 0.15);
-          if (v > bestV) { bestV = v; best = c; }
-        }
-        if (best && bestV > 0.35) {
-          ctx.fillStyle = best.col + '33';
-          ctx.fillRect(ox + x * z, oy + y * z, z * step, z * step);
-        }
-      }
-    }
-  }
+  // drawTerritory удалён: границы владений рисует borders_view.js по
+  // owners[] из borders.js. Прежний метод чертил свою вороную по
+  // поселениям, не совпадавшую с настоящими владениями.
 
   // --- процедурный спрайт здания, эволюционирующий по эпохам ---
   drawBuilding(sim, ctx, b, sx, sy, size) {
@@ -485,15 +489,7 @@ export class Renderer {
     const own = BUILDING_ERA_IDX[b.id] || 0;
     const e = Math.max(own, Math.min(9, Math.min(sim.eraIndex, own + 3)));
     if (!b.done) {
-      ctx.fillStyle = 'rgba(139,109,66,0.5)';
-      ctx.fillRect(sx + 2, sy + 2, size - 4, size - 4);
-      ctx.strokeStyle = '#8b6d42';
-      ctx.setLineDash([4, 3]);
-      ctx.strokeRect(sx + 2, sy + 2, size - 4, size - 4);
-      ctx.setLineDash([]);
-      const p = b.progress / b.buildDays;
-      ctx.fillStyle = '#c9a227';
-      ctx.fillRect(sx + 2, sy + size - 6, (size - 4) * Math.min(1, p), 4);
+      this.construction.site(sim, ctx, b, sx, sy, size, () => this.sprites.building(b.id, def, e, b.size || 1));
       return;
     }
     // Шпиль анимирован по стадиям стройки — единственная постройка вне кэша.
